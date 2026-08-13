@@ -1,0 +1,1396 @@
+// background.js — Temu Order Tab Exporter v4.0
+// Two modes:
+//   1. Manual Mode  — export already-open order-detail tabs
+//   2. Auto Mode    — read shipped-orders list, open tabs, extract, auto-export
+
+// ── SheetJS ───────────────────────────────────────────────────────────────────
+let XLSX_LOADED = false;
+try {
+  importScripts('libs/xlsx.full.min.js');
+  XLSX_LOADED = typeof XLSX !== 'undefined';
+} catch (e) {
+  console.warn('[Temu Exporter] SheetJS failed:', e.message);
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+const PARALLEL_BATCH  = 1;    // Process tabs one-by-one: more reliable, no retry waste
+const MAX_RETRIES     = 3;
+const RETRY_DELAY_MS  = 1500;
+const TAB_LOAD_TIMEOUT = 30000; // 30s per tab load
+
+const EXPORT_COLS = [
+  'shippingDate', 'orderDate', 'trackingNumber',
+  'orderNumber',  'customerName', 'productDetails', 'productVariant', 'qty',
+  'estimatedRevenue', 'shippingCost', 'basePrice', 'courier'
+];
+const EXPORT_HEADERS = [
+  'Shipping Date', 'Order Date', 'Tracking Number',
+  'Order No',      'Customer Name', 'Product Details', 'Variant', 'Qty (No)',
+  'Est. Revenue',  'Shipping Cost', 'Base Price', 'Courier'
+];
+
+// ── Utility ────────────────────────────────────────────────────────────────────
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function parseDateStr(str) {
+  if (!str) return 0;
+  // Strip timezone suffix like "PKT(UTC+5)", "EST", "PST" etc.
+  // Temu list shows: "Aug 8, 2026, 4:35 am PKT(UTC+5)"
+  // Detail page shows: "Aug 8, 2026, 4:35 am"
+  var s = str.trim()
+    .replace(/\s+[A-Z]{2,5}(\([^)]*\))?$/i, '') // strip "PKT(UTC+5)" or "EST" at end
+    .replace(/\s+/g, ' ')
+    .replace(/(\d+:\d+)\s*(am|pm)/i, '$1 $2');   // ensure space before am/pm
+
+  // Try direct parse
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) return d.getTime();
+
+  // Manual parse for "Aug 8, 2026, 4:35 am" format
+  var m = s.match(/^([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{4}),?\s*(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (m) {
+    var months = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+    var mo = months[m[1].toLowerCase()];
+    var dy = parseInt(m[2]);
+    var yr = parseInt(m[3]);
+    var hr = parseInt(m[4]) % 12 + (m[6].toLowerCase() === 'pm' ? 12 : 0);
+    var mn = parseInt(m[5]);
+    if (mo !== undefined) return new Date(yr, mo, dy, hr, mn).getTime();
+  }
+
+  // Fallback: strip time and parse date only
+  var dateOnly = s.replace(/,\s*\d+:\d+\s*(am|pm)?/i, '').trim();
+  var d2 = new Date(dateOnly);
+  return isNaN(d2.getTime()) ? 0 : d2.getTime();
+}
+
+function isDateInRange(dateStr, from, to) {
+  // dateStr: e.g. "Aug 5, 2026, 2:24 am" (purchaseDateRaw — local time)
+  // from/to: "YYYY-MM-DDTHH:MM" (datetime-local — treated as local time by JS)
+  const time = parseDateStr(dateStr);
+  if (!time) return false;
+  const fromTime = from ? new Date(from).getTime() : 0;
+  const toTime   = to   ? new Date(to).getTime()   : Infinity;
+  return time >= fromTime && time <= toTime;
+}
+
+function sendMsg(msg) {
+  chrome.runtime.sendMessage(msg).catch(() => {});
+  // Also persist state so popup can restore it after being reopened
+  saveState(msg);
+}
+
+// ── Persist export state to session storage ───────────────────────────────────
+function saveState(msg) {
+  let patch = { lastMsg: msg };
+  if (msg.type === 'autoProgress' || msg.type === 'progress') {
+    patch.running = true;
+  } else if (msg.type === 'autoDone' || msg.type === 'done' ||
+             msg.type === 'error'    || msg.type === 'noData') {
+    patch.running = false;
+  }
+  chrome.storage.session.set(patch).catch(() => {});
+}
+
+function clearState() {
+  chrome.storage.session.set({ running: false, lastMsg: null }).catch(() => {});
+}
+
+// ── Message router ─────────────────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'startExport')     runExport(msg.format || 'csv');
+  if (msg.type === 'startAutoExport') runAutoExport(
+    msg.listTabId, msg.fromPage, msg.toPage, msg.format || 'csv',
+    msg.tabDelay  ?? 1000,
+    msg.randExtra ?? 1000,
+    msg.filterEnabled  || false,
+    msg.filterFromDate || '',
+    msg.filterToDate   || ''
+  );
+  // ── New Mode 2: Date Range export ────────────────────────────────────────────
+  if (msg.type === 'startDateExport') runDateExport(
+    msg.listTabId, msg.fromDate, msg.toDate, msg.format || 'csv',
+    msg.tabDelay  ?? 1000,
+    msg.randExtra ?? 1000
+  );
+  // ── New Mode 3: Selection export ─────────────────────────────────────────────
+  if (msg.type === 'startSelectionExport') runSelectionExport(
+    msg.selectedUrls, msg.format || 'csv',
+    msg.tabDelay  ?? 1000,
+    msg.randExtra ?? 1000
+  );
+  // ── Enable overlay: inject content.js into list tab ──────────────────────────
+  if (msg.type === 'enableOverlay') {
+    chrome.scripting.executeScript({
+      target: { tabId: msg.listTabId },
+      files:  ['content.js']
+    }).catch(err => console.warn('[Temu Exporter] Overlay inject failed:', err.message));
+  }
+  // Popup asking for current state on open
+  if (msg.type === 'getState') {
+    chrome.storage.session.get(['running', 'lastMsg'], (data) => {
+      chrome.runtime.sendMessage({ type: 'stateSnapshot', ...data }).catch(() => {});
+    });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODE 1 — Manual: export open order-detail tabs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runExport(format) {
+  const tabs      = await chrome.tabs.query({ url: 'https://seller.temu.com/*' });
+  const orderTabs = tabs.filter(t => t.url && t.url.includes('order-detail'));
+
+  if (orderTabs.length === 0) {
+    sendMsg({ type: 'error', message: 'No open Temu order-detail tabs found.' });
+    return;
+  }
+
+  const orderRecords = [], failedTabs = [], seenIds = new Set();
+  const totalTabs = orderTabs.length;
+  let processedCount = 0;
+
+  for (let i = 0; i < totalTabs; i += BATCH_SIZE) {
+    const batch   = orderTabs.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map(t => processTabWithRetry(t)));
+
+    results.forEach((r, idx) => {
+      if (r.status === 'fulfilled') {
+        const res = r.value;
+        if (res.ok && res.data) {
+          const key = res.data.orderNumber || `__noid_${orderRecords.length}`;
+          if (!seenIds.has(key)) { seenIds.add(key); orderRecords.push(res.data); }
+        } else if (!res.ok) failedTabs.push(batch[idx]?.url || '?');
+      } else failedTabs.push(batch[idx]?.url || '?');
+    });
+
+    processedCount += batch.length;
+    sendMsg({ type: 'progress', current: processedCount, total: totalTabs, failed: failedTabs.length });
+  }
+
+  if (orderRecords.length === 0) {
+    sendMsg({ type: 'noData', failedCount: failedTabs.length });
+    return;
+  }
+
+  const flatRows = flattenToRows(orderRecords);
+  sortRows(flatRows);
+
+  try {
+    const { dataUrl, filename } = generateExport(flatRows, orderRecords.length, format);
+    chrome.downloads.download({ url: dataUrl, filename });
+    sendMsg({ type: 'done', ordersFound: orderRecords.length, tabsProcessed: totalTabs,
+              rowsExported: flatRows.length, failedCount: failedTabs.length,
+              failedUrls: failedTabs.slice(0, 10), format });
+  } catch (err) {
+    sendMsg({ type: 'error', message: `Export failed: ${err.message}` });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODE 2 — Auto: paginate list page → open tabs → extract → export → close tabs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runAutoExport(listTabId, fromPage, toPage, format, tabDelay = 1000, randExtra = 1000,
+                             filterEnabled = false, filterFromDate = '', filterToDate = '') {
+  const totalPages   = toPage - fromPage + 1;
+  const allOrderUrls = [];
+
+  // ── Phase 1: Collect order URLs by paginating the list ─────────────────────
+  try {
+    // Jump to fromPage if not page 1
+    if (fromPage > 1) {
+      sendMsg({ type: 'autoProgress', stage: 'navigating', page: fromPage, totalPages, scraped: 0 });
+      await navigateListToPage(listTabId, fromPage);
+      await sleep(3000);
+    }
+
+    for (let page = fromPage; page <= toPage; page++) {
+      sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages, scraped: allOrderUrls.length });
+
+      // Small delay to ensure page is rendered
+      await sleep(700); // wait for page render
+
+      const links = await getOrderLinksFromListTab(listTabId);
+      links.forEach(l => { if (!allOrderUrls.includes(l)) allOrderUrls.push(l); });
+
+      if (page < toPage) {
+        const prevFirst = links[0] || null;
+        const clicked   = await navigateNextOnList(listTabId);
+        if (!clicked) {
+          sendMsg({ type: 'autoProgress', stage: 'scraping', page: toPage, totalPages, scraped: allOrderUrls.length, note: 'No more pages found' });
+          break;
+        }
+        // Give SPA time to start routing before we start detecting page change
+        await sleep(1500);
+        await waitForListPageChange(listTabId, prevFirst);
+        // Extra buffer after page settles
+        await sleep(800);
+      }
+    }
+  } catch (err) {
+    console.error('Auto-export scraping phase failed:', err);
+    sendMsg({ type: 'error', message: `Page scraping failed: ${err.message}` });
+    return;
+  }
+
+  if (allOrderUrls.length === 0) {
+    sendMsg({ type: 'noData', failedCount: 0 });
+    return;
+  }
+
+  // ── Phase 2: Sequential tab processing — 1 tab at a time ──────────────────
+  // Each order: open tab → wait load → waitForPageReady polls → extract → close → delay
+  const orderRecords = [], retryQueue = [], seenIds = new Set();
+  const total = allOrderUrls.length;
+
+  // Helper: try to record a successfully extracted order
+  function recordOrder(data) {
+    if (!data) return false;
+    const key = data.orderNumber || `__noid_${orderRecords.length}`;
+    if (seenIds.has(key)) return false;
+    let passesFilter = true;
+    if (filterEnabled && filterFromDate && filterToDate) {
+      const dateForFilter = data.purchaseDateRaw || data.purchaseDate;
+      passesFilter = isDateInRange(dateForFilter, filterFromDate, filterToDate);
+    }
+    if (passesFilter) { seenIds.add(key); orderRecords.push(data); return true; }
+    return false;
+  }
+
+  for (let i = 0; i < total; i += PARALLEL_BATCH) {
+    const batchUrls = allOrderUrls.slice(i, i + PARALLEL_BATCH);
+    sendMsg({ type: 'autoProgress', stage: 'extracting', current: i, total, totalPages,
+              retrying: 0, retryTotal: 0 });
+
+    // ① Open all tabs in batch simultaneously
+    const openResults = await Promise.allSettled(
+      batchUrls.map(url => chrome.tabs.create({ url, active: false }))
+    );
+
+    const openTabs = [];
+    openResults.forEach((r, idx) => {
+      if (r.status === 'fulfilled') openTabs.push({ tab: r.value, url: batchUrls[idx] });
+      else retryQueue.push(batchUrls[idx]); // immediate open fail → retry queue
+    });
+
+    // ② Wait for all tabs to fully load + React to render
+    await Promise.allSettled(openTabs.map(({ tab }) => waitForTabLoad(tab.id)));
+    await sleep(300); // tiny buffer before polling starts
+
+    // ③ Extract from all tabs in parallel
+    const extractResults = await Promise.allSettled(
+      openTabs.map(({ tab }) => processTabWithRetry(tab))
+    );
+
+    extractResults.forEach((r, idx) => {
+      const { url } = openTabs[idx];
+      if (r.status === 'fulfilled' && r.value.ok && r.value.data) {
+        recordOrder(r.value.data);
+      } else {
+        retryQueue.push(url); // extraction failed → retry queue
+      }
+    });
+
+    // ④ Close all batch tabs simultaneously
+    await Promise.allSettled(openTabs.map(({ tab }) => chrome.tabs.remove(tab.id).catch(() => {})));
+
+    // ⑤ Delay between batches (not within batch)
+    if (i + PARALLEL_BATCH < total) {
+      await sleep(tabDelay + Math.floor(Math.random() * randExtra));
+    }
+  }
+
+  // ── Phase 2b: Retry Queue — slow sequential processing of failed orders ────
+  // After all normal batches, retry each failed URL one at a time with longer waits.
+  const permanentFails = [];
+
+  if (retryQueue.length > 0) {
+    for (let ri = 0; ri < retryQueue.length; ri++) {
+      const url = retryQueue[ri];
+      sendMsg({ type: 'autoProgress', stage: 'retrying',
+                current: orderRecords.length, total,
+                retrying: ri + 1, retryTotal: retryQueue.length, totalPages });
+
+      let retryTab;
+      try {
+        retryTab = await chrome.tabs.create({ url, active: false });
+      } catch(e) {
+        try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); } catch(_) { permanentFails.push(url); }
+        continue;
+      }
+
+      await waitForTabLoad(retryTab.id);
+      // waitForPageReady inside processTabWithRetry handles React render timing
+
+      const retryResult = await processTabWithRetry(retryTab);
+      if (retryResult.ok && retryResult.data) {
+        recordOrder(retryResult.data);
+      } else {
+        // Permanently failed — extract order number from URL for user report
+        try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); }
+        catch(_) { permanentFails.push(url); }
+      }
+
+      await chrome.tabs.remove(retryTab.id).catch(() => {});
+      await sleep(2000 + Math.floor(Math.random() * 2000)); // longer delay between retries
+    }
+  }
+
+  if (orderRecords.length === 0) {
+    sendMsg({ type: 'noData', failedCount: permanentFails.length });
+    return;
+  }
+
+  // ── Phase 3: Flatten, sort, export ────────────────────────────────────────
+  const flatRows = flattenToRows(orderRecords);
+  sortRows(flatRows);
+
+  try {
+    const { dataUrl, filename } = generateExport(flatRows, orderRecords.length, format);
+    chrome.downloads.download({ url: dataUrl, filename });
+    sendMsg({
+      type:          'autoDone',
+      ordersFound:    orderRecords.length,
+      rowsExported:   flatRows.length,
+      failedCount:    permanentFails.length,
+      failedOrders:   permanentFails.slice(0, 20), // max 20 for popup display
+      pagesScraped:   totalPages,
+      filterEnabled,
+      filterFromDate,
+      filterToDate,
+      format
+    });
+  } catch (err) {
+    sendMsg({ type: 'error', message: `Export generation failed: ${err.message}` });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODE 2b — Date Range Export: scan list pages, extract only date-matched orders
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 1000, randExtra = 1000) {
+  const fromTs = fromDate ? new Date(fromDate).getTime() : 0;
+  const toTs   = toDate   ? new Date(toDate).getTime()   : Infinity;
+
+  sendMsg({ type: 'autoProgress', stage: 'navigating', page: 1, totalPages: '?', scraped: 0 });
+
+  const allOrderUrls = [];
+
+  // ── Phase 1: Scan pages, read dates from list, collect matching URLs ─────────
+  try {
+    let page = 1;
+    let keepGoing = true;
+
+    while (keepGoing) {
+      sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: '?',
+                scraped: allOrderUrls.length });
+
+      await sleep(700);
+
+      // Read order rows with dates from current list page
+      const [{ result: pageData }] = await chrome.scripting.executeScript({
+        target: { tabId: listTabId },
+        func: function() {
+          var baseUrl = window.location.origin + '/order-detail.html';
+          var rows = [];
+
+          document.querySelectorAll('tr').forEach(function(tr) {
+            if (tr.querySelector('th')) return; // skip header
+            var text = tr.textContent || '';
+
+            // PO number: no \b — "PO-211-123Copy" pattern (Copy button attached)
+            var snMatch = text.match(/(PO-\d+-\d{9,})/);
+            if (!snMatch) return;
+            var sn = snMatch[1];
+
+            // Date: capture "Aug 8, 2026, 4:35 am" and strip timezone like PKT(UTC+5)
+            var dateMatch = text.match(/([A-Za-z]{3}\s+\d{1,2},\s*\d{4},\s*\d{1,2}:\d{2}\s*(?:am|pm))/i);
+            var dateStr = dateMatch ? dateMatch[1].trim() : '';
+
+            var url = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
+            rows.push({ sn, url, dateStr });
+          });
+
+          return rows;
+        }
+      });
+
+      if (!pageData || pageData.length === 0) break;
+
+      let allOlderThanFrom = true;
+      let hasAnyDate = false;
+
+      pageData.forEach(function(row) {
+        // Use parseDateStr for consistent parsing of "Aug 8, 2026, 4:35 am"
+        // (raw new Date() fails on this format cross-browser)
+        var rowTs = parseDateStr(row.dateStr);
+
+        if (rowTs > 0) {
+          hasAnyDate = true;
+          if (rowTs >= fromTs && rowTs <= toTs) {
+            if (!allOrderUrls.includes(row.url)) allOrderUrls.push(row.url);
+          }
+          if (rowTs >= fromTs) allOlderThanFrom = false;
+        } else {
+          // Date couldn't be parsed — include as fallback
+          if (!allOrderUrls.includes(row.url)) allOrderUrls.push(row.url);
+          allOlderThanFrom = false;
+        }
+      });
+
+      // Smart early exit: if all dates on page are older than the FROM date, stop
+      if (hasAnyDate && allOlderThanFrom) {
+        sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: page,
+                  scraped: allOrderUrls.length, note: 'Early exit — all orders older than date range' });
+        break;
+      }
+
+      // Try next page
+      const prevFirst = pageData[0] ? pageData[0].url : null;
+      const clicked = await navigateNextOnList(listTabId);
+      if (!clicked) break;
+      await sleep(1500);
+      await waitForListPageChange(listTabId, prevFirst);
+      await sleep(800);
+      page++;
+    }
+  } catch (err) {
+    sendMsg({ type: 'error', message: `Date scan failed: ${err.message}` });
+    return;
+  }
+
+  if (allOrderUrls.length === 0) {
+    sendMsg({ type: 'noData', failedCount: 0 });
+    return;
+  }
+
+  // ── Phase 2+: Same parallel batch + retry as Auto mode ───────────────────────
+  // Pass date filter to be applied after extraction (catches rows where date wasn't parseable)
+  await _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
+    true, fromDate, toDate, '?');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODE 3 — Selection Export: process only user-selected orders
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExtra = 1000) {
+  if (!selectedUrls || selectedUrls.length === 0) {
+    sendMsg({ type: 'noData', failedCount: 0 });
+    return;
+  }
+  // Process only the selected URLs using the same parallel batch system
+  await _processBatchAndExport(selectedUrls, format, tabDelay, randExtra, false, '', '', selectedUrls.length);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHARED: Parallel batch processing + retry queue + export (used by all modes)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
+                                       filterEnabled, filterFromDate, filterToDate, totalPagesLabel) {
+  const orderRecords = [], retryQueue = [], seenIds = new Set();
+  const total = allOrderUrls.length;
+
+  function recordOrder(data) {
+    if (!data) return false;
+    const key = data.orderNumber || `__noid_${orderRecords.length}`;
+    if (seenIds.has(key)) return false;
+    let passesFilter = true;
+    if (filterEnabled && filterFromDate && filterToDate) {
+      const dateForFilter = data.purchaseDateRaw || data.purchaseDate;
+      passesFilter = isDateInRange(dateForFilter, filterFromDate, filterToDate);
+    }
+    if (passesFilter) { seenIds.add(key); orderRecords.push(data); return true; }
+    return false;
+  }
+
+  for (let i = 0; i < total; i += PARALLEL_BATCH) {
+    const batchUrls = allOrderUrls.slice(i, i + PARALLEL_BATCH);
+    sendMsg({ type: 'autoProgress', stage: 'extracting', current: i, total,
+              totalPages: totalPagesLabel, retrying: 0, retryTotal: 0 });
+
+    const openResults = await Promise.allSettled(
+      batchUrls.map(url => chrome.tabs.create({ url, active: false }))
+    );
+    const openTabs = [];
+    openResults.forEach((r, idx) => {
+      if (r.status === 'fulfilled') openTabs.push({ tab: r.value, url: batchUrls[idx] });
+      else retryQueue.push(batchUrls[idx]);
+    });
+
+    await Promise.allSettled(openTabs.map(({ tab }) => waitForTabLoad(tab.id)));
+    await sleep(500); // small buffer — waitForPageReady polls for actual content
+
+    const extractResults = await Promise.allSettled(
+      openTabs.map(({ tab }) => processTabWithRetry(tab))
+    );
+    extractResults.forEach((r, idx) => {
+      const { url } = openTabs[idx];
+      if (r.status === 'fulfilled' && r.value.ok && r.value.data) recordOrder(r.value.data);
+      else retryQueue.push(url);
+    });
+
+    await Promise.allSettled(openTabs.map(({ tab }) => chrome.tabs.remove(tab.id).catch(() => {})));
+    if (i + PARALLEL_BATCH < total) await sleep(tabDelay + Math.floor(Math.random() * randExtra));
+  }
+
+  // Retry queue
+  const permanentFails = [];
+  if (retryQueue.length > 0) {
+    for (let ri = 0; ri < retryQueue.length; ri++) {
+      const url = retryQueue[ri];
+      sendMsg({ type: 'autoProgress', stage: 'retrying', current: orderRecords.length, total,
+                retrying: ri + 1, retryTotal: retryQueue.length, totalPages: totalPagesLabel });
+      let retryTab;
+      try { retryTab = await chrome.tabs.create({ url, active: false }); }
+      catch(e) {
+        try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); } catch(_) { permanentFails.push(url); }
+        continue;
+      }
+      await waitForTabLoad(retryTab.id);
+      // Note: waitForPageReady in processTabWithRetry handles render timing
+      const retryResult = await processTabWithRetry(retryTab);
+      if (retryResult.ok && retryResult.data) recordOrder(retryResult.data);
+      else {
+        try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); }
+        catch(_) { permanentFails.push(url); }
+      }
+      await chrome.tabs.remove(retryTab.id).catch(() => {});
+      await sleep(2000 + Math.floor(Math.random() * 2000));
+    }
+  }
+
+  if (orderRecords.length === 0) {
+    sendMsg({ type: 'noData', failedCount: permanentFails.length });
+    return;
+  }
+
+  const flatRows = flattenToRows(orderRecords);
+  sortRows(flatRows);
+  try {
+    const { dataUrl, filename } = generateExport(flatRows, orderRecords.length, format);
+    chrome.downloads.download({ url: dataUrl, filename });
+    sendMsg({
+      type: 'autoDone', ordersFound: orderRecords.length, rowsExported: flatRows.length,
+      failedCount: permanentFails.length, failedOrders: permanentFails.slice(0, 20),
+      pagesScraped: totalPagesLabel, filterEnabled, filterFromDate, filterToDate, format
+    });
+  } catch (err) {
+    sendMsg({ type: 'error', message: `Export generation failed: ${err.message}` });
+  }
+}
+
+
+async function navigateListToPage(tabId, pageNum) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func:   function(targetPage) {
+      // Strategy 1: Ant Design / custom quick-jumper input
+      var jumper =
+        document.querySelector('.ant-pagination-options-quick-jumper input') ||
+        document.querySelector('input[class*="jumper"]') ||
+        document.querySelector('input[class*="page-size"]');
+
+      // Also search for an input near "Go to" text
+      if (!jumper) {
+        var inputs = document.querySelectorAll('input[type="number"], input[type="text"]');
+        inputs.forEach(function(inp) {
+          var parent = inp.parentElement;
+          if (parent && /go\s*to|jump|page/i.test(parent.textContent)) jumper = inp;
+        });
+      }
+
+      if (jumper) {
+        jumper.focus();
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(jumper, String(targetPage));
+        ['input', 'change'].forEach(function(ev) {
+          jumper.dispatchEvent(new Event(ev, { bubbles: true }));
+        });
+        [13].forEach(function(code) {
+          ['keydown','keypress','keyup'].forEach(function(ev) {
+            jumper.dispatchEvent(new KeyboardEvent(ev, { keyCode: code, key: 'Enter', bubbles: true }));
+          });
+        });
+        return;
+      }
+
+      // Strategy 2: Click visible page number button
+      var items = document.querySelectorAll(
+        'li.ant-pagination-item, [class*="pagination-item"], [class*="page-item"]'
+      );
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].textContent.trim() === String(targetPage)) {
+          items[i].click();
+          return;
+        }
+      }
+    },
+    args: [pageNum]
+  });
+}
+
+// ── Click the "Next Page" button on the list ───────────────────────────────────
+async function navigateNextOnList(tabId) {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func:   function() {
+        try {
+          var next =
+            document.querySelector('li.ant-pagination-next:not(.ant-pagination-disabled) button') ||
+            document.querySelector('li.ant-pagination-next:not(.ant-pagination-disabled)');
+
+          if (!next) {
+            next = document.querySelector('[aria-label="Next Page"]:not([disabled]):not([aria-disabled="true"])') ||
+                   document.querySelector('[aria-label="next page"]:not([disabled]):not([aria-disabled="true"])');
+          }
+
+          if (!next) {
+            var paginationEl =
+              document.querySelector('.ant-pagination') ||
+              document.querySelector('[class*="pagination"]') ||
+              document.querySelector('[class*="Pagination"]');
+            if (paginationEl) {
+              var items = Array.from(paginationEl.querySelectorAll('li, button'));
+              var activeIdx = items.findIndex(function(el) {
+                return el.classList.contains('ant-pagination-item-active') ||
+                       el.getAttribute('aria-current') === 'page';
+              });
+              if (activeIdx >= 0 && activeIdx < items.length - 1) {
+                var candidate = items[activeIdx + 1];
+                if (!candidate.disabled && !candidate.classList.contains('disabled') &&
+                    candidate.getAttribute('aria-disabled') !== 'true') {
+                  next = candidate;
+                }
+              }
+              if (!next) {
+                var lastItems = items.slice().reverse();
+                next = lastItems.find(function(el) {
+                  if (el.disabled || el.classList.contains('disabled')) return false;
+                  var txt = el.textContent.trim();
+                  var hasSvg = el.querySelector('svg') !== null;
+                  return (hasSvg || txt === '>' || txt === '›' || txt === '»') &&
+                         el.getAttribute('aria-disabled') !== 'true';
+                });
+              }
+            }
+          }
+
+          if (!next) {
+            var allBtns = Array.from(document.querySelectorAll('li, button, a'));
+            next = allBtns.find(function(el) {
+              if (el.disabled || el.classList.contains('disabled') ||
+                  el.getAttribute('aria-disabled') === 'true') return false;
+              var label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
+              var txt   = el.textContent.trim();
+              return (label === 'next page' || label === 'next' ||
+                      txt === '>' || txt === '›' || txt === '»' ||
+                      /next/i.test(label));
+            });
+          }
+
+          if (next) { next.click(); return true; }
+          return false;
+        } catch(e) { return false; }
+      }
+    });
+    return result === true;
+  } catch(err) {
+    console.warn('[Temu Exporter] navigateNextOnList failed:', err.message);
+    return false;
+  }
+}
+
+// ── Scrape order-detail URLs from the current list page ────────────────────────
+async function getOrderLinksFromListTab(tabId) {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func:   function() {
+        try {
+          var links = [], seen = new Set();
+          document.querySelectorAll('a[href*="order-detail"]').forEach(function(a) {
+            var href = a.href;
+            if (href && href.includes('parent_order_sn') && !seen.has(href)) {
+              seen.add(href); links.push(href);
+            }
+          });
+          if (links.length === 0) {
+            var baseUrl = window.location.origin + '/order-detail.html';
+            document.querySelectorAll('[class*="order"] span, [class*="sn"] span').forEach(function(el) {
+              var t = el.textContent.trim();
+              if (/^PO-\d{3}-\d{10,}/.test(t) && !seen.has(t)) {
+                seen.add(t);
+                links.push(baseUrl + '?parent_order_sn=' + encodeURIComponent(t));
+              }
+            });
+          }
+          return links;
+        } catch(e) { return []; }
+      }
+    });
+    return result || [];
+  } catch(err) {
+    console.warn('[Temu Exporter] getOrderLinksFromListTab failed:', err.message);
+    return [];
+  }
+}
+
+// ── Wait until list page shows different orders (page change detected) ─────────
+async function waitForListPageChange(tabId, previousFirstUrl) {
+  // Get the current set of order IDs on the page
+  async function getCurrentOrderIds() {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: function() {
+          var ids = [];
+          // Collect all visible PO-xxx numbers from leaf elements
+          document.querySelectorAll('span, div, td, a').forEach(function(el) {
+            if (el.childElementCount > 0) return;
+            var t = (el.textContent || '').trim();
+            if (/^PO-\d{3}-\d{10,}/.test(t)) ids.push(t);
+          });
+          // Fallback: body text regex
+          if (ids.length === 0) {
+            var bt = document.body ? document.body.innerText : '';
+            var m = bt.match(/PO-\d{3}-\d{10,}/g) || [];
+            ids = m;
+          }
+          return ids.join(',');
+        }
+      });
+      return result || '';
+    } catch(e) { return ''; }
+  }
+
+  const prevIds = await getCurrentOrderIds();
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await sleep(500);
+    const currIds = await getCurrentOrderIds();
+    // Page changed = at least one new order ID appeared
+    if (currIds && prevIds && currIds !== prevIds) return;
+    // Also check if first anchor href changed (for pages that do have anchor links)
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func:   function() {
+          var a = document.querySelector('a[href*="order-detail"][href*="parent_order_sn"]');
+          return a ? a.href : '__none__';
+        }
+      });
+      if (result && result !== previousFirstUrl && result !== '__none__') return;
+    } catch(e) { /* tab navigating */ }
+  }
+  // Timeout after ~20s — continue anyway to avoid hanging
+}
+
+// ── Wait for a tab to finish loading ──────────────────────────────────────────
+function waitForTabLoad(tabId) {
+  return new Promise(resolve => {
+    // Bug fix: check if tab is already complete BEFORE adding listener
+    // Without this, if tab loads before listener is added, we wait 30s for nothing
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError || !tab) { resolve(); return; }
+      if (tab.status === 'complete') { resolve(); return; }
+      // Tab still loading — add listener
+      const onUpdated = (id, info) => {
+        if (id === tabId && info.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          resolve();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      setTimeout(() => { chrome.tabs.onUpdated.removeListener(onUpdated); resolve(); }, TAB_LOAD_TIMEOUT);
+    });
+  });
+}
+
+// ── Wait for React to render the product table ─────────────────────────────────
+// Polls via executeScript every 400ms until Goods ID or Purchase date appears.
+// This runs in background.js (not in the page) — no serialization issues.
+async function waitForPageReady(tabId, maxMs = 8000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: function() {
+          var tbodies = document.querySelectorAll('tbody');
+          for (var i = 0; i < tbodies.length; i++) {
+            var t = tbodies[i].textContent || '';
+            if (t.includes('Goods ID:') || t.includes('SKU ID:')) return true;
+          }
+          var body = document.body ? (document.body.innerText || '') : '';
+          return body.includes('Purchase date') && body.includes('Recipient name');
+        }
+      });
+      if (result) return; // page is ready — proceed
+    } catch(e) { /* tab still loading — ignore */ }
+    await sleep(400);
+  }
+  // Timed out — proceed anyway (extractPageData has its own fallbacks)
+}
+
+// ── Single tab processor with retry ───────────────────────────────────────────
+async function processTabWithRetry(tab, attempt = 0) {
+  try {
+    // Wait for React to render before injecting extractor
+    await waitForPageReady(tab.id);
+
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func:   extractPageData
+    });
+    return { ok: true, data: result || null };
+  } catch (err) {
+    if (attempt < MAX_RETRIES) {
+      await sleep(RETRY_DELAY_MS * (attempt + 1));
+      return processTabWithRetry(tab, attempt + 1);
+    }
+    console.error(`Tab ${tab.id} failed after ${MAX_RETRIES} retries:`, err.message);
+    return { ok: false, tabUrl: tab.url || `Tab ID ${tab.id}` };
+  }
+}
+
+// ── Flatten orders: one row per package × product ──────────────────────────────
+function flattenToRows(orderRecords) {
+  const rows = [];
+  orderRecords.forEach(order => {
+    // ── Skip orders with no meaningful data (prevents empty/partial rows) ────
+    if (!order) return;
+    if (!order.orderNumber && !order.recipientName && (!order.products || order.products.length === 0)) return;
+
+    const packages = (order.packages && order.packages.length > 0)
+      ? order.packages
+      : [{ trackingNumber: order.trackingNumber || '', shipmentDate: order.shipmentConfirmedAt || '' }];
+    const products = (order.products && order.products.length > 0)
+      ? order.products
+      : [{ title: '', variant: '', qty: '' }];
+
+    if (packages.length === 1) {
+      const pkg = packages[0];
+      products.forEach((prod, prodIdx) => rows.push({
+        shippingDate:     pkg.shipmentDate,
+        orderDate:        order.purchaseDate,
+        trackingNumber:   pkg.trackingNumber,
+        orderNumber:      order.orderNumber,
+        customerName:     order.recipientName,
+        productDetails:   prod.title,
+        productVariant:   prod.variant  || '',
+        qty:              prod.qty,
+        // ✔ Revenue, Cost, BasePrice, Courier only on FIRST product row
+        estimatedRevenue: prodIdx === 0 ? (order.estimatedRevenue || '') : '',
+        shippingCost:     prodIdx === 0 ? (order.shippingCost     || '') : '',
+        basePrice:        prodIdx === 0 ? (order.basePrice        || '') : '',
+        courier:          prodIdx === 0 ? (order.courier          || '') : ''
+      }));
+    } else {
+      const maxRows = Math.max(packages.length, products.length);
+      for (let ri = 0; ri < maxRows; ri++) {
+        const pkg  = packages[ri % packages.length];
+        const prod = products[ri] || products[products.length - 1] || { title: '', variant: '', qty: '' };
+        rows.push({
+          shippingDate:     pkg.shipmentDate,
+          orderDate:        order.purchaseDate,
+          trackingNumber:   pkg.trackingNumber,
+          orderNumber:      order.orderNumber,
+          customerName:     order.recipientName,
+          productDetails:   prod.title,
+          productVariant:   prod.variant  || '',
+          qty:              prod.qty,
+          // ✔ Revenue, Cost, BasePrice, Courier only on FIRST row of this order
+          estimatedRevenue: ri === 0 ? (order.estimatedRevenue || '') : '',
+          shippingCost:     ri === 0 ? (order.shippingCost     || '') : '',
+          basePrice:        ri === 0 ? (order.basePrice        || '') : '',
+          courier:          ri === 0 ? (order.courier          || '') : ''
+        });
+      }
+    }
+  });
+  return rows;
+}
+
+// ── Sort rows: Order Date ↑ → Shipping Date ↑ (nulls at BOTTOM) ───────────────
+function sortRows(flatRows) {
+  const MAX = Number.MAX_SAFE_INTEGER;
+  flatRows.sort((a, b) => {
+    const oa = parseDateStr(a.orderDate)   || MAX; // null → sorts last
+    const ob = parseDateStr(b.orderDate)   || MAX;
+    if (oa !== ob) return oa - ob;
+    const sa = parseDateStr(a.shippingDate) || MAX;
+    const sb = parseDateStr(b.shippingDate) || MAX;
+    return sa - sb;
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DOM EXTRACTION — injected into each order-detail page
+// Must be completely self-contained (no closures from background scope).
+// executeScript serializes ONLY this one function — no external refs allowed.
+// ═══════════════════════════════════════════════════════════════════════════════
+function extractPageData() {
+  // Top-level try/catch: if any DOM error occurs, return null
+  // (prevents a single bad order from crashing the executeScript call)
+  try {
+
+  function ownText(el) {
+    var t = '';
+    el.childNodes.forEach(function(n) { if (n.nodeType === 3) t += n.textContent.trim() + ' '; });
+    return t.trim();
+  }
+
+  function findByOwnText(txt, tags) {
+    tags = tags || ['div','span','p','th'];
+    var rx = new RegExp('^' + txt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
+    for (var t = 0; t < tags.length; t++) {
+      var els = document.querySelectorAll(tags[t]);
+      for (var i = 0; i < els.length; i++) if (rx.test(ownText(els[i]))) return els[i];
+    }
+    return null;
+  }
+
+  function findAllByOwnTextRx(rx, tags) {
+    tags = tags || ['div','span'];
+    var found = [];
+    for (var t = 0; t < tags.length; t++) {
+      var els = document.querySelectorAll(tags[t]);
+      for (var i = 0; i < els.length; i++) if (rx.test(ownText(els[i]))) found.push(els[i]);
+    }
+    return found;
+  }
+
+  function adjacentValue(el, depth) {
+    depth = (depth === undefined) ? 3 : depth;
+    if (!el || depth === 0) return null;
+    var s = el.nextElementSibling;
+    if (s && s.textContent.trim()) return s;
+    return adjacentValue(el.parentElement, depth - 1);
+  }
+
+  function extractTNFromContainer(container) {
+    if (!container) return '';
+    // Strategy 1: find a leaf span or span-with-only-icon-child matching tracking format
+    var sp = Array.from(container.querySelectorAll('span')).find(function(s) {
+      // Get text of only TEXT_NODEs (ignoring icon child elements)
+      var directText = Array.from(s.childNodes)
+        .filter(function(n) { return n.nodeType === 3; })
+        .map(function(n) { return n.textContent.trim(); })
+        .join('');
+      if (!directText) directText = s.textContent.trim();
+      return directText.length >= 8 && /^[A-Z0-9\-]{6,40}$/i.test(directText);
+    });
+    if (sp) {
+      // Return only the direct text, not the icon text
+      var directText = Array.from(sp.childNodes)
+        .filter(function(n) { return n.nodeType === 3; })
+        .map(function(n) { return n.textContent.trim(); })
+        .join('');
+      return directText || sp.textContent.trim();
+    }
+    // Strategy 2: nested span > span
+    var nested = container.querySelector('span > span');
+    if (nested && /[A-Z0-9]{6,}/i.test(nested.textContent)) return nested.textContent.trim();
+    return '';
+  }
+
+  function cleanDate(str) {
+    if (!str) return '';
+    str = str.replace(/\s*\(UTC[+\-]?\d+(?::\d+)?\)/i, '').trim();
+    str = str.replace(/,\s*\d+:\d+\s*[apm]{2,3}(?:\s+[A-Z]{2,5})?/i, '').trim();
+    return str;
+  }
+
+  var bodyText = document.body ? (document.body.innerText || '') : '';
+
+  // 1. Order Number — always ensure 'PO-' prefix
+  var orderNumber = '';
+  try { orderNumber = new URLSearchParams(window.location.search).get('parent_order_sn') || ''; } catch(e) {}
+  if (!orderNumber) {
+    var m = bodyText.match(/Order\s*ID\s*:?\s*(PO-[\d\-]+)/i) || bodyText.match(/(PO-\d{3}-\d{10,})/);
+    if (m) orderNumber = m[1];
+  }
+  // Some URLs have '211-...' without 'PO-' prefix — normalise it
+  if (orderNumber && !orderNumber.startsWith('PO-') && /^\d{3}-\d{8,}/.test(orderNumber)) {
+    orderNumber = 'PO-' + orderNumber;
+  }
+
+  // 2. Purchase Date
+  var purchaseDate    = '';  // clean (for export sheet)
+  var purchaseDateRaw = '';  // with time, no tz name (for datetime filter)
+  var pdL = findByOwnText('Purchase date', ['div']);
+  if (pdL) {
+    var pdV   = adjacentValue(pdL);
+    var pdStr = pdV ? pdV.textContent.trim() : '';
+    // purchaseDateRaw: remove (UTC+X) and trailing timezone abbreviation, KEEP the time
+    purchaseDateRaw = pdStr
+      .replace(/\s*\(UTC[+\-]?\d+(?::\d+)?\)/i, '')
+      .replace(/\s+[A-Z]{2,5}$/i, '')
+      .trim();
+    // purchaseDate: fully cleaned (no time) for the export sheet
+    purchaseDate = cleanDate(pdStr);
+  }
+  if (!purchaseDate) {
+    var pdM = bodyText.match(/Purchase\s*date\s*\n?\s*([A-Za-z]+ \d+,\s*\d{4}[^\n]{0,40})/i);
+    if (pdM) {
+      var pdStr2      = pdM[1].trim();
+      purchaseDateRaw = pdStr2
+        .replace(/\s*\(UTC[+\-]?\d+(?::\d+)?\)/i, '')
+        .replace(/\s+[A-Z]{2,5}$/i, '')
+        .trim();
+      purchaseDate = cleanDate(pdStr2);
+    }
+  }
+
+  // 3. Recipient Name — multiple fallback strategies
+  var recipientName = '';
+
+  // Strategy 1: "Recipient name" label → adjacent div (normal orders)
+  var rnL = findByOwnText('Recipient name', ['div']);
+  if (rnL) {
+    var rnV = adjacentValue(rnL);
+    if (rnV) {
+      // Get only direct text content (ignore child icon elements)
+      var rnText = Array.from(rnV.childNodes)
+        .filter(function(n) { return n.nodeType === 3; })
+        .map(function(n) { return n.textContent; })
+        .join('').trim();
+      // If no direct text, fall back to full textContent
+      if (!rnText) rnText = rnV.textContent.trim();
+      // Clean up: remove lock icons, copy button text, etc.
+      rnText = rnText.replace(/\s*Copy\s*/gi, '').replace(/^\-+$/, '').trim();
+      if (rnText && rnText !== '-') recipientName = rnText;
+    }
+  }
+
+  // Strategy 2: body text regex — "Recipient name\n  Mark Pell"
+  if (!recipientName) {
+    var rnM = bodyText.match(/Recipient\s*name\s*[\n\r]+\s*([A-Z][A-Za-z '\-]{1,50})/);
+    if (rnM) recipientName = rnM[1].trim();
+  }
+
+  // Strategy 3: "Contact buyer" section — shows masked name like "(Ma***ll)"
+  // Useful when full name is hidden but partial name is shown
+  if (!recipientName) {
+    // Look for the masked-name element: text like (Xx***xx)
+    var maskedEl = Array.from(document.querySelectorAll('div,span')).find(function(el) {
+      var t = el.textContent.trim();
+      return el.childElementCount <= 1 && /^\([A-Za-z*\s'\-]{2,40}\)$/.test(t);
+    });
+    if (maskedEl) {
+      recipientName = maskedEl.textContent.trim();
+    }
+  }
+
+  // Strategy 4: body text — look for "(Xx***xx)" masked name pattern
+  if (!recipientName) {
+    var maskedM = bodyText.match(/\(([A-Za-z][A-Za-z*\s'\-]{1,40})\)/);
+    if (maskedM && /\*/.test(maskedM[1])) recipientName = '(' + maskedM[1] + ')';
+  }
+
+  // 4. All Tracking Numbers (one per package)
+  var allTrackingNumbers = [];
+  var tnLabels = findAllByOwnTextRx(/^Tracking\s*number$/i, ['span']);
+  tnLabels.forEach(function(label) {
+    var lc = label.closest ? label.closest('div') : label.parentElement;
+    var vc = lc ? lc.nextElementSibling : null;
+    var tn = extractTNFromContainer(vc);
+    if (tn) allTrackingNumbers.push(tn);
+  });
+  if (allTrackingNumbers.length === 0) {
+    var tnPs = [/\b(1Z[A-Z0-9]{16})\b/g, /\b(9[24]\d{20})\b/g, /\b(\d{12})\b/g];
+    for (var pi2 = 0; pi2 < tnPs.length; pi2++) {
+      var tnAll = Array.from(bodyText.matchAll(tnPs[pi2])).map(function(m2) { return m2[1]; });
+      if (tnAll.length > 0) { allTrackingNumbers = tnAll; break; }
+    }
+  }
+
+  // 5. All Shipment Confirmed Dates (one per package)
+  var allShipmentDates = [];
+  var sdLabels = findAllByOwnTextRx(/^Shipment\s*confirmed\s*at$/i, ['div']);
+  sdLabels.forEach(function(label) {
+    var sdV = adjacentValue(label);
+    if (sdV) allShipmentDates.push(cleanDate(sdV.textContent.trim()));
+  });
+  if (allShipmentDates.length === 0) {
+    var sdM = bodyText.match(/Shipment\s*confirmed\s*at\s*\n?\s*([A-Za-z]+ \d+,\s*\d{4}[^\n]{0,40})/i);
+    if (sdM) allShipmentDates.push(cleanDate(sdM[1].trim()));
+  }
+
+  // Build packages array
+  var numPkgs = Math.max(allTrackingNumbers.length, allShipmentDates.length, 1);
+  var packages = [];
+  for (var pi = 0; pi < numPkgs; pi++) {
+    packages.push({ trackingNumber: allTrackingNumbers[pi] || '', shipmentDate: allShipmentDates[pi] || '' });
+  }
+
+  // 6. Products from Order Contents table
+  var products = [];
+  var allTbodies = document.querySelectorAll('tbody');
+  var orderTbody = null;
+  for (var bi = 0; bi < allTbodies.length; bi++) {
+    // Use textContent (not innerText) — innerText fails on hidden/collapsed CSS elements
+    var tbText = allTbodies[bi].textContent || '';
+    if (tbText.includes('Goods ID:') || tbText.includes('SKU ID:') || tbText.includes('Order Item ID')) {
+      orderTbody = allTbodies[bi]; break;
+    }
+  }
+  if (orderTbody) {
+    var productColIdx = 1, quantityColIdx = 2;
+    var tbl = orderTbody.closest ? orderTbody.closest('table') : orderTbody.parentElement;
+    var thead = tbl ? tbl.querySelector('thead') : null;
+    if (thead) {
+      thead.querySelectorAll('th').forEach(function(th, idx) {
+        var txt = (th.textContent || '').trim().toLowerCase();
+        if (txt === 'product')  productColIdx  = idx;
+        if (txt === 'quantity') quantityColIdx = idx;
+      });
+    }
+    orderTbody.querySelectorAll('tr').forEach(function(row) {
+      var tds = row.querySelectorAll('td');
+      if (tds.length <= productColIdx) return;
+      var productTd  = tds[productColIdx];
+      var quantityTd = tds.length > quantityColIdx ? tds[quantityColIdx] : null;
+
+      var title = '';
+
+      // Strategy 1: beast-core-ellipsis — try innerText first, then textContent
+      var ellipsisEl = productTd.querySelector('[data-testid="beast-core-ellipsis"]');
+      if (ellipsisEl) {
+        // Try innerText (works when text is visible)
+        var rawTitle = (ellipsisEl.innerText || '').trim();
+        if (!rawTitle) rawTitle = (ellipsisEl.textContent || '').trim(); // fallback
+        var lines = rawTitle.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        var t0 = lines[0] || '';
+        if (t0 && !/[{}]|webkit|display\s*:|Goods\s*ID|SKU\s*ID|Order\s*item/i.test(t0)) {
+          title = t0;
+        } else {
+          // Try deeper — get textContent of the direct inner div (the actual title div)
+          var innerDiv = ellipsisEl.querySelector('div > div, div');
+          if (innerDiv) {
+            var innerText = Array.from(innerDiv.childNodes)
+              .filter(function(n) { return n.nodeType === 3; })
+              .map(function(n) { return n.textContent.trim(); })
+              .join('').trim();
+            if (!innerText) innerText = (innerDiv.textContent || '').trim();
+            if (innerText && innerText.length > 5 &&
+                !/[{}]|webkit|Goods\s*ID|SKU\s*ID|Order\s*item/i.test(innerText)) {
+              title = innerText;
+            }
+          }
+          // Still no title — try other lines
+          if (!title) {
+            for (var li = 1; li < lines.length; li++) {
+              if (!/[{}]|webkit|display\s*:|Goods\s*ID|SKU\s*ID|Order\s*item/i.test(lines[li]) && lines[li].length > 5) {
+                title = lines[li]; break;
+              }
+            }
+          }
+        }
+      }
+
+      // Strategy 2: longest own-text node (TEXT_NODEs only) — primary fallback
+      if (!title) {
+        var cands = [];
+        productTd.querySelectorAll('div,span,a').forEach(function(el) {
+          // Try direct TEXT_NODE first (ownText)
+          var ot = ownText(el);
+          // Also try full textContent of small leaf elements (catches titles inside icon-containing divs)
+          if (!ot && el.childElementCount <= 1) {
+            var fc = el.firstElementChild;
+            // If the only child is an icon (small, no own text), treat parent text as candidate
+            if (!fc || (fc.childElementCount === 0 && (fc.textContent || '').trim().length === 0)) {
+              ot = (el.textContent || '').trim();
+            }
+          }
+          if (ot && ot.length > 5 &&
+              !/Goods\s*ID|SKU\s*ID|Order\s*item|^\$|^\d+$|shipped|delivered|refund|Seller|Seller fulfilled|[{}]|webkit|Special$|White$|Black$|Blue$/i.test(ot)) {
+            cands.push(ot);
+          }
+        });
+        cands.sort(function(a, b) { return b.length - a.length; });
+        if (cands.length > 0) title = cands[0];
+      }
+
+      // Strategy 3: bodyText regex — find product name near the order's goods/SKU IDs
+      if (!title) {
+        var prodM = bodyText.match(/([A-Za-z][^\n]{10,120})\s*\nGoods\s*ID\s*:/);
+        if (prodM) title = prodM[1].trim();
+      }
+
+      // ── Extract Product Variant (color/size/style) ────────────────────────
+      var variant = '';
+      if (productTd) {
+        // Strategy 1: dedicated variant/attribute div (Temu uses _3Le-rmeu or similar)
+        var variantContainers = productTd.querySelectorAll('[class*="rmeu"],[class*="variant"],[class*="attr"],[class*="property"]');
+        variantContainers.forEach(function(vc) {
+          if (variant) return;
+          var t = (vc.textContent || '').trim();
+          if (t && t.length > 0 && t.length < 80 &&
+              !/Goods\s*ID|SKU\s*ID|Order\s*item|^\$|^\d+$/i.test(t)) {
+            variant = t;
+          }
+        });
+
+        // Strategy 2: small span/div directly after the title div — typically variant label
+        if (!variant && title) {
+          var allLeafs = Array.from(productTd.querySelectorAll('span,div')).filter(function(el) {
+            return el.childElementCount === 0;
+          });
+          allLeafs.forEach(function(el) {
+            if (variant) return;
+            var t = (el.textContent || '').trim();
+            // Short text, not the title itself, not a price/number/ID
+            if (t && t !== title && t.length > 0 && t.length < 60 &&
+                !/Goods\s*ID|SKU\s*ID|Order\s*item|^\$|^\d{5,}|^Copy$/i.test(t) &&
+                !/shipped|delivered|refund|Seller/i.test(t)) {
+              variant = t;
+            }
+          });
+        }
+
+        // Strategy 3: bodyText — look for variant pattern: "Variant: White" or "Special\n"
+        if (!variant) {
+          var varM = bodyText.match(/\b(New|Special|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b(?=\s*\n(?:Goods\s*ID|SKU\s*ID))/);
+          if (varM && varM[1] !== title) variant = varM[1].trim();
+        }
+      }
+
+      var qty = '1';
+      if (quantityTd) {
+        var qEl = Array.from(quantityTd.querySelectorAll('div,span')).find(function(el) {
+          return el.childElementCount === 0 && /^\d+$/.test(el.textContent.trim());
+        });
+        if (qEl) qty = qEl.textContent.trim();
+        else { var qm = (quantityTd.textContent || '').match(/^[\s\n]*(\d+)/); if (qm) qty = qm[1]; }
+      }
+
+      if (title) products.push({ title, variant, qty });
+    });
+  }
+
+  // 7. Estimated Revenue — take LAST occurrence of "Estimated revenue" label
+  //    (it appears in both the table row AND the Sales proceeds panel;
+  //     the panel version is later in the DOM and is the correct order total)
+  var estimatedRevenue = '';
+  var erLabels = findAllByOwnTextRx(/^Estimated\s*revenue$/i, ['span', 'div']);
+  if (erLabels.length > 0) {
+    var erLabel = erLabels[erLabels.length - 1];
+    var erV = adjacentValue(erLabel);
+    if (erV) estimatedRevenue = erV.textContent.trim().replace(/[^0-9.,]/g, '').trim();
+  }
+  if (!estimatedRevenue) {
+    var erM = bodyText.match(/Estimated\s*revenue[^\n]*\n?[^\n$]*\$([\d.,]+)/i);
+    if (erM) estimatedRevenue = erM[1];
+  }
+
+  // 8. Est. Total Shipping Cost
+  var shippingCost = '';
+  var scLabel = findByOwnText('Est. total shipping cost', ['div']);
+  if (scLabel) { var scV = adjacentValue(scLabel); shippingCost = scV ? scV.textContent.trim().replace(/[^0-9.,]/g, '').trim() : ''; }
+  if (!shippingCost) {
+    var scM = bodyText.match(/Est\.?\s*total\s*shipping\s*cost[^\n]*\n?[^\n$]*\$([\d.,]+)/i);
+    if (scM) shippingCost = scM[1];
+  }
+
+  // 9. Courier — from "Courier" label in Package section
+  // DOM: div._3ThFGSo9 "Courier" → sibling div._23odfCcn → inner div._2OTvT66D
+  var courier = '';
+  var courierLabel = findByOwnText('Courier', ['div', 'span']);
+  if (courierLabel) {
+    var courierV = adjacentValue(courierLabel);
+    if (courierV) courier = courierV.textContent.trim().replace(/\s+/g, ' ');
+  }
+  if (!courier) {
+    var courierM = bodyText.match(/Courier[\s\n]+([A-Za-z][^\n]{2,40})/);
+    if (courierM) courier = courierM[1].trim();
+  }
+
+  // 10. Base Price — from Sales proceeds panel "Base price total"
+  // DOM: span._NQzGIY9a "Base price total" → sibling span._3TKnz9iZ "$15.80"
+  var basePrice = '';
+  var bpLabels = findAllByOwnTextRx(/^Base\s*price\s*(?:total|subtotal)?$/i, ['span', 'div']);
+  if (bpLabels.length > 0) {
+    var bpLabel = bpLabels[bpLabels.length - 1];
+    var bpV = adjacentValue(bpLabel);
+    if (bpV) basePrice = bpV.textContent.trim().replace(/[^0-9.,]/g, '').trim();
+  }
+  if (!basePrice) {
+    var bpM = bodyText.match(/Base\s*price\s*(?:total|subtotal)?\s*\n?\s*\$([\d.,]+)/i);
+    if (bpM) basePrice = bpM[1];
+  }
+
+  // ── Guard: if page didn't load or orderNumber is missing, return null ─────────
+  if (!orderNumber && products.length === 0 && !recipientName) return null;
+
+  return { orderNumber, recipientName, purchaseDate, purchaseDateRaw, packages, products, estimatedRevenue, shippingCost, basePrice, courier };
+
+  } catch(e) {
+    // DOM error — return null so this order goes to retryQueue instead of crashing
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORT GENERATORS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function generateExport(flatRows, orderCount, format) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const ts  = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+  const base = `temu_orders_${ts}_${orderCount}orders`;
+  if (format === 'json') {
+    const j = JSON.stringify(flatRows, null, 2);
+    return { dataUrl: 'data:application/json;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(j))), filename: base + '.json' };
+  }
+  if (format === 'xlsx') return generateXLSX(flatRows, base);
+  return generateCSV(flatRows, base);
+}
+
+function generateCSV(flatRows, base) {
+  const esc = c => '"' + String(c == null ? '' : c).replace(/"/g, '""').replace(/[\r\n]+/g, ' ').trim() + '"';
+  const lines = [EXPORT_HEADERS.map(esc).join(',')];
+  flatRows.forEach(r => lines.push(EXPORT_COLS.map(k => esc(r[k] != null ? r[k] : '')).join(',')));
+  const csv = '\uFEFF' + lines.join('\r\n');
+  return { dataUrl: 'data:text/csv;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(csv))), filename: base + '.csv' };
+}
+
+function generateXLSX(flatRows, base) {
+  if (!XLSX_LOADED || typeof XLSX === 'undefined') {
+    console.warn('[Temu Exporter] SheetJS unavailable — falling back to CSV');
+    return generateCSV(flatRows, base.replace(/\.xlsx$/, '') + '.csv');
+  }
+  const wsData = [EXPORT_HEADERS];
+  flatRows.forEach(r => wsData.push(EXPORT_COLS.map(k => r[k] != null ? r[k] : '')));
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = EXPORT_HEADERS.map((h, ci) => {
+    const maxLen = wsData.reduce((mx, row) => Math.max(mx, String(row[ci] != null ? row[ci] : '').length), h.length);
+    return { wch: Math.min(maxLen + 3, 65) };
+  });
+  ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2', sqref: 'A2' };
+  EXPORT_HEADERS.forEach((_, ci) => {
+    const ref = XLSX.utils.encode_cell({ r: 0, c: ci });
+    if (ws[ref]) ws[ref].s = {
+      font:      { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+      fill:      { fgColor: { rgb: '00B050' }, patternType: 'solid' },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border:    { bottom: { style: 'thin', color: { rgb: '007A3D' } } }
+    };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Temu Orders');
+  const b64 = XLSX.write(wb, { bookType: 'xlsx', type: 'base64', cellStyles: true });
+  return {
+    dataUrl:  'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + b64,
+    filename: base + '.xlsx'
+  };
+}

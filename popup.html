@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Temu Order Exporter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #080c14;
+      --surface:   #0f1521;
+      --surface2:  #161e2e;
+      --border:    #1e2d45;
+      --border2:   #243350;
+      --text:      #e8f0fe;
+      --muted:     #6b7fa3;
+      --green:     #22c55e;
+      --green-dim: #16a34a;
+      --green-bg:  #071a10;
+      --blue:      #3b82f6;
+      --blue-bg:   #071224;
+      --amber:     #f59e0b;
+      --red:       #ef4444;
+      --red-bg:    #1a0808;
+    }
+
+    body {
+      width: 380px;
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    /* ── HEADER ─────────────────────────────────────────────────────────────── */
+    .header {
+      padding: 14px 16px 12px;
+      background: linear-gradient(135deg, #0f1b2d 0%, #080c14 100%);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: relative;
+    }
+    .header::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #22c55e44, transparent);
+    }
+    .logo {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      overflow: hidden;
+      flex-shrink: 0;
+      box-shadow: 0 0 14px rgba(59, 130, 246, 0.5);
+      border: 1.5px solid rgba(59, 130, 246, 0.6);
+      display: flex; align-items: center; justify-content: center;
+      background: #040812;
+    }
+    .logo img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    .header-info { flex: 1; }
+    .header-title {
+      font-size: 14px; font-weight: 700; color: #f0f6fc;
+      letter-spacing: -0.01em;
+    }
+    .header-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+    .mode-pill {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.05em; text-transform: uppercase;
+      transition: all .3s ease;
+    }
+    .mode-pill.auto   { background: #071a10; color: var(--green); border: 1px solid #16a34a66; box-shadow: 0 0 12px #22c55e22; }
+    .mode-pill.manual { background: var(--blue-bg); color: var(--blue); border: 1px solid #3b82f666; }
+
+    /* ── BODY ────────────────────────────────────────────────────────────────── */
+    .body { padding: 12px 14px; }
+
+    /* ── STATS ───────────────────────────────────────────────────────────────── */
+    .stats { display: flex; gap: 10px; margin-bottom: 14px; }
+    .stat {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      transition: border-color .3s, box-shadow .3s;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--green-dim), transparent);
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .stat.active::before { opacity: 1; }
+    .stat.active { border-color: #22c55e44; box-shadow: 0 0 20px #22c55e10; }
+    .stat-icon { font-size: 18px; margin-bottom: 4px; }
+    .stat-value {
+      font-size: 26px; font-weight: 800;
+      color: #f0f6fc; line-height: 1;
+      font-variant-numeric: tabular-nums;
+      transition: transform .15s ease;
+    }
+    .stat-value.bump { animation: bump .3s ease; }
+    @keyframes bump {
+      0%   { transform: scale(1.15); }
+      100% { transform: scale(1); }
+    }
+    .stat-label { font-size: 10px; color: var(--muted); margin-top: 3px; font-weight: 500; }
+
+    /* ── STATUS BOX ──────────────────────────────────────────────────────────── */
+    .status {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 10px 12px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      border: 1px solid;
+      animation: fadeSlide .25s ease;
+      line-height: 1.5;
+    }
+    .status.idle    { background: var(--surface); border-color: var(--border); }
+    .status.success { background: var(--green-bg); border-color: #16a34a55; }
+    .status.info    { background: var(--blue-bg);  border-color: #3b82f655; }
+    .status.error   { background: var(--red-bg);   border-color: #ef444455; }
+    .status-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+    .status-msg  { font-size: 11.5px; color: var(--text); }
+    .status.success .status-msg { color: #86efac; }
+    .status.info    .status-msg { color: #93c5fd; }
+    .status.error   .status-msg { color: #fca5a5; }
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(-5px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    /* ── AUTO PANEL ──────────────────────────────────────────────────────────── */
+    #autoPanel {
+      display: none;
+      background: var(--green-bg);
+      border: 1px solid #16a34a44;
+      border-radius: 14px;
+      padding: 12px;
+      margin-bottom: 14px;
+      animation: fadeSlide .3s ease;
+    }
+    .panel-head {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 12px; font-weight: 700; color: var(--green);
+      margin-bottom: 12px;
+    }
+    .panel-head-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { opacity: 1; } 50% { opacity: .4; }
+    }
+
+    /* Page range — two steppers side by side */
+    .page-range {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .page-field {
+      flex: 1;
+      min-width: 0;
+    }
+    .page-field label {
+      display: block; font-size: 10px; color: var(--muted);
+      font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+      margin-bottom: 5px;
+    }
+    .page-stepper {
+      display: flex; align-items: center;
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 10px; overflow: hidden;
+      width: 100%;
+    }
+    .stepper-btn {
+      width: 30px; height: 34px; flex-shrink: 0;
+      border: none; background: transparent;
+      color: var(--muted); cursor: pointer; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .15s, color .15s;
+      font-family: inherit;
+    }
+    .stepper-btn:hover { background: var(--border); color: var(--text); }
+    .stepper-input {
+      flex: 1; min-width: 0;
+      background: transparent; border: none;
+      color: var(--text); font-size: 14px; font-weight: 700;
+      text-align: center; font-family: inherit;
+      padding: 0 2px;
+      font-variant-numeric: tabular-nums;
+    }
+    .stepper-input:focus { outline: none; }
+    .page-arrow {
+      color: var(--muted); font-size: 16px;
+      padding-bottom: 6px;
+      flex-shrink: 0;
+    }
+
+    /* Estimate chip */
+    .estimate-chip {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #0a2414; border: 1px solid #16a34a33;
+      border-radius: 8px; padding: 7px 11px;
+      margin-bottom: 12px; font-size: 11px;
+    }
+    .estimate-orders { color: #86efac; font-weight: 600; }
+    .estimate-time   { color: var(--muted); }
+
+    /* Speed toggle */
+    .speed-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+    }
+    .speed-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .speed-track {
+      flex: 1; height: 4px; background: var(--border2);
+      border-radius: 2px; position: relative; cursor: pointer;
+    }
+    .speed-fill {
+      height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, #3b82f6, #22c55e);
+      transition: width .2s;
+    }
+    .speed-thumb {
+      width: 14px; height: 14px;
+      background: #fff; border-radius: 50%;
+      position: absolute; top: 50%; transform: translateY(-50%);
+      box-shadow: 0 2px 6px #0008;
+      cursor: pointer; transition: left .2s;
+    }
+    input[type=range].speed-slider {
+      -webkit-appearance: none; appearance: none;
+      flex: 1; height: 4px;
+      background: linear-gradient(90deg, #3b82f6 var(--pct,50%), var(--border2) var(--pct,50%));
+      border-radius: 2px; cursor: pointer; outline: none;
+    }
+    input[type=range].speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 8px #0006;
+      cursor: pointer;
+    }
+    .speed-value { font-size: 10px; color: var(--green); font-weight: 600; white-space: nowrap; }
+
+    /* Format select */
+    .format-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 0;
+    }
+    .format-row label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    select {
+      flex: 1; background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 9px; color: var(--text);
+      padding: 8px 10px; font-size: 12px; font-family: inherit;
+      cursor: pointer; transition: border-color .2s; outline: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7fa3'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+    }
+    select:focus { border-color: var(--green-dim); }
+
+    /* ── DATE FILTER ─────────────────────────────────────────────────────────── */
+    .date-filter-section {
+      margin-bottom: 10px;
+    }
+    .date-filter-toggle-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px;
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 10px; cursor: pointer;
+      transition: border-color .2s, background .2s;
+      margin-bottom: 0;
+    }
+    .date-filter-toggle-row:hover { border-color: var(--blue); background: #071224; }
+    .date-filter-toggle-row.active { border-color: #3b82f666; background: var(--blue-bg); }
+    .date-filter-toggle-row input[type=checkbox] {
+      accent-color: var(--blue);
+      width: 14px; height: 14px;
+      cursor: pointer; flex-shrink: 0;
+    }
+    .date-filter-toggle-label {
+      font-size: 11px; color: var(--muted); font-weight: 600;
+      flex: 1;
+    }
+    .date-filter-toggle-row.active .date-filter-toggle-label { color: #93c5fd; }
+    .date-filter-badge {
+      font-size: 9px; padding: 2px 6px;
+      background: var(--blue-bg); color: var(--blue);
+      border: 1px solid #3b82f644; border-radius: 20px;
+      font-weight: 700; letter-spacing: .04em;
+    }
+    .date-filter-inputs {
+      margin-top: 8px;
+      display: none;
+      animation: fadeSlide .2s ease;
+    }
+    .date-filter-inputs.visible { display: block; }
+    .date-field {
+      flex: 1; min-width: 0;
+    }
+    .date-field label {
+      display: block; font-size: 10px; color: var(--muted);
+      font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+      margin-bottom: 5px;
+    }
+    input[type=date].date-input,
+    input[type=datetime-local].date-input {
+      width: 100%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 10px; color: var(--text);
+      padding: 8px 10px; font-size: 12px; font-family: inherit;
+      outline: none; cursor: pointer;
+      transition: border-color .2s;
+      color-scheme: dark;
+    }
+    input[type=date].date-input:focus,
+    input[type=datetime-local].date-input:focus { border-color: var(--blue); }
+    .date-filter-note {
+      margin-top: 6px;
+      font-size: 10px; color: var(--muted);
+      text-align: center; line-height: 1.5;
+    }
+    .date-filter-note span { color: #93c5fd; }
+
+    /* ── MANUAL PANEL ────────────────────────────────────────────────────────── */
+    #manualPanel { display: none; margin-bottom: 14px; }
+
+    /* ── PROGRESS ────────────────────────────────────────────────────────────── */
+    #progressSection {
+      display: none; margin-bottom: 14px;
+    }
+
+    /* Step indicators */
+    .steps {
+      display: flex; gap: 0; margin-bottom: 12px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .step {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; padding: 8px 4px;
+      font-size: 9px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted);
+      border-right: 1px solid var(--border);
+      transition: all .3s;
+      position: relative;
+    }
+    .step:last-child { border-right: none; }
+    .step-num {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; margin-bottom: 4px; transition: all .3s;
+    }
+    .step.active  { color: #93c5fd; background: #071224; }
+    .step.active .step-num { background: #1e40af; border-color: var(--blue); color: #fff; }
+    .step.done    { color: #86efac; }
+    .step.done .step-num { background: var(--green-dim); border-color: var(--green); color: #fff; }
+
+    /* Progress bar */
+    .progress-bar-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px;
+    }
+    .progress-meta {
+      display: flex; justify-content: space-between;
+      font-size: 11px; margin-bottom: 7px; color: var(--muted);
+    }
+    .progress-label { color: var(--text); font-weight: 500; }
+    .progress-pct   { color: var(--green); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .bar-bg {
+      height: 6px; background: var(--surface2);
+      border-radius: 3px; overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%; width: 0%; border-radius: 3px;
+      background: linear-gradient(90deg, #16a34a, #22c55e, #86efac);
+      background-size: 200% 100%;
+      transition: width .4s cubic-bezier(.4,0,.2,1);
+      animation: shimmer 2s infinite linear;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ── FAILURE BOX ─────────────────────────────────────────────────────────── */
+    #failBox {
+      display: none;
+      background: var(--red-bg); border: 1px solid #ef444433;
+      border-radius: 10px; padding: 10px 12px;
+      margin-bottom: 14px;
+      font-size: 11px; color: #fca5a5;
+      animation: fadeSlide .25s ease;
+    }
+    #failBox strong { color: #f87171; }
+
+    /* ── BUTTONS ─────────────────────────────────────────────────────────────── */
+    .btn {
+      width: 100%; padding: 13px 20px;
+      border: none; border-radius: 12px;
+      font-size: 14px; font-weight: 700;
+      cursor: pointer; font-family: inherit;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: all .2s ease;
+      letter-spacing: -0.01em;
+    }
+    .btn-green {
+      background: linear-gradient(135deg, #16a34a, #22c55e);
+      color: #fff;
+      box-shadow: 0 4px 20px #22c55e30;
+    }
+    .btn-green:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px #22c55e50;
+    }
+    .btn-green:active:not(:disabled) { transform: translateY(0); }
+    .btn-green:disabled {
+      opacity: .45; cursor: not-allowed;
+      transform: none; box-shadow: none;
+    }
+    .btn-icon { font-size: 16px; }
+
+    /* ── MODE TABS ────────────────────────────────────────────────────────────── */
+    .mode-tabs {
+      display: flex; gap: 4px;
+      background: var(--surface2);
+      border-radius: 10px; padding: 4px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+    }
+    .mode-tab {
+      flex: 1; padding: 7px 4px;
+      background: transparent; border: none; border-radius: 7px;
+      color: var(--muted); font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.18s ease;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .mode-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+    .mode-tab.active {
+      background: var(--green); color: #000;
+      box-shadow: 0 2px 8px rgba(34,197,94,0.3);
+    }
+
+    /* ── TAB CONTENT ──────────────────────────────────────────────────────────── */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .tab-section-label {
+      font-size: 11px; color: var(--muted);
+      margin-bottom: 8px; font-weight: 500;
+    }
+    .date-mode-note {
+      margin-top: 10px; padding: 8px 10px;
+      background: rgba(34,197,94,0.07);
+      border: 1px solid rgba(34,197,94,0.2);
+      border-radius: 7px; font-size: 10.5px; color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── SELECTION MODE ───────────────────────────────────────────────────────── */
+    .sel-detect-bar {
+      display: flex; align-items: center; gap: 7px;
+      background: rgba(34,197,94,0.08);
+      border: 1px solid rgba(34,197,94,0.25);
+      border-radius: 8px; padding: 7px 11px;
+      margin-bottom: 10px;
+      font-size: 11px; color: var(--muted);
+    }
+    .sel-pulse {
+      color: var(--green); font-size: 10px;
+      animation: selPulseAnim 1.2s ease-in-out infinite;
+    }
+    @keyframes selPulseAnim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(0.8); }
+    }
+    .sel-detect-txt { font-size: 11px; color: #64b893; }
+    .sel-controls {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 12px;
+    }
+    .sel-status-big {
+      flex: 1; display: flex; align-items: center; gap: 8px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 14px;
+    }
+    .sel-count-big {
+      font-size: 28px; font-weight: 800; color: var(--green);
+      min-width: 32px; text-align: center;
+      transition: all 0.2s ease;
+    }
+    .sel-count-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .btn-clear-sel {
+      padding: 9px 11px;
+      background: transparent; border: 1px solid #ef4444;
+      border-radius: 8px; color: #ef4444;
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .btn-clear-sel:hover:not(:disabled) { background: #ef4444; color: white; }
+    .btn-clear-sel:disabled { opacity: 0.3; cursor: not-allowed; }
+    .sel-instructions {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 9px; padding: 10px 12px;
+    }
+    .sel-step {
+      font-size: 11px; color: var(--muted); padding: 3px 0;
+      line-height: 1.5;
+    }
+    .sel-step strong { color: var(--green); }
+    .sel-note {
+      margin-top: 6px; padding-top: 6px;
+      border-top: 1px solid var(--border);
+      font-size: 10px; color: #64748b;
+    }
+    .sel-debug-btn {
+      margin-top: 8px; width: 100%;
+      padding: 6px; background: transparent;
+      border: 1px dashed #334155; border-radius: 6px;
+      color: #475569; font-size: 10px; cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .sel-debug-btn:hover { border-color: var(--green); color: var(--green); }
+    .sel-debug-box {
+      margin: 8px 0;
+      background: #0a0f1a; border: 1px solid #1e3a5f;
+      border-radius: 8px; padding: 10px;
+    }
+    .sel-debug-title {
+      font-size: 10px; font-weight: 700; color: #60a5fa;
+      margin-bottom: 6px; letter-spacing: 0.5px;
+    }
+    .sel-debug-pre {
+      font-size: 9px; color: #94a3b8;
+      white-space: pre-wrap; word-break: break-all;
+      max-height: 120px; overflow-y: auto;
+      line-height: 1.4; margin: 0;
+    }
+
+    /* ── FOOTER ──────────────────────────────────────────────────────────────── */
+    .footer {
+      text-align: center; font-size: 10px; color: #2d3f5a;
+      padding: 8px 16px 11px;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo"><img src="icons/icon48.png" alt="Icon"></div>
+    <div class="header-info">
+      <div class="header-title">Temu Order Exporter</div>
+      <div class="header-sub" id="headerSub">Detecting page…</div>
+    </div>
+    <span class="mode-pill manual" id="modePill">Manual</span>
+  </div>
+
+  <div class="body">
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat" id="statPages">
+        <div class="stat-icon">📄</div>
+        <div class="stat-value" id="statPagesVal">—</div>
+        <div class="stat-label" id="statPagesLabel">Pages</div>
+      </div>
+      <div class="stat" id="statOrders">
+        <div class="stat-icon">📦</div>
+        <div class="stat-value" id="statOrdersVal">—</div>
+        <div class="stat-label">Rows Exported</div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="status idle" id="statusBox">
+      <span class="status-icon" id="statusIcon">🔍</span>
+      <span class="status-msg"  id="statusMsg">Detecting page type…</span>
+    </div>
+
+    <!-- ══ AUTO PANEL ══ -->
+    <div id="autoPanel">
+      <div class="panel-head">
+        <div class="panel-head-dot"></div>
+        Auto-Export Mode
+      </div>
+
+      <!-- ── Mode Tabs ── -->
+      <div class="mode-tabs" id="modeTabs">
+        <button class="mode-tab active" id="tabPages"   data-tab="pages">📄 By Pages</button>
+        <button class="mode-tab"        id="tabDate"    data-tab="date">📅 By Date</button>
+        <button class="mode-tab"        id="tabSelect"  data-tab="select">☑ By Selection</button>
+      </div>
+
+      <!-- ── TAB: By Pages ── -->
+      <div class="tab-content active" id="tabContentPages">
+        <div class="page-range">
+          <div class="page-field">
+            <label>From Page</label>
+            <div class="page-stepper">
+              <button class="stepper-btn" id="fromMinus">−</button>
+              <input class="stepper-input" type="number" id="fromPage" value="1" min="1">
+              <button class="stepper-btn" id="fromPlus">+</button>
+            </div>
+          </div>
+          <div class="page-arrow">→</div>
+          <div class="page-field">
+            <label>To Page</label>
+            <div class="page-stepper">
+              <button class="stepper-btn" id="toMinus">−</button>
+              <input class="stepper-input" type="number" id="toPage" value="5" min="1">
+              <button class="stepper-btn" id="toPlus">+</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="estimate-chip">
+          <span class="estimate-orders" id="estOrders">~50 orders</span>
+          <span class="estimate-time"   id="estTime">~4–8 min</span>
+        </div>
+
+        <!-- Date Filter (optional toggle) -->
+        <div class="date-filter-section">
+          <div class="date-filter-toggle-row" id="dateFilterToggleRow">
+            <input type="checkbox" id="dateFilterEnabled">
+            <span class="date-filter-toggle-label">📅 Filter by Date Range</span>
+            <span class="date-filter-badge">Optional</span>
+          </div>
+          <div class="date-filter-inputs" id="dateFilterInputs">
+            <div class="page-range">
+              <div class="date-field">
+                <label>From Date &amp; Time</label>
+                <input type="datetime-local" class="date-input" id="fromDate">
+              </div>
+              <div class="page-arrow">→</div>
+              <div class="date-field">
+                <label>To Date &amp; Time</label>
+                <input type="datetime-local" class="date-input" id="toDate">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── TAB: By Date Range ── -->
+      <div class="tab-content" id="tabContentDate">
+        <div class="tab-section-label">📅 Export orders by date range — scans all pages automatically</div>
+        <div class="page-range" style="margin-top:10px">
+          <div class="date-field">
+            <label>From Date</label>
+            <input type="datetime-local" class="date-input" id="dateFrom">
+          </div>
+          <div class="page-arrow">→</div>
+          <div class="date-field">
+            <label>To Date</label>
+            <input type="datetime-local" class="date-input" id="dateTo">
+          </div>
+        </div>
+        <div class="date-mode-note">
+          Extension sab pages scan karega — sirf is date range ke orders export honge.
+          <strong>Smart early exit:</strong> purane pages automatically skip honge.
+        </div>
+      </div>
+
+      <!-- ── TAB: By Selection ── -->
+      <div class="tab-content" id="tabContentSelect">
+        <div class="tab-section-label">☑ Tick orders on Temu page — extension auto-detects</div>
+
+        <!-- Live detection status -->
+        <div class="sel-detect-bar" id="selDetectBar">
+          <span class="sel-pulse" id="selPulse">●</span>
+          <span class="sel-detect-txt">Live detecting from page…</span>
+        </div>
+
+        <div class="sel-controls">
+          <div class="sel-status-big" id="selStatus">
+            <span class="sel-count-big" id="selCount">0</span>
+            <span class="sel-count-label">orders selected</span>
+          </div>
+          <button class="btn-clear-sel" id="clearSelBtn" disabled>✕ Clear All</button>
+        </div>
+
+        <!-- Debug output (hidden by default) -->
+        <div class="sel-debug-box" id="selDebugBox" style="display:none;">
+          <div class="sel-debug-title">🔍 Debug Info (share this)</div>
+          <pre class="sel-debug-pre" id="selDebugPre"></pre>
+        </div>
+
+        <div class="sel-instructions">
+          <div class="sel-step">① Go to Temu page — tick the orders you want using their checkboxes</div>
+          <div class="sel-step">② Count above updates <strong>automatically</strong></div>
+          <div class="sel-step">③ Click <strong>"☑ Export Selected"</strong> below</div>
+          <div class="sel-note">⚠️ Selections reset when you navigate to another page</div>
+          <button class="sel-debug-btn" id="debugDetectBtn">🔍 Debug Detection</button>
+        </div>
+      </div>
+
+      <!-- ── Shared: Speed + Format ── -->
+      <div class="speed-row">
+        <span class="speed-label">🐢 Safe</span>
+        <input type="range" class="speed-slider" id="speedSlider" min="1" max="3" value="2">
+        <span class="speed-label">⚡ Fast</span>
+        <span class="speed-value" id="speedVal">Balanced</span>
+      </div>
+
+      <div class="format-row">
+        <label>Export as</label>
+        <select id="autoFormat">
+          <option value="xlsx">📊 Excel (.xlsx)</option>
+          <option value="csv">📄 CSV</option>
+          <option value="json">📋 JSON</option>
+        </select>
+      </div>
+    </div>
+
+
+    <!-- ══ MANUAL PANEL ══ -->
+    <div id="manualPanel">
+      <div class="format-row">
+        <label>Export as</label>
+        <select id="manualFormat">
+          <option value="xlsx">📊 Excel (.xlsx)</option>
+          <option value="csv">📄 CSV</option>
+          <option value="json">📋 JSON</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ══ PROGRESS ══ -->
+    <div id="progressSection">
+      <!-- Step indicators (auto mode only) -->
+      <div class="steps" id="stepsRow" style="display:none;">
+        <div class="step" id="stepNav">
+          <div class="step-num" id="stepNavNum">1</div>
+          Navigate
+        </div>
+        <div class="step" id="stepScrape">
+          <div class="step-num" id="stepScrapeNum">2</div>
+          Scrape
+        </div>
+        <div class="step" id="stepExtract">
+          <div class="step-num" id="stepExtractNum">3</div>
+          Extract
+        </div>
+        <div class="step" id="stepRetry">
+          <div class="step-num" id="stepRetryNum">4</div>
+          Retry
+        </div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-meta">
+          <span class="progress-label" id="progLabel">Processing…</span>
+          <span class="progress-pct"   id="progPct">0%</span>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" id="barFill"></div></div>
+      </div>
+    </div>
+
+    <!-- Failure box -->
+    <div id="failBox"></div>
+
+    <!-- ══ BUTTONS ══ -->
+    <button class="btn btn-green" id="autoBtn"   style="display:none;" disabled>
+      <span class="btn-icon">🚀</span><span id="autoBtnTxt">Start Auto-Export</span>
+    </button>
+    <button class="btn btn-green" id="manualBtn" style="display:none;" disabled>
+      <span class="btn-icon">⬇️</span><span id="manualBtnTxt">Export Open Tabs</span>
+    </button>
+
+  </div>
+
+  <div class="footer">v5.0 · 3 Export Modes · Parallel Batch · Auto-Retry</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
