@@ -20,13 +20,13 @@ const TAB_LOAD_TIMEOUT = 30000; // 30s per tab load
 
 const EXPORT_COLS = [
   'shippingDate', 'orderDate', 'trackingNumber',
-  'orderNumber',  'customerName', 'productDetails', 'productVariant', 'qty',
-  'estimatedRevenue', 'shippingCost', 'basePrice', 'courier'
+  'orderNumber',  'customerName', 'productDetails', 'qty',
+  'estimatedRevenue', 'shippingCost'
 ];
 const EXPORT_HEADERS = [
   'Shipping Date', 'Order Date', 'Tracking Number',
-  'Order No',      'Customer Name', 'Product Details', 'Variant', 'Qty (No)',
-  'Est. Revenue',  'Shipping Cost', 'Base Price', 'Courier'
+  'Order No',      'Customer Name', 'Product Details', 'Qty (No)',
+  'Est. Revenue',  'Shipping Cost'
 ];
 
 // ── Utility ────────────────────────────────────────────────────────────────────
@@ -113,7 +113,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'startDateExport') runDateExport(
     msg.listTabId, msg.fromDate, msg.toDate, msg.format || 'csv',
     msg.tabDelay  ?? 1000,
-    msg.randExtra ?? 1000
+    msg.randExtra ?? 1000,
+    msg.maxPages  || 999
   );
   // ── New Mode 3: Selection export ─────────────────────────────────────────────
   if (msg.type === 'startSelectionExport') runSelectionExport(
@@ -373,11 +374,11 @@ async function runAutoExport(listTabId, fromPage, toPage, format, tabDelay = 100
 // MODE 2b — Date Range Export: scan list pages, extract only date-matched orders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 1000, randExtra = 1000) {
+async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 1000, randExtra = 1000, maxPages = 999) {
   const fromTs = fromDate ? new Date(fromDate).getTime() : 0;
   const toTs   = toDate   ? new Date(toDate).getTime()   : Infinity;
 
-  sendMsg({ type: 'autoProgress', stage: 'navigating', page: 1, totalPages: '?', scraped: 0 });
+  sendMsg({ type: 'autoProgress', stage: 'navigating', page: 1, totalPages: maxPages, scraped: 0 });
 
   const allOrderUrls = [];
 
@@ -387,7 +388,7 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
     let keepGoing = true;
 
     while (keepGoing) {
-      sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: '?',
+      sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: maxPages,
                 scraped: allOrderUrls.length });
 
       await sleep(700);
@@ -443,10 +444,17 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
         }
       });
 
-      // Smart early exit: if all dates on page are older than the FROM date, stop
+      // Smart early exit 1: all dates older than FROM date — no point going further
       if (hasAnyDate && allOlderThanFrom) {
         sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: page,
                   scraped: allOrderUrls.length, note: 'Early exit — all orders older than date range' });
+        break;
+      }
+
+      // Smart early exit 2: reached the user's max-pages limit
+      if (page >= maxPages) {
+        sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: maxPages,
+                  scraped: allOrderUrls.length, note: `Stopped at page ${maxPages} (user limit)` });
         break;
       }
 
@@ -591,7 +599,19 @@ async function navigateListToPage(tabId, pageNum) {
   await chrome.scripting.executeScript({
     target: { tabId },
     func:   function(targetPage) {
-      // Strategy 1: Ant Design / custom quick-jumper input
+      // Strategy 1: Click visible page number button (Temu beast-core & standard classes)
+      var items = document.querySelectorAll(
+        'li.PGT_pagerItem_123, [class*="PGT_pagerItem"], li[class*="pagerItem"], li.ant-pagination-item, [class*="pagination-item"], [class*="page-item"]'
+      );
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].textContent.trim() === String(targetPage)) {
+          items[i].scrollIntoView({ block: 'center', inline: 'nearest' });
+          items[i].click();
+          return;
+        }
+      }
+
+      // Strategy 2: Ant Design / custom quick-jumper input
       var jumper =
         document.querySelector('.ant-pagination-options-quick-jumper input') ||
         document.querySelector('input[class*="jumper"]') ||
@@ -620,83 +640,76 @@ async function navigateListToPage(tabId, pageNum) {
         });
         return;
       }
-
-      // Strategy 2: Click visible page number button
-      var items = document.querySelectorAll(
-        'li.ant-pagination-item, [class*="pagination-item"], [class*="page-item"]'
-      );
-      for (var i = 0; i < items.length; i++) {
-        if (items[i].textContent.trim() === String(targetPage)) {
-          items[i].click();
-          return;
-        }
-      }
     },
     args: [pageNum]
   });
 }
 
 // ── Click the "Next Page" button on the list ───────────────────────────────────
+// Uses Temu's actual beast-core pagination selectors (confirmed from DOM)
 async function navigateNextOnList(tabId) {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       func:   function() {
         try {
-          var next =
-            document.querySelector('li.ant-pagination-next:not(.ant-pagination-disabled) button') ||
-            document.querySelector('li.ant-pagination-next:not(.ant-pagination-disabled)');
-
-          if (!next) {
-            next = document.querySelector('[aria-label="Next Page"]:not([disabled]):not([aria-disabled="true"])') ||
-                   document.querySelector('[aria-label="next page"]:not([disabled]):not([aria-disabled="true"])');
+          function isDisabled(el) {
+            if (!el) return true;
+            if (el.disabled) return true;
+            if (el.getAttribute('aria-disabled') === 'true') return true;
+            var cls = el.className || '';
+            // Temu uses PGT_disabled_123 on the next button when on last page
+            if (/disabled/i.test(cls)) return true;
+            return false;
           }
 
-          if (!next) {
-            var paginationEl =
-              document.querySelector('.ant-pagination') ||
-              document.querySelector('[class*="pagination"]') ||
-              document.querySelector('[class*="Pagination"]');
-            if (paginationEl) {
-              var items = Array.from(paginationEl.querySelectorAll('li, button'));
-              var activeIdx = items.findIndex(function(el) {
-                return el.classList.contains('ant-pagination-item-active') ||
-                       el.getAttribute('aria-current') === 'page';
-              });
-              if (activeIdx >= 0 && activeIdx < items.length - 1) {
-                var candidate = items[activeIdx + 1];
-                if (!candidate.disabled && !candidate.classList.contains('disabled') &&
-                    candidate.getAttribute('aria-disabled') !== 'true') {
-                  next = candidate;
-                }
-              }
-              if (!next) {
-                var lastItems = items.slice().reverse();
-                next = lastItems.find(function(el) {
-                  if (el.disabled || el.classList.contains('disabled')) return false;
-                  var txt = el.textContent.trim();
-                  var hasSvg = el.querySelector('svg') !== null;
-                  return (hasSvg || txt === '>' || txt === '›' || txt === '»') &&
-                         el.getAttribute('aria-disabled') !== 'true';
-                });
-              }
-            }
+          // ── Strategy 1: Temu's specific data-testid (most reliable) ──────────
+          var next = document.querySelector('[data-testid="beast-core-pagination-next"]');
+          if (next && !isDisabled(next)) {
+            next.scrollIntoView({ block: 'center', inline: 'nearest' });
+            next.click();
+            return true;
           }
 
-          if (!next) {
-            var allBtns = Array.from(document.querySelectorAll('li, button, a'));
-            next = allBtns.find(function(el) {
-              if (el.disabled || el.classList.contains('disabled') ||
-                  el.getAttribute('aria-disabled') === 'true') return false;
-              var label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
-              var txt   = el.textContent.trim();
-              return (label === 'next page' || label === 'next' ||
-                      txt === '>' || txt === '›' || txt === '»' ||
-                      /next/i.test(label));
-            });
+          // ── Strategy 2: Temu's PGT class ─────────────────────────────────────
+          next = document.querySelector('li.PGT_next_123');
+          if (next && !isDisabled(next)) {
+            next.scrollIntoView({ block: 'center', inline: 'nearest' });
+            next.click();
+            return true;
           }
 
-          if (next) { next.click(); return true; }
+          // ── Strategy 3: aria-label fallback ──────────────────────────────────
+          next = document.querySelector('[aria-label="Next Page"]:not([disabled])') ||
+                 document.querySelector('[aria-label="next page"]:not([disabled])');
+          if (next && !isDisabled(next)) {
+            next.scrollIntoView({ block: 'center', inline: 'nearest' });
+            next.click();
+            return true;
+          }
+
+          // ── Strategy 4: ant-design pagination (legacy fallback) ───────────────
+          next = document.querySelector('li.ant-pagination-next:not(.ant-pagination-disabled) button') ||
+                 document.querySelector('li.ant-pagination-next:not(.ant-pagination-disabled)');
+          if (next && !isDisabled(next)) {
+            next.click();
+            return true;
+          }
+
+          // ── Strategy 5: any li/button with › or > text that looks like next ──
+          var allEls = Array.from(document.querySelectorAll('li[data-testid], li[class*="PGT"], li[class*="pager"]'));
+          var candidate = allEls.find(function(el) {
+            if (isDisabled(el)) return false;
+            var txt = (el.textContent || '').trim();
+            var testId = el.getAttribute('data-testid') || '';
+            return testId.includes('next') || txt === '>' || txt === '›' || txt === '»';
+          });
+          if (candidate) {
+            candidate.scrollIntoView({ block: 'center', inline: 'nearest' });
+            candidate.click();
+            return true;
+          }
+
           return false;
         } catch(e) { return false; }
       }
@@ -716,22 +729,41 @@ async function getOrderLinksFromListTab(tabId) {
       func:   function() {
         try {
           var links = [], seen = new Set();
+          var baseUrl = window.location.origin + '/order-detail.html';
+
+          // Strategy 1: Find any direct anchor links
           document.querySelectorAll('a[href*="order-detail"]').forEach(function(a) {
             var href = a.href;
             if (href && href.includes('parent_order_sn') && !seen.has(href)) {
               seen.add(href); links.push(href);
             }
           });
+
+          // Strategy 2: Extract PO numbers from table rows
           if (links.length === 0) {
-            var baseUrl = window.location.origin + '/order-detail.html';
-            document.querySelectorAll('[class*="order"] span, [class*="sn"] span').forEach(function(el) {
-              var t = el.textContent.trim();
-              if (/^PO-\d{3}-\d{10,}/.test(t) && !seen.has(t)) {
-                seen.add(t);
-                links.push(baseUrl + '?parent_order_sn=' + encodeURIComponent(t));
+            document.querySelectorAll('tr').forEach(function(tr) {
+              if (tr.querySelector('th')) return;
+              var text = tr.textContent || '';
+              var m = text.match(/(PO-\d+-\d{8,})/);
+              if (m && !seen.has(m[1])) {
+                seen.add(m[1]);
+                links.push(baseUrl + '?parent_order_sn=' + encodeURIComponent(m[1]));
               }
             });
           }
+
+          // Strategy 3: Global body search fallback
+          if (links.length === 0) {
+            var bt = document.body ? (document.body.innerText || '') : '';
+            var allM = bt.match(/PO-\d+-\d{8,}/g) || [];
+            allM.forEach(function(po) {
+              if (!seen.has(po)) {
+                seen.add(po);
+                links.push(baseUrl + '?parent_order_sn=' + encodeURIComponent(po));
+              }
+            });
+          }
+
           return links;
         } catch(e) { return []; }
       }
@@ -745,24 +777,21 @@ async function getOrderLinksFromListTab(tabId) {
 
 // ── Wait until list page shows different orders (page change detected) ─────────
 async function waitForListPageChange(tabId, previousFirstUrl) {
-  // Get the current set of order IDs on the page
   async function getCurrentOrderIds() {
     try {
       const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
         func: function() {
           var ids = [];
-          // Collect all visible PO-xxx numbers from leaf elements
-          document.querySelectorAll('span, div, td, a').forEach(function(el) {
-            if (el.childElementCount > 0) return;
-            var t = (el.textContent || '').trim();
-            if (/^PO-\d{3}-\d{10,}/.test(t)) ids.push(t);
+          document.querySelectorAll('tr').forEach(function(tr) {
+            if (tr.querySelector('th')) return;
+            var text = tr.textContent || '';
+            var m = text.match(/(PO-\d+-\d{8,})/);
+            if (m) ids.push(m[1]);
           });
-          // Fallback: body text regex
           if (ids.length === 0) {
-            var bt = document.body ? document.body.innerText : '';
-            var m = bt.match(/PO-\d{3}-\d{10,}/g) || [];
-            ids = m;
+            var bt = document.body ? (document.body.innerText || '') : '';
+            ids = bt.match(/PO-\d+-\d{8,}/g) || [];
           }
           return ids.join(',');
         }
@@ -773,24 +802,12 @@ async function waitForListPageChange(tabId, previousFirstUrl) {
 
   const prevIds = await getCurrentOrderIds();
 
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await sleep(500);
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await sleep(400);
     const currIds = await getCurrentOrderIds();
-    // Page changed = at least one new order ID appeared
+    // Page changed if new order IDs appeared and list is not empty
     if (currIds && prevIds && currIds !== prevIds) return;
-    // Also check if first anchor href changed (for pages that do have anchor links)
-    try {
-      const [{ result }] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func:   function() {
-          var a = document.querySelector('a[href*="order-detail"][href*="parent_order_sn"]');
-          return a ? a.href : '__none__';
-        }
-      });
-      if (result && result !== previousFirstUrl && result !== '__none__') return;
-    } catch(e) { /* tab navigating */ }
   }
-  // Timeout after ~20s — continue anyway to avoid hanging
 }
 
 // ── Wait for a tab to finish loading ──────────────────────────────────────────
@@ -817,27 +834,30 @@ function waitForTabLoad(tabId) {
 // ── Wait for React to render the product table ─────────────────────────────────
 // Polls via executeScript every 400ms until Goods ID or Purchase date appears.
 // This runs in background.js (not in the page) — no serialization issues.
-async function waitForPageReady(tabId, maxMs = 8000) {
+async function waitForPageReady(tabId, maxMs = 10000) {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
       const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId },
         func: function() {
+          // Primary: product table has loaded (Goods ID / SKU ID in tbody)
           var tbodies = document.querySelectorAll('tbody');
           for (var i = 0; i < tbodies.length; i++) {
             var t = tbodies[i].textContent || '';
-            if (t.includes('Goods ID:') || t.includes('SKU ID:')) return true;
+            if (t.includes('Goods ID:') || t.includes('SKU ID:')) return 'products_ready';
           }
+          // Secondary: purchase info visible (catches orders with no product table)
           var body = document.body ? (document.body.innerText || '') : '';
-          return body.includes('Purchase date') && body.includes('Recipient name');
+          if (body.includes('Purchase date') && body.includes('Recipient name')) return 'info_ready';
+          return false;
         }
       });
       if (result) return; // page is ready — proceed
     } catch(e) { /* tab still loading — ignore */ }
     await sleep(400);
   }
-  // Timed out — proceed anyway (extractPageData has its own fallbacks)
+  // Timed out after 10s — proceed anyway with whatever is on the page
 }
 
 // ── Single tab processor with retry ───────────────────────────────────────────
@@ -850,13 +870,17 @@ async function processTabWithRetry(tab, attempt = 0) {
       target: { tabId: tab.id },
       func:   extractPageData
     });
+    // Log null results so DevTools shows which orders had no data
+    if (!result) {
+      console.warn('[Temu Exporter] extractPageData returned null for tab', tab.id, tab.url);
+    }
     return { ok: true, data: result || null };
   } catch (err) {
     if (attempt < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (attempt + 1));
       return processTabWithRetry(tab, attempt + 1);
     }
-    console.error(`Tab ${tab.id} failed after ${MAX_RETRIES} retries:`, err.message);
+    console.error(`[Temu Exporter] Tab ${tab.id} failed after ${MAX_RETRIES} retries:`, err.message, tab.url);
     return { ok: false, tabUrl: tab.url || `Tab ID ${tab.id}` };
   }
 }
@@ -1212,7 +1236,7 @@ function extractPageData() {
             }
           }
           if (ot && ot.length > 5 &&
-              !/Goods\s*ID|SKU\s*ID|Order\s*item|^\$|^\d+$|shipped|delivered|refund|Seller|Seller fulfilled|[{}]|webkit|Special$|White$|Black$|Blue$/i.test(ot)) {
+              !/Goods\s*ID|SKU\s*ID|Order\s*item|^\$|^\d+$|shipped|delivered|refund|Seller|Seller fulfilled|[{}]|webkit/i.test(ot)) {
             cands.push(ot);
           }
         });
@@ -1273,7 +1297,10 @@ function extractPageData() {
         else { var qm = (quantityTd.textContent || '').match(/^[\s\n]*(\d+)/); if (qm) qty = qm[1]; }
       }
 
-      if (title) products.push({ title, variant, qty });
+      // Always push the product row — even if title is empty
+      // Skipping silently causes missing rows in the export sheet
+      // A blank title is better than a missing order
+      products.push({ title: title || '', variant: variant || '', qty: qty || '1' });
     });
   }
 
@@ -1328,8 +1355,10 @@ function extractPageData() {
     if (bpM) basePrice = bpM[1];
   }
 
-  // ── Guard: if page didn't load or orderNumber is missing, return null ─────────
-  if (!orderNumber && products.length === 0 && !recipientName) return null;
+  // ── Guard: only skip if BOTH orderNumber AND recipientName are missing ─────
+  // Previously: returned null when products.length === 0 even with a valid orderNumber
+  // This caused digital/cancelled orders to be silently dropped (they have no product table)
+  if (!orderNumber && !recipientName) return null;
 
   return { orderNumber, recipientName, purchaseDate, purchaseDateRaw, packages, products, estimatedRevenue, shippingCost, basePrice, courier };
 

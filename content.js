@@ -9,7 +9,7 @@
   if (window.__temuOverlayActive) return;
   window.__temuOverlayActive = true;
 
-  const STORAGE_KEY  = 'temuSelections';   // { orderSn: url, ... }
+  const STORAGE_KEY  = 'temuSelections_v6';   // { orderSn: url, ... }
   const OVERLAY_ID   = '__temuOverlayBadge';
   const COL_ID       = '__temuCheckCol';
   const STYLE_ID     = '__temuOverlayStyle';
@@ -154,16 +154,13 @@
   }
 
   // ── Find order rows in the table ─────────────────────────────────────────────
-  // Each order row on Temu list contains a PO-xxx order number
   function getOrderRows() {
     var rows = [];
-    // Look for table rows that contain a PO-xxx order number link or span
     document.querySelectorAll('tr').forEach(function(tr) {
+      if (tr.querySelector('th')) return; // Avoid header rows
       var text = tr.textContent || '';
-      var snMatch = text.match(/\b(PO-\d{3}-\d{10,})\b/);
+      var snMatch = text.match(/(PO-\d+-\d{8,})/);
       if (!snMatch) return;
-      // Avoid header rows
-      if (tr.querySelector('th')) return;
       rows.push({ tr: tr, sn: snMatch[1] });
     });
     return rows;
@@ -174,29 +171,31 @@
     return window.location.origin + '/order-detail.html?parent_order_sn=' + encodeURIComponent(sn);
   }
 
-  // ── Watch Temu's NATIVE checkboxes — primary selection method ────────────────
-  // Users naturally use Temu's own black checkboxes; we track those state changes
-  // and mirror them into our selections storage.
-  function syncNativeCheckboxes() {
+  function isRowChecked(tr) {
+    var cb = tr.querySelector('input[type="checkbox"]');
+    if (cb && cb.checked) return true;
+    var label = tr.querySelector('label[data-testid="beast-core-checkbox"], label[class*="CBX"], [data-checked="true"]');
+    if (label && (label.getAttribute('data-checked') === 'true' || label.classList.contains('CBX_active_123'))) return true;
+    if (tr.querySelector('.CBX_active_123, .CBX_hasCheckSquare_123.CBX_active_123')) return true;
+    return false;
+  }
+
+  // ── Sync from User Click: handles both check and explicit uncheck ────────────
+  function syncUserInteraction() {
     document.querySelectorAll('tr').forEach(function(tr) {
-      if (tr.querySelector('th')) return; // skip header
+      if (tr.querySelector('th')) return;
       var text = tr.textContent || '';
-      var snMatch = text.match(/\b(PO-\d{3}-\d{10,})\b/);
+      var snMatch = text.match(/(PO-\d+-\d{8,})/);
       if (!snMatch) return;
       var sn = snMatch[1];
 
-      // Find native checkbox in this row
-      var cb = tr.querySelector('input[type="checkbox"]');
-      if (!cb) return;
-
-      if (cb.checked) {
-        // Add to selections
+      if (isRowChecked(tr)) {
         if (!selections[sn]) {
           selections[sn] = buildDetailUrl(sn);
           tr.classList.add('temu-row-selected');
         }
       } else {
-        // Remove from selections
+        // User explicitly unchecked a visible row on current page
         if (selections[sn]) {
           delete selections[sn];
           tr.classList.remove('temu-row-selected');
@@ -206,74 +205,46 @@
     saveSelections();
   }
 
-  // Listen for native checkbox change events (bubbled from any tr > input[checkbox])
+  // ── Polling & Observer Sync: ONLY ADDS, NEVER DELETES ────────────────────────
+  // Prevents wiping selections during page transitions, lazy rendering or tab switches
+  function syncAddOnly() {
+    var changed = false;
+    document.querySelectorAll('tr').forEach(function(tr) {
+      if (tr.querySelector('th')) return;
+      var text = tr.textContent || '';
+      var snMatch = text.match(/(PO-\d+-\d{8,})/);
+      if (!snMatch) return;
+      var sn = snMatch[1];
+
+      if (isRowChecked(tr)) {
+        if (!selections[sn]) {
+          selections[sn] = buildDetailUrl(sn);
+          tr.classList.add('temu-row-selected');
+          changed = true;
+        }
+      }
+    });
+    if (changed) saveSelections();
+  }
+
+  // Listen for explicit user clicks and changes on checkbox elements
+  document.addEventListener('click', function(e) {
+    var checkEl = e.target.closest('label[data-testid="beast-core-checkbox"], label[class*="CBX"], [class*="CBX_square"], td[class*="checkCell"], input[type="checkbox"]');
+    if (checkEl) {
+      setTimeout(syncUserInteraction, 80);
+      setTimeout(syncUserInteraction, 350);
+    }
+  }, true);
+
   document.addEventListener('change', function(e) {
     if (e.target && e.target.type === 'checkbox') {
-      // Small delay to let Temu's own handler run first
-      setTimeout(syncNativeCheckboxes, 80);
+      setTimeout(syncUserInteraction, 80);
+      setTimeout(syncUserInteraction, 350);
     }
-  });
+  }, true);
 
-  // Also poll every 600ms to catch programmatic check changes (e.g. "Select All")
-  setInterval(syncNativeCheckboxes, 600);
-
-
-
-  function injectCheckboxes() {
-    var rows = getOrderRows();
-    if (rows.length === 0) return;
-
-    // Add header cell if missing
-    var thead = document.querySelector('thead tr');
-    if (thead && !thead.querySelector('.' + COL_ID + '-th')) {
-      var th = document.createElement('th');
-      th.className = 'temu-sel-th ' + COL_ID + '-th';
-      th.textContent = '☑';
-      thead.insertBefore(th, thead.firstChild);
-    }
-
-    rows.forEach(function(item) {
-      if (injectedRows.has(item.tr)) return;
-      injectedRows.add(item.tr);
-
-      var td = document.createElement('td');
-      td.className = 'temu-sel-td';
-
-      var btn = document.createElement('button');
-      btn.className = 'temu-sel-btn';
-      btn.title = 'Select ' + item.sn;
-
-      // Restore selected state if previously selected
-      if (selections[item.sn]) {
-        btn.classList.add('selected');
-        btn.textContent = '✓';
-        item.tr.classList.add('temu-row-selected');
-      }
-
-      btn.addEventListener('click', function(e) {
-        e.preventDefault(); e.stopPropagation();
-        if (selections[item.sn]) {
-          // Deselect
-          delete selections[item.sn];
-          btn.classList.remove('selected');
-          btn.textContent = '';
-          item.tr.classList.remove('temu-row-selected');
-        } else {
-          // Select
-          selections[item.sn] = buildDetailUrl(item.sn);
-          btn.classList.add('selected');
-          btn.textContent = '✓';
-          item.tr.classList.add('temu-row-selected');
-        }
-        saveSelections();
-      });
-
-      td.appendChild(btn);
-      item.tr.insertBefore(td, item.tr.firstChild);
-    });
-
-    updateBadge();
-  }
+  // Background polling to catch programmatic selections (e.g. Select All on page)
+  setInterval(syncAddOnly, 600);
 
   // ── MutationObserver: re-sync when Temu SPA re-renders table ────────────────
   var observer = new MutationObserver(function(mutations) {
@@ -282,33 +253,28 @@
     });
     if (needsSync) {
       clearTimeout(window.__temuInjectTimer);
-      window.__temuInjectTimer = setTimeout(syncNativeCheckboxes, 350);
+      window.__temuInjectTimer = setTimeout(syncAddOnly, 300);
     }
   });
 
-  // ── URL change detection: reset selections on page navigation ───────────────
+  // ── URL change detection: preserve selections across page navigation ────────
   var lastUrl = location.href;
   var urlCheckInterval = setInterval(function() {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      // Page changed — reset all selections
-      selections = {};
-      chrome.storage.local.set({ [STORAGE_KEY]: {} });
       updateBadge();
-      setTimeout(syncNativeCheckboxes, 800);
+      setTimeout(syncAddOnly, 800);
     }
   }, 500);
 
   // ── Init ────────────────────────────────────────────────────────────────────
   createBadge();
 
-  // Load any existing selections from storage (edge case: re-injection)
+  // Load existing selections from storage
   chrome.storage.local.get([STORAGE_KEY], function(result) {
     selections = result[STORAGE_KEY] || {};
-    // Sync native checkboxes immediately (handles already-checked orders)
-    setTimeout(syncNativeCheckboxes, 300);
+    setTimeout(syncAddOnly, 300);
 
-    // Start observing for SPA table re-renders
     var target = document.querySelector('tbody') || document.body;
     observer.observe(target, { childList: true, subtree: true });
   });

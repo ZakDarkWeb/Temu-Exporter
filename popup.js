@@ -171,6 +171,9 @@ wire('fromMinus', 'fromPage', -1);
 wire('fromPlus',  'fromPage', +1);
 wire('toMinus',   'toPage',   -1);
 wire('toPlus',    'toPage',   +1);
+// Date mode max-pages stepper
+wire('dateMaxPagesMinus', 'dateMaxPages', -1);
+wire('dateMaxPagesPlus',  'dateMaxPages', +1);
 
 fromPage.addEventListener('input', calcEstimate);
 toPage.addEventListener('input',   calcEstimate);
@@ -485,90 +488,112 @@ document.querySelectorAll('.mode-tab').forEach(btn => {
 let selPollInterval  = null;
 let currentSelections = {};   // { orderSn: detailUrl } — kept in memory
 
-// Read checked checkboxes directly from the Temu list tab
-// DOM analysis shows: Temu uses data-checked="true" on <label> elements
-// and CBX_active_123 class when checked. Standard input.checked is unreliable.
-// Also: PO numbers appear as "PO-211-123456Copy" (no space before Copy button)
-// so word boundaries \b fail — use plain capture group instead.
 async function readPageSelections() {
-  if (!currentListTabId) return {};
+  if (!currentListTabId) return { pageNum: '1', visiblePOs: [], checkedPOs: {} };
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: currentListTabId },
       func: function() {
-        var sel = {};
+        var checkedPOs = {};
+        var visiblePOs = [];
         var baseUrl = window.location.origin + '/order-detail.html';
 
-        // ── Extract PO number from text (no word boundary — "Copy" is attached) ─
         function extractPO(text) {
-          var m = text.match(/(PO-\d+-\d{9,})/);  // no \b — "PO-211-123456Copy"
+          var m = text.match(/(PO-\d+-\d{8,})/);
           return m ? m[1] : null;
         }
 
-        // ── Is this element's row checked? ────────────────────────────────────
-        // Temu DOM: <label data-checked="true" class="CBX_outerWrapper_123 CBX_active_123">
         function isChecked(el) {
-          // Primary: data-checked attribute (Temu's own state flag)
-          if (el.querySelector('label[data-checked="true"]')) return true;
-          // Secondary: CBX_active_123 class added when checked
-          if (el.querySelector('.CBX_active_123')) return true;
-          // Tertiary: check the label itself (if el IS the label)
+          var inp = el.querySelector('input[type="checkbox"]');
+          if (inp && inp.checked) return true;
+          if (el.querySelector('label[data-checked="true"], [data-checked="true"]')) return true;
+          if (el.querySelector('.CBX_active_123, .CBX_hasCheckSquare_123.CBX_active_123')) return true;
           if (el.getAttribute && el.getAttribute('data-checked') === 'true') return true;
           if (el.classList && el.classList.contains('CBX_active_123')) return true;
           return false;
         }
 
-        // ── Strategy 1: Walk all <tr> rows ────────────────────────────────────
-        var foundAny = false;
         document.querySelectorAll('tr').forEach(function(tr) {
-          // Skip header rows (th cells present)
-          if (tr.querySelector('th')) return;
-          if (!isChecked(tr)) return;
+          if (tr.querySelector('th')) return; // skip header
           var sn = extractPO(tr.textContent || '');
           if (!sn) return;
-          foundAny = true;
-          sel[sn] = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
+          visiblePOs.push(sn);
+          if (isChecked(tr)) {
+            checkedPOs[sn] = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
+          }
         });
 
-        // ── Strategy 2: Walk from checked labels upward to find PO number ─────
-        // Handles cases where <tr> scan missed (e.g. virtual scroll, SPA delays)
-        if (!foundAny) {
+        // Fallback for checked labels
+        if (Object.keys(checkedPOs).length === 0) {
           var checkedLabels = [].slice.call(document.querySelectorAll(
-            'label[data-checked="true"], .CBX_active_123'
+            'label[data-checked="true"], .CBX_active_123, input[type="checkbox"]:checked'
           ));
           checkedLabels.forEach(function(label) {
-            // Skip header "select all" checkbox (indeterminate state)
-            if (label.getAttribute('data-indeterminate') === 'true') return;
-            // Walk up max 10 levels to find a container with a PO number
+            if (label.getAttribute && label.getAttribute('data-indeterminate') === 'true') return;
             var el = label;
             for (var i = 0; i < 10; i++) {
               if (!el || !el.parentElement) break;
               el = el.parentElement;
               var sn = extractPO(el.textContent || '');
-              if (sn && !sel[sn]) {
-                sel[sn] = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
+              if (sn && !checkedPOs[sn]) {
+                checkedPOs[sn] = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
+                if (!visiblePOs.includes(sn)) visiblePOs.push(sn);
                 break;
               }
             }
           });
         }
 
-        return sel;
+        // ── Robust page key detection (mirrors reference extension) ───────────
+        // Strategy 1: Active pagination element
+        var pageNum = '';
+        var paginationSelectors = [
+          '[aria-current="page"]',
+          'li.PGT_pagerItemActive_123',
+          '[class*="pagerItemActive"]',
+          '[class*="PGT_pagerItemActive"]',
+          '.ant-pagination-item-active',
+          'li[class*="active"][class*="pager"]'
+        ];
+        for (var pi = 0; pi < paginationSelectors.length; pi++) {
+          try {
+            var activeEl = document.querySelector(paginationSelectors[pi]);
+            if (activeEl) {
+              var txt = (activeEl.textContent || '').trim().replace(/\D/g, '');
+              if (txt) { pageNum = txt; break; }
+            }
+          } catch(_) {}
+        }
+
+        // Strategy 2: Fallback — use fingerprint of first 5 visible PO numbers
+        // Identical approach to reference extension's getPageKey()
+        if (!pageNum && visiblePOs.length > 0) {
+          pageNum = 'fp:' + visiblePOs.slice(0, 5).join('|');
+        }
+
+        if (!pageNum) pageNum = '1';
+
+        return { pageNum: pageNum, visiblePOs: visiblePOs, checkedPOs: checkedPOs };
       }
     });
 
-    if (!results || !results[0]) return {};
-    return results[0].result || {};
+    if (!results || !results[0]) return { pageNum: '1', visiblePOs: [], checkedPOs: {} };
+    return results[0].result || { pageNum: '1', visiblePOs: [], checkedPOs: {} };
   } catch(e) {
     console.warn('[TemuExporter] readPageSelections error:', e.message);
-    return {};
+    return { pageNum: '1', visiblePOs: [], checkedPOs: {} };
   }
 }
+
+let accumulatedSelections = {};
+chrome.storage.local.get(['temuSelections_v6'], (data) => {
+  accumulatedSelections = data.temuSelections_v6 || {};
+});
 
 function startSelectionPolling() {
   if (selPollInterval) return;
   _doPoll();
-  selPollInterval = setInterval(_doPoll, 800);
+  selPollInterval = setInterval(_doPoll, 600);
 }
 function stopSelectionPolling() {
   clearInterval(selPollInterval);
@@ -577,36 +602,60 @@ function stopSelectionPolling() {
 
 async function _doPoll() {
   if (activeTab !== 'select' || running) return;
-  currentSelections = await readPageSelections();
-  const count = Object.keys(currentSelections).length;
-  const selCountEl  = $('selCount');
-  const clearSelBtn = $('clearSelBtn');
-  if (selCountEl)  selCountEl.textContent = count;
-  if (clearSelBtn) clearSelBtn.disabled = (count === 0);
-  autoBtn.disabled = (count === 0);
+  const { pageNum, visiblePOs, checkedPOs } = await readPageSelections();
+
+  chrome.storage.local.get(['temuSelections_v6'], (data) => {
+    let stored = data.temuSelections_v6 || {};
+
+    // Group selections by page to prevent page-change deletions
+    const pageKey = 'page:' + (pageNum || '1');
+
+    // Only update if we have a valid page and rows are loaded
+    if (visiblePOs && visiblePOs.length > 0) {
+      stored[pageKey] = checkedPOs || {};
+      chrome.storage.local.set({ temuSelections_v6: stored });
+    }
+
+    // Sum all pages to get total current selections
+    let allChecked = {};
+    Object.keys(stored).forEach(key => {
+      if (key.startsWith('page:')) {
+        Object.assign(allChecked, stored[key] || {});
+      }
+    });
+
+    currentSelections = allChecked;
+    const count = Object.keys(currentSelections).length;
+    const selCountEl  = $('selCount');
+    const clearSelBtn = $('clearSelBtn');
+    if (selCountEl)  selCountEl.textContent = count;
+    if (clearSelBtn) clearSelBtn.disabled = (count === 0);
+    autoBtn.disabled = (count === 0);
+  });
 }
 
-// Clear All — uncheck all checked orders on Temu page
+// Clear All — uncheck all checked orders across all pages
 const clearSelBtn = $('clearSelBtn');
 if (clearSelBtn) {
   clearSelBtn.addEventListener('click', async () => {
-    if (!currentListTabId) return;
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: currentListTabId },
-        func: function() {
-          // Click each checked label (Temu's React handler listens on the label)
-          // Skip the header "select all" which may be indeterminate
-          var checkedLabels = document.querySelectorAll('label[data-checked="true"]');
-          checkedLabels.forEach(function(label) {
-            if (label.getAttribute('data-indeterminate') !== 'true') {
-              label.click();
-            }
-          });
-        }
-      });
-    } catch(e) {}
+    if (currentListTabId) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: currentListTabId },
+          func: function() {
+            var checkedLabels = document.querySelectorAll('label[data-checked="true"], input[type="checkbox"]:checked');
+            checkedLabels.forEach(function(label) {
+              if (label.getAttribute && label.getAttribute('data-indeterminate') !== 'true') {
+                label.click();
+              }
+            });
+          }
+        });
+      } catch(e) {}
+    }
+    accumulatedSelections = {};
     currentSelections = {};
+    chrome.storage.local.set({ temuSelections_v6: {} });
     const selCountEl = $('selCount');
     if (selCountEl) selCountEl.textContent = '0';
     clearSelBtn.disabled = true;
@@ -798,6 +847,9 @@ autoBtn.addEventListener('click', async () => {
     if (dFrom > dTo) { setStatus('❌', '"From Date" must be before "To Date".', 'error'); return; }
     if (!currentListTabId) { setStatus('❌', 'List tab lost — close and reopen popup.', 'error'); return; }
 
+    const maxPagesInput = $('dateMaxPages');
+    const maxPages = Math.max(1, parseInt((maxPagesInput && maxPagesInput.value) || '10') || 10);
+
     running = true;
     failBox.style.display = 'none';
     statPages.classList.remove('active');
@@ -808,7 +860,7 @@ autoBtn.addEventListener('click', async () => {
     stepsRow.style.display    = 'flex';
     setStep('navigating');
     setProgress(0, 'Starting date scan…');
-    setStatus('📅', `Scanning all pages for orders in date range…`, 'info');
+    setStatus('📅', `Scanning up to ${maxPages} pages for orders in date range…`, 'info');
     autoBtnTxt.textContent = '⏳ Scanning…';
     autoBtn.disabled = true;
 
@@ -817,6 +869,7 @@ autoBtn.addEventListener('click', async () => {
       listTabId: currentListTabId,
       fromDate: dFrom,
       toDate:   dTo,
+      maxPages,
       format: autoFormat.value,
       tabDelay:  speed.tabDelay,
       randExtra: speed.randExtra
@@ -825,9 +878,41 @@ autoBtn.addEventListener('click', async () => {
 
   // ── MODE: By Selection ──────────────────────────────────────────────────────
   else if (activeTab === 'select') {
-    // Final fresh read from page before exporting
-    currentSelections = await readPageSelections();
-    const selectedUrls = Object.values(currentSelections);
+    // Read all accumulated selections across all pages from storage
+    const storedData = await new Promise(r => chrome.storage.local.get(['temuSelections_v6'], r));
+    const stored = storedData.temuSelections_v6 || {};
+    
+    // Flatten the page-grouped structure into a single unique set of URLs
+    let allChecked = {};
+    Object.keys(stored).forEach(key => {
+      if (key.startsWith('page:')) {
+        Object.assign(allChecked, stored[key] || {});
+      } else if (typeof stored[key] === 'string') {
+        allChecked[key] = stored[key];
+      }
+    });
+    
+    // Merge memory states
+    if (accumulatedSelections) {
+      Object.keys(accumulatedSelections).forEach(key => {
+        if (key.startsWith('page:')) {
+          Object.assign(allChecked, accumulatedSelections[key] || {});
+        } else if (typeof accumulatedSelections[key] === 'string') {
+          allChecked[key] = accumulatedSelections[key];
+        }
+      });
+    }
+    if (currentSelections) {
+      Object.keys(currentSelections).forEach(key => {
+        if (key.startsWith('page:')) {
+          Object.assign(allChecked, currentSelections[key] || {});
+        } else if (typeof currentSelections[key] === 'string') {
+          allChecked[key] = currentSelections[key];
+        }
+      });
+    }
+
+    const selectedUrls = Object.values(allChecked).filter(url => typeof url === 'string' && url.startsWith('http'));
 
     if (selectedUrls.length === 0) {
       setStatus('❌', 'No orders selected. Tick orders on the Temu page first.', 'error');

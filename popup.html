@@ -669,7 +669,7 @@
 
       <!-- ── TAB: By Date Range ── -->
       <div class="tab-content" id="tabContentDate">
-        <div class="tab-section-label">📅 Export orders by date range — scans all pages automatically</div>
+        <div class="tab-section-label">📅 Export orders by date range — scans pages automatically up to your limit</div>
         <div class="page-range" style="margin-top:10px">
           <div class="date-field">
             <label>From Date</label>
@@ -681,9 +681,22 @@
             <input type="datetime-local" class="date-input" id="dateTo">
           </div>
         </div>
+
+        <!-- Max pages for Date mode -->
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:4px;">
+          <span style="font-size:11px; color:var(--muted); white-space:nowrap; font-weight:600;">📄 Max pages to scan:</span>
+          <div class="page-stepper" style="max-width:120px;">
+            <button class="stepper-btn" id="dateMaxPagesMinus">−</button>
+            <input class="stepper-input" type="number" id="dateMaxPages" value="10" min="1" max="999">
+            <button class="stepper-btn" id="dateMaxPagesPlus">+</button>
+          </div>
+          <span style="font-size:10px; color:var(--muted);">(10 orders/page)</span>
+        </div>
+
         <div class="date-mode-note">
-          Extension sab pages scan karega — sirf is date range ke orders export honge.
-          <strong>Smart early exit:</strong> purane pages automatically skip honge.
+          Sirf date range ke orders export honge.
+          <strong>Smart early exit:</strong> jab dates range se purani ho jaye auto-stop hoga.
+          <strong>Max pages</strong> set karo agar zyada paginate nahi karna.
         </div>
       </div>
 
