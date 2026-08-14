@@ -1387,7 +1387,23 @@ function generateExport(flatRows, orderCount, format) {
 function generateCSV(flatRows, base) {
   const esc = c => '"' + String(c == null ? '' : c).replace(/"/g, '""').replace(/[\r\n]+/g, ' ').trim() + '"';
   const lines = [EXPORT_HEADERS.map(esc).join(',')];
-  flatRows.forEach(r => lines.push(EXPORT_COLS.map(k => esc(r[k] != null ? r[k] : '')).join(',')));
+  flatRows.forEach(r => {
+    const rowCells = EXPORT_COLS.map(k => {
+      const val = r[k];
+      if (val == null || val === '') return '';
+      if (k === 'estimatedRevenue' || k === 'shippingCost') {
+        const cleaned = String(val).replace(/,/g, '').trim();
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? val : num;
+      }
+      if (k === 'qty') {
+        const num = parseInt(String(val).trim(), 10);
+        return isNaN(num) ? val : num;
+      }
+      return val;
+    });
+    lines.push(rowCells.map(esc).join(','));
+  });
   const csv = '\uFEFF' + lines.join('\r\n');
   return { dataUrl: 'data:text/csv;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(csv))), filename: base + '.csv' };
 }
@@ -1398,7 +1414,22 @@ function generateXLSX(flatRows, base) {
     return generateCSV(flatRows, base.replace(/\.xlsx$/, '') + '.csv');
   }
   const wsData = [EXPORT_HEADERS];
-  flatRows.forEach(r => wsData.push(EXPORT_COLS.map(k => r[k] != null ? r[k] : '')));
+  flatRows.forEach(r => {
+    wsData.push(EXPORT_COLS.map(k => {
+      const val = r[k];
+      if (val == null || val === '') return '';
+      if (k === 'estimatedRevenue' || k === 'shippingCost') {
+        const cleaned = String(val).replace(/,/g, '').trim();
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? val : num;
+      }
+      if (k === 'qty') {
+        const num = parseInt(String(val).trim(), 10);
+        return isNaN(num) ? val : num;
+      }
+      return val;
+    }));
+  });
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   ws['!cols'] = EXPORT_HEADERS.map((h, ci) => {
     const maxLen = wsData.reduce((mx, row) => Math.max(mx, String(row[ci] != null ? row[ci] : '').length), h.length);
