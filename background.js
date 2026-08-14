@@ -1,18 +1,17 @@
-// background.js — Temu Order Tab Exporter v4.0
-// Two modes:
-//   1. Manual Mode  — export already-open order-detail tabs
-//   2. Auto Mode    — read shipped-orders list, open tabs, extract, auto-export
+// background.js — Temu Order Tab Exporter v5.0
 
-// ── SheetJS ───────────────────────────────────────────────────────────────────
+// ── SheetJS (Style supported version) ─────────────────────────────────────────
 let XLSX_LOADED = false;
 try {
-  importScripts('libs/xlsx.full.min.js');
+  // Fix 4: Switched from xlsx.full.min.js to styling-supported xlsx-js-style.js
+  importScripts('libs/xlsx-js-style.js');
   XLSX_LOADED = typeof XLSX !== 'undefined';
 } catch (e) {
-  console.warn('[Temu Exporter] SheetJS failed:', e.message);
+  console.warn('[Temu Exporter] xlsx-js-style failed:', e.message);
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
+const BATCH_SIZE      = 3;    // Fix 1: Added BATCH_SIZE constant for manual mode batching
 const PARALLEL_BATCH  = 1;    // Process tabs one-by-one: more reliable, no retry waste
 const MAX_RETRIES     = 3;
 const RETRY_DELAY_MS  = 1500;
@@ -122,13 +121,6 @@ chrome.runtime.onMessage.addListener((msg) => {
     msg.tabDelay  ?? 1000,
     msg.randExtra ?? 1000
   );
-  // ── Enable overlay: inject content.js into list tab ──────────────────────────
-  if (msg.type === 'enableOverlay') {
-    chrome.scripting.executeScript({
-      target: { tabId: msg.listTabId },
-      files:  ['content.js']
-    }).catch(err => console.warn('[Temu Exporter] Overlay inject failed:', err.message));
-  }
   // Popup asking for current state on open
   if (msg.type === 'getState') {
     chrome.storage.session.get(['running', 'lastMsg'], (data) => {
@@ -862,6 +854,13 @@ async function waitForPageReady(tabId, maxMs = 10000) {
 
 // ── Single tab processor with retry ───────────────────────────────────────────
 async function processTabWithRetry(tab, attempt = 0) {
+  // Fix 3: Abort early if the tab has been closed by the user
+  try {
+    await chrome.tabs.get(tab.id);
+  } catch (e) {
+    return { ok: false, tabUrl: tab.url || 'Tab closed by user' };
+  }
+
   try {
     // Wait for React to render before injecting extractor
     await waitForPageReady(tab.id);

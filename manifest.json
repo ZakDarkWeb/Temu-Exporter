@@ -36,7 +36,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["libs/xlsx.full.min.js", "content.js"],
+      "resources": ["libs/xlsx-js-style.js"],
       "matches":   ["https://seller.temu.com/*"]
     }
   ]

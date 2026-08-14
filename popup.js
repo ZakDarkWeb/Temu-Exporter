@@ -544,33 +544,13 @@ async function readPageSelections() {
           });
         }
 
-        // ── Robust page key detection (mirrors reference extension) ───────────
-        // Strategy 1: Active pagination element
+        // ── Unique page key detection using visible PO numbers fingerprint ────
+        // Using visible POs fingerprint as the sole page identifier eliminates race conditions
+        // between React table rendering and pagination rendering during transitions.
         var pageNum = '';
-        var paginationSelectors = [
-          '[aria-current="page"]',
-          'li.PGT_pagerItemActive_123',
-          '[class*="pagerItemActive"]',
-          '[class*="PGT_pagerItemActive"]',
-          '.ant-pagination-item-active',
-          'li[class*="active"][class*="pager"]'
-        ];
-        for (var pi = 0; pi < paginationSelectors.length; pi++) {
-          try {
-            var activeEl = document.querySelector(paginationSelectors[pi]);
-            if (activeEl) {
-              var txt = (activeEl.textContent || '').trim().replace(/\D/g, '');
-              if (txt) { pageNum = txt; break; }
-            }
-          } catch(_) {}
-        }
-
-        // Strategy 2: Fallback — use fingerprint of first 5 visible PO numbers
-        // Identical approach to reference extension's getPageKey()
-        if (!pageNum && visiblePOs.length > 0) {
+        if (visiblePOs && visiblePOs.length > 0) {
           pageNum = 'fp:' + visiblePOs.slice(0, 5).join('|');
         }
-
         if (!pageNum) pageNum = '1';
 
         return { pageNum: pageNum, visiblePOs: visiblePOs, checkedPOs: checkedPOs };
