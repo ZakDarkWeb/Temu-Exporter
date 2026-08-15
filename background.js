@@ -401,9 +401,10 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
             if (!snMatch) return;
             var sn = snMatch[1];
 
-            // Date: capture "Aug 8, 2026, 4:35 am" and strip timezone like PKT(UTC+5)
-            var dateMatch = text.match(/([A-Za-z]{3}\s+\d{1,2},\s*\d{4},\s*\d{1,2}:\d{2}\s*(?:am|pm))/i);
-            var dateStr = dateMatch ? dateMatch[1].trim() : '';
+            // Label purchased date: "Label purchased: Aug 15, 2026, 12:09 am PKT"
+            // This is in the Order Status column (._ubKt01zt span)
+            var labelMatch = text.match(/Label purchased:\s*([A-Za-z]{3}\s+\d{1,2},\s*\d{4},\s*\d{1,2}:\d{2}\s*(?:am|pm))/i);
+            var dateStr = labelMatch ? labelMatch[1].trim() : '';
 
             var url = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
             rows.push({ sn, url, dateStr });
@@ -419,8 +420,8 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
       let hasAnyDate = false;
 
       pageData.forEach(function(row) {
-        // Use parseDateStr for consistent parsing of "Aug 8, 2026, 4:35 am"
-        // (raw new Date() fails on this format cross-browser)
+        // Use parseDateStr for consistent parsing of "Aug 15, 2026, 12:09 am"
+        // parseDateStr also strips trailing timezone abbreviations (PKT, EST etc)
         var rowTs = parseDateStr(row.dateStr);
 
         if (rowTs > 0) {
@@ -429,11 +430,9 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
             if (!allOrderUrls.includes(row.url)) allOrderUrls.push(row.url);
           }
           if (rowTs >= fromTs) allOlderThanFrom = false;
-        } else {
-          // Date couldn't be parsed — include as fallback
-          if (!allOrderUrls.includes(row.url)) allOrderUrls.push(row.url);
-          allOlderThanFrom = false;
         }
+        // Note: orders with no label date (unshipped, no label yet) are excluded
+        // since we're filtering by label purchased date.
       });
 
       // Smart early exit 1: all dates older than FROM date — no point going further

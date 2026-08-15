@@ -17,6 +17,8 @@ const statPagesLbl  = $('statPagesLabel');
 const statOrdersVal = $('statOrdersVal');
 const statPages     = $('statPages');
 const statOrders    = $('statOrders');
+const statPagesRing  = $('statPagesRing');
+const statOrdersRing = $('statOrdersRing');
 const statusBox     = $('statusBox');
 const statusIcon    = $('statusIcon');
 const statusMsg     = $('statusMsg');
@@ -99,28 +101,44 @@ function setProgress(pct, label) {
   if (label !== undefined) progLabel.textContent = label;
 }
 
+// ring circumference for r=30: 2*PI*30 ≈ 188.5
+const RING_CIRC = 188;
+const _ringMax = { pages: 10, orders: 500 }; // sensible maximums for arc fill
+
+function updateRing(ringEl, val, maxVal) {
+  if (!ringEl) return;
+  const pct = Math.min(val / maxVal, 1);
+  ringEl.style.strokeDashoffset = RING_CIRC * (1 - pct);
+}
+
 function bumpStat(el, val) {
   el.textContent = val;
   el.classList.remove('bump');
   void el.offsetWidth;
   el.classList.add('bump');
+  // update SVG ring
+  if (el === statPagesVal)  updateRing(statPagesRing,  Number(val) || 0, _ringMax.pages);
+  if (el === statOrdersVal) updateRing(statOrdersRing, Number(val) || 0, _ringMax.orders);
+}
+
+function setButtonLoading(btn, txtEl, loading, label) {
+  if (loading) {
+    btn.classList.add('loading');
+    if (label) txtEl.textContent = label;
+  } else {
+    btn.classList.remove('loading');
+  }
 }
 
 function setStep(stage) {
   // stage: 'navigating' | 'scraping' | 'extracting' | 'retrying' | 'done'
   const steps = [
-    { el: $('stepNav'),     numEl: $('stepNavNum')     },
-    { el: $('stepScrape'),  numEl: $('stepScrapeNum')  },
-    { el: $('stepExtract'), numEl: $('stepExtractNum') },
-    { el: $('stepRetry'),   numEl: $('stepRetryNum')   }
+    $('stepNav'), $('stepScrape'), $('stepExtract'), $('stepRetry')
   ];
   const map = { navigating: 0, scraping: 1, extracting: 2, retrying: 3, done: 4 };
   const active = map[stage] ?? -1;
-  steps.forEach(({ el, numEl }, i) => {
+  steps.forEach((el, i) => {
     el.className = 'step' + (i < active ? ' done' : i === active ? ' active' : '');
-    if (i < active)       numEl.textContent = '✓';
-    else if (i === active) numEl.textContent = '…';
-    else                   numEl.textContent = i + 1;
   });
 }
 
@@ -238,10 +256,12 @@ async function init() {
       currentMode      = 'auto';
       currentListTabId = tab.id;
       showAutoMode(true);
+      checkLabelRun();
     } else if (pageType === 'orders-other') {
       currentMode      = 'auto';
       currentListTabId = tab.id;
       showAutoMode(false);
+      checkLabelRun();
     } else {
       currentMode = 'manual';
       await scanManualTabs();
@@ -379,6 +399,7 @@ chrome.runtime.onMessage.addListener(msg => {
       setProgress(pct, `Reading page ${msg.page} — ${msg.scraped} links collected`);
       setStatus('📋', `Scanning page ${msg.page}… (${msg.scraped} orders found)`, 'info');
       bumpStat(statPagesVal, msg.page);
+      setButtonLoading(autoBtn, autoBtnTxt, true, `⏳ Page ${msg.page}…`);
     }
     else if (msg.stage === 'extracting') {
       const pct = 30 + (msg.total > 0 ? (msg.current / msg.total) * 55 : 0);
@@ -407,11 +428,11 @@ chrome.runtime.onMessage.addListener(msg => {
   else if (msg.type === 'autoDone') {
     progressSec.style.display = 'none';
     setStep('done');
+    setButtonLoading(autoBtn, autoBtnTxt, false);
     bumpStat(statOrdersVal, msg.rowsExported);
     bumpStat(statPagesVal,  msg.pagesScraped);
     statPages.classList.add('active');
     statOrders.classList.add('active');
-    // failedOrders is now an array of PO-xxx strings
     showFailBox(msg.failedCount, msg.failedOrders || []);
     let doneMsg = `${msg.ordersFound} orders → ${msg.rowsExported} rows exported!`;
     if (msg.failedCount) doneMsg += ` (${msg.failedCount} failed — see below)`;
@@ -427,8 +448,10 @@ chrome.runtime.onMessage.addListener(msg => {
     progressSec.style.display = 'none';
     setStatus('❌', msg.message || 'An error occurred.', 'error');
     running = false;
+    setButtonLoading(autoBtn,   autoBtnTxt,   false);
+    setButtonLoading(manualBtn, manualBtnTxt, false);
     autoBtn.disabled = manualBtn.disabled = false;
-    autoBtnTxt.textContent  = '🚀 Start Auto-Export';
+    autoBtnTxt.textContent   = '🚀 Start Auto-Export';
     manualBtnTxt.textContent = '⬇️ Export Open Tabs';
   }
 
@@ -473,7 +496,7 @@ function switchTab(tab) {
   // Update main action button label
   autoBtnTxt.textContent = getAutoBtnLabel();
   // Update selection count if switching to select tab
-  if (tab === 'select') startSelectionPolling();
+  if (tab === 'select') { startSelectionPolling(); checkLabelRun(); }
   else stopSelectionPolling();
 }
 
@@ -608,9 +631,196 @@ async function _doPoll() {
     const count = Object.keys(currentSelections).length;
     const selCountEl  = $('selCount');
     const clearSelBtn = $('clearSelBtn');
+    const saveBtn     = $('saveForLabelBtn');
     if (selCountEl)  selCountEl.textContent = count;
     if (clearSelBtn) clearSelBtn.disabled = (count === 0);
+    if (saveBtn)     saveBtn.disabled = (count === 0);
     autoBtn.disabled = (count === 0);
+  });
+}
+
+// ── Label Sync — Save for Label Run ─────────────────────────────────────────
+
+const saveForLabelBtn = $('saveForLabelBtn');
+const saveRunStatus   = $('saveRunStatus');
+
+if (saveForLabelBtn) {
+  saveForLabelBtn.addEventListener('click', () => {
+    const poNumbers = Object.keys(currentSelections);
+    if (poNumbers.length === 0) {
+      if (saveRunStatus) saveRunStatus.textContent = '⚠️ No orders selected yet.';
+      return;
+    }
+    const payload = {
+      savedAt: new Date().toISOString(),
+      poNumbers,
+      count: poNumbers.length
+    };
+    chrome.storage.local.set({ temuLabelRun_v1: payload }, () => {
+      if (saveRunStatus) {
+        saveRunStatus.textContent = `✅ ${poNumbers.length} orders saved! Switch to Shipped tab to restore.`;
+        setTimeout(() => { if (saveRunStatus) saveRunStatus.textContent = ''; }, 5000);
+      }
+    });
+  });
+}
+
+// ── Label Sync — Check & Show Restore Banner ─────────────────────────────────
+
+function checkLabelRun() {
+  const banner      = $('restoreBanner');
+  const countEl     = $('restoreCount');
+  const savedAtEl   = $('restoreSavedAt');
+  if (!banner) return;
+
+  chrome.storage.local.get(['temuLabelRun_v1'], (data) => {
+    const run = data.temuLabelRun_v1;
+    if (run && run.count > 0 && Array.isArray(run.poNumbers)) {
+      if (countEl)   countEl.textContent = run.count;
+      if (savedAtEl) {
+        try {
+          const d = new Date(run.savedAt);
+          const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          savedAtEl.textContent = `Saved ${dateStr} at ${timeStr}`;
+        } catch(e) { savedAtEl.textContent = ''; }
+      }
+      banner.style.display = 'flex';
+    } else {
+      banner.style.display = 'none';
+    }
+  });
+}
+
+// ── Label Sync — Restore Selection ──────────────────────────────────────────
+
+const restoreSelBtn = $('restoreSelBtn');
+const clearRunBtn   = $('clearRunBtn');
+const restoreResult = $('restoreResult');
+
+if (restoreSelBtn) {
+  restoreSelBtn.addEventListener('click', async () => {
+    if (!currentListTabId) {
+      if (restoreResult) {
+        restoreResult.className = 'restore-result none';
+        restoreResult.textContent = '❌ No Temu tab detected. Open the popup from the Shipped orders page.';
+      }
+      return;
+    }
+
+    const data = await new Promise(r => chrome.storage.local.get(['temuLabelRun_v1'], r));
+    const run = data.temuLabelRun_v1;
+    if (!run || !run.poNumbers || run.poNumbers.length === 0) {
+      if (restoreResult) {
+        restoreResult.className = 'restore-result none';
+        restoreResult.textContent = '❌ No saved label run found.';
+      }
+      return;
+    }
+
+    restoreSelBtn.textContent = '⏳ Restoring…';
+    restoreSelBtn.disabled = true;
+
+    try {
+      const savedPOs = run.poNumbers;
+      // ── Step 1: Run script on Temu tab to find which POs are visible ──────
+      // Also attempt DOM clicks as visual aid (may not work on React checkboxes)
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: currentListTabId },
+        func: function(savedPOs, baseUrl) {
+          var matched = [];
+          var total = savedPOs.length;
+
+          function extractPO(text) {
+            var m = text.match(/(PO-\d+-\d{8,})/);
+            return m ? m[1] : null;
+          }
+
+          // Build fingerprint from first 5 visible POs (same logic as readPageSelections)
+          var visiblePOs = [];
+          document.querySelectorAll('tr').forEach(function(tr) {
+            if (tr.querySelector('th')) return;
+            var sn = extractPO(tr.textContent || '');
+            if (sn) visiblePOs.push(sn);
+          });
+          var pageFingerprint = visiblePOs.length > 0
+            ? 'fp:' + visiblePOs.slice(0, 5).join('|')
+            : '1';
+
+          // Find rows that match saved POs and attempt DOM click (visual only)
+          document.querySelectorAll('tr').forEach(function(tr) {
+            if (tr.querySelector('th')) return;
+            var sn = extractPO(tr.textContent || '');
+            if (!sn || savedPOs.indexOf(sn) === -1) return;
+            matched.push(sn);
+            // Try React-compatible click simulation
+            var cb = tr.querySelector('input[type="checkbox"]');
+            if (!cb) cb = tr.querySelector('label[data-indeterminate!="true"]');
+            if (cb) {
+              ['mousedown','mouseup','click'].forEach(function(ev) {
+                cb.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true }));
+              });
+            }
+          });
+
+          return { matched: matched, total: total, pageFingerprint: pageFingerprint, baseUrl: baseUrl };
+        },
+        args: [savedPOs, 'https://seller.temu.com/order-detail.html']
+      });
+
+      const res = results && results[0] && results[0].result;
+      if (!res) throw new Error('Script returned no result');
+
+      // ── Step 2: Directly write matched POs into temuSelections_v6 ─────────
+      // This is the authoritative fix — bypasses React DOM checkbox state issue
+      if (res.matched.length > 0) {
+        const storageData = await new Promise(r => chrome.storage.local.get(['temuSelections_v6'], r));
+        const stored = storageData.temuSelections_v6 || {};
+        const pageKey = 'page:' + res.pageFingerprint;
+
+        // Build the PO → URL map for matched orders
+        const matchedMap = {};
+        res.matched.forEach(po => {
+          matchedMap[po] = res.baseUrl + '?parent_order_sn=' + encodeURIComponent(po);
+        });
+
+        // Merge with existing selections on this page (don't overwrite other pages)
+        stored[pageKey] = Object.assign({}, stored[pageKey] || {}, matchedMap);
+        await new Promise(r => chrome.storage.local.set({ temuSelections_v6: stored }, r));
+      }
+
+      // ── Step 3: Show result feedback ──────────────────────────────────────
+      if (restoreResult) {
+        if (res.matched.length === 0) {
+          restoreResult.className = 'restore-result none';
+          restoreResult.textContent = `❌ 0/${res.total} matched on this page. Try page 2 or check order status.`;
+        } else if (res.matched.length < res.total) {
+          restoreResult.className = 'restore-result partial';
+          restoreResult.textContent = `⚡ ${res.matched.length}/${res.total} saved on this page — go to next page and click Restore again.`;
+        } else {
+          restoreResult.className = 'restore-result success';
+          restoreResult.textContent = `✅ All ${res.matched.length} orders restored! Click Export Selected below.`;
+        }
+      }
+    } catch(e) {
+      if (restoreResult) {
+        restoreResult.className = 'restore-result none';
+        restoreResult.textContent = '❌ Error: ' + e.message;
+      }
+    }
+
+    restoreSelBtn.textContent = '🔁 Restore Selection';
+    restoreSelBtn.disabled = false;
+  });
+}
+
+if (clearRunBtn) {
+  clearRunBtn.addEventListener('click', () => {
+    chrome.storage.local.remove('temuLabelRun_v1', () => {
+      const banner = $('restoreBanner');
+      if (banner) banner.style.display = 'none';
+      if (restoreResult) { restoreResult.className = 'restore-result'; restoreResult.textContent = ''; }
+    });
   });
 }
 
@@ -796,14 +1006,16 @@ autoBtn.addEventListener('click', async () => {
     failBox.style.display = 'none';
     statPages.classList.remove('active');
     statOrders.classList.remove('active');
-    statPagesVal.textContent  = '0';
-    statOrdersVal.textContent = '0';
+    bumpStat(statPagesVal,  '0');
+    bumpStat(statOrdersVal, '0');
+    updateRing(statPagesRing,  0, _ringMax.pages);
+    updateRing(statOrdersRing, 0, _ringMax.orders);
     progressSec.style.display = 'block';
     stepsRow.style.display    = 'flex';
     setStep('navigating');
     setProgress(0, 'Starting…');
     setStatus('🚀', `Auto-export started! Pages ${from}–${to}`, 'info');
-    autoBtnTxt.textContent = '⏳ Running…';
+    setButtonLoading(autoBtn, autoBtnTxt, true, `⏳ Starting…`);
     autoBtn.disabled = true;
 
     chrome.runtime.sendMessage({
