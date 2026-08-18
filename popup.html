@@ -507,6 +507,135 @@
       display: block;
     }
 
+    /* ── SHEETS SYNC TAB CSS ──────────────────────────────────────────────────────────────── */
+    .sheets-hero {
+      text-align: center;
+      padding: 14px 8px 10px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    .sheets-hero-icon { font-size: 28px; line-height: 1; margin-bottom: 4px; }
+    .sheets-hero-title {
+      font-size: 14px; font-weight: 800; color: var(--text);
+      letter-spacing: -0.3px;
+    }
+    .sheets-hero-sub {
+      font-size: 10px; color: var(--muted); margin-top: 3px; line-height: 1.4;
+    }
+    .sheets-flow {
+      display: flex; align-items: center; justify-content: center;
+      gap: 4px; margin-top: 8px; font-size: 10px; color: var(--muted2);
+    }
+    .sheets-flow-step {
+      padding: 3px 7px; border-radius: 10px;
+      background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2);
+      color: var(--primary); font-weight: 700; font-size: 9.5px;
+    }
+    .sheets-flow-arrow { color: var(--muted); font-size: 11px; }
+
+    .sheets-sync-section { margin-bottom: 12px; }
+    .sheets-sync-label {
+      font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.07em; margin-bottom: 6px;
+    }
+    .sheets-big-btn {
+      width: 100%; padding: 12px 16px;
+      background: linear-gradient(135deg, #064e3b, #065f46);
+      border: 1px solid rgba(16,185,129,0.4);
+      border-radius: var(--r-lg);
+      color: #fff; font-size: 13px; font-weight: 800;
+      cursor: pointer; font-family: inherit;
+      transition: all 0.2s; position: relative; overflow: hidden;
+      display: flex; align-items: center; gap: 10px;
+      box-shadow: 0 4px 15px rgba(16,185,129,0.15);
+      margin-bottom: 6px;
+    }
+    .sheets-big-btn:hover { background: linear-gradient(135deg,#065f46,#047857); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(16,185,129,0.25); }
+    .sheets-big-btn:active { transform: translateY(0); }
+    .sheets-big-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .sheets-big-btn-icon { font-size: 20px; flex-shrink: 0; }
+    .sheets-big-btn-text { text-align: left; }
+    .sheets-big-btn-title { display: block; font-size: 12px; }
+    .sheets-big-btn-sub { display: block; font-size: 10px; font-weight: 500; opacity: 0.75; margin-top: 1px; }
+    /* shimmer animation */
+    .sheets-big-btn::after {
+      content: ''; position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+      animation: shimmer 2.5s infinite;
+    }
+    @keyframes shimmer { 0%{left:-100%} 100%{left:200%} }
+
+    .sheets-small-row { display: flex; gap: 5px; }
+    .sheets-small-row .quick-date-btn { font-size: 10.5px; padding: 5px 6px; }
+
+    /* Result card */
+    .sheets-result {
+      background: linear-gradient(135deg, rgba(16,185,129,0.06), rgba(16,185,129,0.02));
+      border: 1px solid rgba(16,185,129,0.25);
+      border-radius: var(--r-lg); padding: 12px;
+      margin-bottom: 10px; animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
+    .sheets-result-count {
+      font-size: 15px; font-weight: 800; color: #34d399;
+      margin-bottom: 3px;
+    }
+    .sheets-result-sub { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+    .sheets-paste-hint {
+      font-size: 11px; color: var(--muted2); font-weight: 600;
+      display: flex; align-items: center; gap: 5px; margin-bottom: 8px;
+    }
+    .sheets-copy-btn {
+      width: 100%; padding: 8px; border-radius: var(--r-sm);
+      background: linear-gradient(135deg,#10b981,#059669);
+      border: none; color: #fff; font-size: 12px; font-weight: 700;
+      cursor: pointer; font-family: inherit; transition: all 0.15s;
+    }
+    .sheets-copy-btn:hover { background: linear-gradient(135deg,#059669,#047857); }
+    .sheets-fail-note { font-size: 10px; color: #f87171; margin-top: 4px; }
+
+    /* Column toggles */
+    .sheets-section { margin-bottom: 10px; }
+    .sheets-section-title {
+      font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.07em; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;
+    }
+    .sheets-col-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 4px 8px;
+    }
+    .sheets-col-toggle {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--text); cursor: pointer;
+      padding: 4px 6px; border-radius: var(--r-sm);
+      transition: background 0.15s;
+    }
+    .sheets-col-toggle:hover { background: rgba(255,255,255,0.04); }
+    .sheets-col-toggle input { accent-color: var(--primary); width: 13px; height: 13px; cursor: pointer; }
+
+    /* Options row */
+    .sheets-opts { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+    .sheets-opt {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--muted2); cursor: pointer;
+    }
+    .sheets-opt input { accent-color: var(--primary); cursor: pointer; }
+
+    /* Last sync bar */
+    .sheets-last-sync {
+      font-size: 10px; color: var(--muted); text-align: center;
+      padding: 6px; border-top: 1px solid var(--border); margin-top: 6px;
+    }
+    .sheets-last-sync strong { color: var(--primary); }
+
+    /* Duplicate badge */
+    .sheets-dup-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; padding: 2px 7px; border-radius: 10px;
+      background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.3);
+      color: #fbbf24; font-weight: 600; margin-left: 6px;
+    }
+
     /* ── PAGE RANGE ──────────────────────────────────────────────────────────── */
     .page-range {
       display: flex;
@@ -879,6 +1008,29 @@
 
     .date-mode-note strong {
       color: var(--primary);
+    }
+
+    .quick-date-btn {
+      flex: 1;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: var(--r-sm);
+      background: rgba(16, 185, 129, 0.06);
+      color: var(--primary);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s;
+      white-space: nowrap;
+    }
+    .quick-date-btn:hover {
+      background: rgba(16, 185, 129, 0.18);
+      border-color: var(--primary);
+      transform: translateY(-1px);
+    }
+    .quick-date-btn:active {
+      transform: translateY(0);
+      background: rgba(16, 185, 129, 0.3);
     }
 
     /* ── SELECTION TAB ───────────────────────────────────────────────────────── */
@@ -1620,7 +1772,8 @@
       <div class="mode-tabs" id="modeTabs">
         <button class="mode-tab active" id="tabPages" data-tab="pages">&#x1F4C4; By Pages</button>
         <button class="mode-tab" id="tabDate" data-tab="date">&#x1F4C5; By Date</button>
-        <button class="mode-tab" id="tabSelect" data-tab="select">&#x2611; By Selection</button>
+        <button class="mode-tab" id="tabSelect" data-tab="select">&#x2611; Select</button>
+        <button class="mode-tab" id="tabSheets" data-tab="sheets">&#x1F4CA; Sheets</button>
       </div>
 
       <!-- TAB: By Pages -->
@@ -1676,7 +1829,15 @@
       <!-- TAB: By Date Range -->
       <div class="tab-content" id="tabContentDate">
         <div class="tab-section-label">&#x1F3F7; Export by <strong>Label Purchased Date</strong> &mdash; scans Shipped tab pages automatically</div>
-        <div class="page-range" style="margin-top:10px">
+
+        <!-- Quick date shortcuts -->
+        <div style="display:flex;gap:6px;margin-top:8px;margin-bottom:4px;">
+          <button class="quick-date-btn" id="btnToday">&#x23F0; Today</button>
+          <button class="quick-date-btn" id="btnYesterday">&#x23F3; Yesterday</button>
+          <button class="quick-date-btn" id="btnLast7">&#x1F4C6; Last 7 days</button>
+        </div>
+
+        <div class="page-range" style="margin-top:6px">
           <div class="date-field">
             <label>Label Bought From</label>
             <input type="datetime-local" class="date-input" id="dateFrom">
@@ -1763,6 +1924,109 @@
         </div>
       </div>
 
+      </div>
+
+      <!-- TAB: Sheets Sync (Mode 4) -->
+      <div class="tab-content" id="tabContentSheets">
+
+        <!-- Hero -->
+        <div class="sheets-hero">
+          <div class="sheets-hero-icon">&#x1F4CA;</div>
+          <div class="sheets-hero-title">Auto Sheets Sync</div>
+          <div class="sheets-hero-sub">Labels buy karo &rarr; extension detect kare &rarr; clipboard mein copy &rarr; Ctrl+V in Google Sheets</div>
+          <div class="sheets-flow">
+            <span class="sheets-flow-step">&#x1F4CB; Scan</span>
+            <span class="sheets-flow-arrow">&rarr;</span>
+            <span class="sheets-flow-step">&#x26A1; Extract</span>
+            <span class="sheets-flow-arrow">&rarr;</span>
+            <span class="sheets-flow-step">&#x1F4CB; Copy</span>
+            <span class="sheets-flow-arrow">&rarr;</span>
+            <span class="sheets-flow-step">&#x2705; Paste</span>
+          </div>
+        </div>
+
+        <!-- Quick Sync Buttons -->
+        <div class="sheets-sync-section">
+          <div class="sheets-sync-label">&#x26A1; Quick Sync</div>
+          <button class="sheets-big-btn" id="sheetsSyncToday">
+            <span class="sheets-big-btn-icon">&#x1F504;</span>
+            <span class="sheets-big-btn-text">
+              <span class="sheets-big-btn-title">Sync Today&apos;s Labels &rarr; Sheets</span>
+              <span class="sheets-big-btn-sub">Automatically detects labels bought today</span>
+            </span>
+          </button>
+          <div class="sheets-small-row">
+            <button class="quick-date-btn" id="sheetsSyncYesterday">&#x23F3; Yesterday</button>
+            <button class="quick-date-btn" id="sheetsSyncLast7">&#x1F4C6; Last 7 days</button>
+            <button class="quick-date-btn" id="sheetsSyncCustom">&#x270F;&#xFE0F; Custom</button>
+          </div>
+        </div>
+
+        <!-- Custom date range (hidden by default) -->
+        <div id="sheetsCustomRange" style="display:none; margin-bottom:10px;">
+          <div class="page-range" style="margin-top:4px;">
+            <div class="date-field">
+              <label>From</label>
+              <input type="datetime-local" class="date-input" id="sheetsDateFrom">
+            </div>
+            <div class="page-arrow">&rarr;</div>
+            <div class="date-field">
+              <label>To</label>
+              <input type="datetime-local" class="date-input" id="sheetsDateTo">
+            </div>
+          </div>
+          <button class="sheets-big-btn" id="sheetsSyncCustomBtn" style="margin-top:6px; background:linear-gradient(135deg,#1e3a5f,#1e40af); border-color:rgba(59,130,246,0.4);">
+            <span class="sheets-big-btn-icon">&#x1F4CA;</span>
+            <span class="sheets-big-btn-text">
+              <span class="sheets-big-btn-title">Sync Custom Range &rarr; Sheets</span>
+              <span class="sheets-big-btn-sub">Extract orders in selected date range</span>
+            </span>
+          </button>
+        </div>
+
+        <!-- Result Area (shown after sync completes) -->
+        <div class="sheets-result" id="sheetsResult" style="display:none;">
+          <div class="sheets-result-count" id="sheetsResultCount"></div>
+          <div class="sheets-result-sub" id="sheetsResultSub"></div>
+          <div class="sheets-paste-hint">&#x1F4CB; Open Google Sheets &rarr; Click cell A1 &rarr; <kbd style="background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:3px;">Ctrl+V</kbd></div>
+          <button class="sheets-copy-btn" id="sheetsCopyAgain">&#x1F4CB; Copy to Clipboard Again</button>
+          <div class="sheets-fail-note" id="sheetsFailNote"></div>
+        </div>
+
+        <!-- Column Toggles -->
+        <div class="sheets-section">
+          <div class="sheets-section-title">&#x1F4CB; Columns to include</div>
+          <div class="sheets-col-grid" id="sheetsColGrid">
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="labelPurchasedDate" checked> Label Date</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="trackingNumber" checked> Tracking No</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="orderNumber" checked> Order No</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="customerName" checked> Customer</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="productDetails" checked> Product</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="qty" checked> Qty</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="estimatedRevenue" checked> Revenue</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingCost"> Shipping Cost</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingDate"> Ship Date</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="orderDate"> Order Date</label>
+          </div>
+        </div>
+
+        <!-- Options -->
+        <div class="sheets-opts">
+          <label class="sheets-opt">
+            <input type="checkbox" id="sheetsIncludeHeaders" checked>
+            <span>Include column headers (first row)</span>
+          </label>
+          <label class="sheets-opt">
+            <input type="checkbox" id="sheetsNewOnly">
+            <span>Copy NEW orders only <span class="sheets-dup-badge" id="sheetsDupBadge" style="display:none;">0 already synced</span></span>
+          </label>
+        </div>
+
+        <!-- Last Sync Info -->
+        <div class="sheets-last-sync" id="sheetsLastSync" style="display:none;"></div>
+
+      </div>
+
       <!-- Shared: Speed + Format -->
       <div class="speed-row">
         <span class="speed-label">&#x1F422; Safe</span>
@@ -1824,6 +2088,9 @@
       </div>
     </div>
 
+    <!-- Live extraction counter (IMP 5) -->
+    <div id="liveCounter" style="display:none; font-size:11px; color:var(--muted); text-align:center; margin-top:4px; letter-spacing:0.3px;"></div>
+
     <!-- Failure box -->
     <div id="failBox"></div>
 
@@ -1836,10 +2103,14 @@
       <div class="btn-spinner"></div>
       <span class="btn-icon">&#x2B07;&#xFE0F;</span><span id="manualBtnTxt">Export Open Tabs</span>
     </button>
+    <!-- Cancel button (IMP 4) -->
+    <button class="btn" id="cancelBtn" style="display:none; background:linear-gradient(135deg,#ef4444,#b91c1c); color:#fff; margin-top:6px;">
+      <span class="btn-icon">&#x23F9;&#xFE0F;</span><span>Stop Export</span>
+    </button>
 
   </div>
 
-  <div class="footer">v5.0 &middot; 3 Export Modes &middot; Parallel Batch &middot; Auto-Retry</div>
+  <div class="footer">v5.1 &middot; Label Date Filter &middot; Cancel &middot; Auto-Retry</div>
 
   <script src="popup.js"></script>
 </body>

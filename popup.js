@@ -47,6 +47,8 @@ const dateFilterInputs    = $('dateFilterInputs');
 const dateFilterToggleRow = $('dateFilterToggleRow');
 const fromDate      = $('fromDate');
 const toDate        = $('toDate');
+const cancelBtn     = $('cancelBtn');     // IMP 4
+const liveCounter   = $('liveCounter');  // IMP 5
 
 let currentMode      = 'manual';
 let currentListTabId = null;
@@ -67,6 +69,35 @@ function initDateDefaults() {
   from30.setHours(0, 0, 0, 0);            // From = 30 days ago at midnight
   fromDate.value = toLocalISO(from30);
 }
+
+// ── Cancel button (IMP 4) ─────────────────────────────────────────────────────
+cancelBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'cancelExport' });
+  cancelBtn.disabled = true;
+  cancelBtn.querySelector('span:last-child').textContent = 'Stopping…';
+});
+
+// ── Quick Date buttons (IMP 1+2) ──────────────────────────────────────────────
+
+$('btnToday').addEventListener('click', () => {
+  const now = new Date();
+  const start = new Date(now); start.setHours(0, 0, 0, 0);
+  $('dateFrom').value = toLocalISO(start);
+  $('dateTo').value   = toLocalISO(now);
+});
+$('btnYesterday').addEventListener('click', () => {
+  const now = new Date();
+  const start = new Date(now); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
+  const end   = new Date(now); end.setDate(end.getDate() - 1);   end.setHours(23, 59, 59, 0);
+  $('dateFrom').value = toLocalISO(start);
+  $('dateTo').value   = toLocalISO(end);
+});
+$('btnLast7').addEventListener('click', () => {
+  const now = new Date();
+  const start = new Date(now); start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0);
+  $('dateFrom').value = toLocalISO(start);
+  $('dateTo').value   = toLocalISO(now);
+});
 
 // ── Date filter toggle ────────────────────────────────────────────
 dateFilterEnabled.addEventListener('change', () => {
@@ -388,11 +419,13 @@ chrome.runtime.onMessage.addListener(msg => {
   else if (msg.type === 'autoProgress') {
     progressSec.style.display = 'block';
     stepsRow.style.display    = 'flex';
+    cancelBtn.style.display   = 'flex'; // IMP 4: show cancel while running
     setStep(msg.stage);
 
     if (msg.stage === 'navigating') {
       setProgress(2, `Navigating to page ${msg.page}…`);
       setStatus('🗺️', `Jumping to start page…`, 'info');
+      liveCounter.style.display = 'none';
     }
     else if (msg.stage === 'scraping') {
       const pct = 2 + (msg.page / (msg.page + msg.totalPages)) * 28;
@@ -400,17 +433,27 @@ chrome.runtime.onMessage.addListener(msg => {
       setStatus('📋', `Scanning page ${msg.page}… (${msg.scraped} orders found)`, 'info');
       bumpStat(statPagesVal, msg.page);
       setButtonLoading(autoBtn, autoBtnTxt, true, `⏳ Page ${msg.page}…`);
+      liveCounter.style.display = 'none';
     }
     else if (msg.stage === 'extracting') {
       const pct = 30 + (msg.total > 0 ? (msg.current / msg.total) * 55 : 0);
       setProgress(pct, `Extracting order ${msg.current + 1} / ${msg.total}`);
       setStatus('⚡', `Extracting 1 by 1… ${msg.current}/${msg.total} done`, 'info');
       bumpStat(statOrdersVal, msg.current);
+      // IMP 5: live extracted/failed counter
+      if (msg.extracted !== undefined) {
+        liveCounter.style.display = 'block';
+        liveCounter.innerHTML = `✅ <strong>${msg.extracted}</strong> extracted&nbsp;&nbsp;${msg.failed ? `⚠️ <strong>${msg.failed}</strong> failed` : ''}`;
+      }
     }
     else if (msg.stage === 'retrying') {
       const pct = 85 + (msg.retryTotal > 0 ? (msg.retrying / msg.retryTotal) * 13 : 0);
       setProgress(pct, `Retrying failed: ${msg.retrying} / ${msg.retryTotal}`);
       setStatus('🔄', `Retrying ${msg.retryTotal} failed order${msg.retryTotal > 1 ? 's' : ''}… (${msg.retrying}/${msg.retryTotal})`, 'info');
+      if (msg.extracted !== undefined) {
+        liveCounter.style.display = 'block';
+        liveCounter.innerHTML = `✅ <strong>${msg.extracted}</strong> extracted&nbsp;&nbsp;${msg.failed ? `⚠️ <strong>${msg.failed}</strong> failed` : ''}`;
+      }
     }
   }
 
@@ -427,6 +470,8 @@ chrome.runtime.onMessage.addListener(msg => {
 
   else if (msg.type === 'autoDone') {
     progressSec.style.display = 'none';
+    liveCounter.style.display = 'none';
+    cancelBtn.style.display   = 'none';
     setStep('done');
     setButtonLoading(autoBtn, autoBtnTxt, false);
     bumpStat(statOrdersVal, msg.rowsExported);
@@ -441,22 +486,35 @@ chrome.runtime.onMessage.addListener(msg => {
     }
     setStatus(msg.failedCount ? '⚠️' : '🎉', doneMsg, msg.failedCount ? 'info' : 'success');
     autoBtnTxt.textContent = '✅ Done!'; autoBtn.disabled = true;
-    setTimeout(() => { autoBtnTxt.textContent = '🚀 Start Auto-Export'; autoBtn.disabled = false; running = false; }, 4000);
+    setTimeout(() => { autoBtnTxt.textContent = getAutoBtnLabel(); autoBtn.disabled = false; running = false; }, 4000);
   }
 
   else if (msg.type === 'error') {
     progressSec.style.display = 'none';
-    setStatus('❌', msg.message || 'An error occurred.', 'error');
+    liveCounter.style.display = 'none';
+    cancelBtn.style.display   = 'none';
+    // IMP 10: Better error messages for common failures
+    let errMsg = msg.message || 'An error occurred.';
+    if (/Script returned no result/i.test(errMsg)) {
+      errMsg = 'Temu page not loaded yet. Please make sure the Shipped tab is open and fully loaded, then try again.';
+    } else if (/Page scraping failed/i.test(errMsg)) {
+      errMsg = 'Could not read orders from the list page. Make sure you are on the Shipped tab and the page is visible.';
+    } else if (/Cannot access/i.test(errMsg)) {
+      errMsg = 'Cannot access the Temu tab. Try closing and reopening the extension.';
+    }
+    setStatus('❌', errMsg, 'error');
     running = false;
     setButtonLoading(autoBtn,   autoBtnTxt,   false);
     setButtonLoading(manualBtn, manualBtnTxt, false);
     autoBtn.disabled = manualBtn.disabled = false;
-    autoBtnTxt.textContent   = '🚀 Start Auto-Export';
+    autoBtnTxt.textContent   = getAutoBtnLabel();
     manualBtnTxt.textContent = '⬇️ Export Open Tabs';
   }
 
   else if (msg.type === 'noData') {
     progressSec.style.display = 'none';
+    liveCounter.style.display = 'none';
+    cancelBtn.style.display   = 'none';
     const filterHint = msg.filterEnabled ? ' Date filter active — shayad koi order is range mein nahi tha.' : '';
     setStatus('⚠️', `No data extracted.${msg.failedCount ? ` ${msg.failedCount} tabs failed.` : ''}${filterHint}`, 'error');
     running = false;
@@ -464,22 +522,37 @@ chrome.runtime.onMessage.addListener(msg => {
     autoBtnTxt.textContent  = getAutoBtnLabel();
     manualBtnTxt.textContent = '⬇️ Export Open Tabs';
   }
+
+  else if (msg.type === 'cancelled') {
+    progressSec.style.display = 'none';
+    liveCounter.style.display = 'none';
+    cancelBtn.style.display   = 'none';
+    cancelBtn.disabled = false;
+    cancelBtn.querySelector('span:last-child').textContent = 'Stop Export';
+    setStatus('⏹️', 'Export cancelled. You can start a new one.', 'info');
+    running = false;
+    setButtonLoading(autoBtn, autoBtnTxt, false);
+    autoBtn.disabled = false;
+    autoBtnTxt.textContent = getAutoBtnLabel();
+  }
 });
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
-let activeTab = 'pages';  // 'pages' | 'date' | 'select'
+let activeTab = 'pages';  // 'pages' | 'date' | 'select' | 'sheets'
 
 const tabContentMap = {
   pages:  $('tabContentPages'),
   date:   $('tabContentDate'),
-  select: $('tabContentSelect')
+  select: $('tabContentSelect'),
+  sheets: $('tabContentSheets')
 };
 
 function getAutoBtnLabel() {
   if (activeTab === 'pages')  return '🚀 Start Auto-Export';
   if (activeTab === 'date')   return '🗓️ Start Date Export';
   if (activeTab === 'select') return '☑ Export Selected';
+  if (activeTab === 'sheets') return null; // Sheets tab has its own buttons
   return '🚀 Start';
 }
 
@@ -493,16 +566,376 @@ function switchTab(tab) {
   Object.entries(tabContentMap).forEach(([key, el]) => {
     if (el) el.classList.toggle('active', key === tab);
   });
-  // Update main action button label
-  autoBtnTxt.textContent = getAutoBtnLabel();
+  // Sheets tab has its own action buttons — hide/show main autoBtn
+  const label = getAutoBtnLabel();
+  if (label === null) {
+    autoBtn.style.display = 'none';
+  } else {
+    if (currentMode === 'auto') autoBtn.style.display = 'flex';
+    autoBtnTxt.textContent = label;
+  }
+  // IMP 8: remember last used tab
+  chrome.storage.local.set({ lastActiveTab: tab }).catch(() => {});
   // Update selection count if switching to select tab
   if (tab === 'select') { startSelectionPolling(); checkLabelRun(); }
   else stopSelectionPolling();
+  // Load sheets last sync info when switching to sheets tab
+  if (tab === 'sheets') loadSheetsLastSync();
 }
 
 // Wire tab buttons
 document.querySelectorAll('.mode-tab').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// IMP 8: Restore last tab on startup
+chrome.storage.local.get('lastActiveTab', ({ lastActiveTab }) => {
+  if (lastActiveTab && tabContentMap[lastActiveTab]) {
+    switchTab(lastActiveTab);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHEETS SYNC MODULE v6.0
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Column metadata: { key, label }
+const SHEETS_ALL_COLS = [
+  { key: 'labelPurchasedDate', label: 'Label Date' },
+  { key: 'trackingNumber',     label: 'Tracking No' },
+  { key: 'orderNumber',        label: 'Order No' },
+  { key: 'customerName',       label: 'Customer Name' },
+  { key: 'productDetails',     label: 'Product Details' },
+  { key: 'qty',                label: 'Qty' },
+  { key: 'estimatedRevenue',   label: 'Est. Revenue' },
+  { key: 'shippingCost',       label: 'Shipping Cost' },
+  { key: 'shippingDate',       label: 'Ship Date' },
+  { key: 'orderDate',          label: 'Order Date' },
+];
+
+// Pending rows for "Copy Again" button
+let _lastSheetRows = [];
+
+// ── TSV Builder ──────────────────────────────────────────────────────────────────
+
+function buildTSV(rows, columns, includeHeaders) {
+  const cols = columns.filter(c => SHEETS_ALL_COLS.some(a => a.key === c));
+  const lines = [];
+  if (includeHeaders) {
+    const headers = cols.map(c => SHEETS_ALL_COLS.find(a => a.key === c)?.label || c);
+    lines.push(headers.join('\t'));
+  }
+  rows.forEach(row => {
+    const values = cols.map(c => {
+      const v = row[c];
+      if (v === undefined || v === null || v === '') return '';
+      // Escape tabs and newlines in cell values
+      return String(v).replace(/\t/g, ' ').replace(/\n/g, ' ');
+    });
+    lines.push(values.join('\t'));
+  });
+  return lines.join('\n');
+}
+
+// ── Clipboard write ────────────────────────────────────────────────────────────────
+
+async function copyTextToClipboard(text) {
+  try {
+    // MV3 preferred method
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    // Fallback: execCommand (works when popup has focus + clipboardWrite permission)
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e2) { return false; }
+  }
+}
+
+// ── Get selected columns from checkboxes ─────────────────────────────────────────
+
+function getSelectedColumns() {
+  const cols = [];
+  document.querySelectorAll('#sheetsColGrid input[data-col]:checked').forEach(inp => {
+    cols.push(inp.dataset.col);
+  });
+  // Preserve column order from SHEETS_ALL_COLS
+  return SHEETS_ALL_COLS.map(c => c.key).filter(k => cols.includes(k));
+}
+
+// ── Duplicate detection registry (chrome.storage.local) ──────────────────────────
+
+const REGISTRY_KEY   = 'temuSyncedOrders';
+const REGISTRY_TTL_DAYS = 60; // remember synced orders for 60 days
+
+async function loadSheetsRegistry() {
+  try {
+    const data = await chrome.storage.local.get(REGISTRY_KEY);
+    const registry = data[REGISTRY_KEY] || {};
+    // Clean old entries
+    const cutoff = Date.now() - REGISTRY_TTL_DAYS * 86400000;
+    Object.keys(registry).forEach(k => { if (registry[k] < cutoff) delete registry[k]; });
+    return registry; // { orderNumber: syncedAtTimestamp }
+  } catch (_) { return {}; }
+}
+
+async function updateSheetsRegistry(orderNumbers) {
+  try {
+    const registry = await loadSheetsRegistry();
+    const now = Date.now();
+    orderNumbers.forEach(on => { registry[on] = now; });
+    await chrome.storage.local.set({ [REGISTRY_KEY]: registry });
+  } catch (_) {}
+}
+
+// ── Last sync info display ───────────────────────────────────────────────────────────────
+
+async function loadSheetsLastSync() {
+  try {
+    const data = await chrome.storage.local.get(['temuLastSync', 'temuLastSyncCount']);
+    const el = $('sheetsLastSync');
+    if (!el) return;
+    if (data.temuLastSync) {
+      const d = new Date(data.temuLastSync);
+      const timeStr = d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      el.style.display = 'block';
+      el.innerHTML = `Last sync: <strong>${timeStr}</strong> — <strong>${data.temuLastSyncCount || 0}</strong> orders`;
+    }
+    // Also update dup badge
+    const registry = await loadSheetsRegistry();
+    const dupBadge = $('sheetsDupBadge');
+    const dupCount = Object.keys(registry).length;
+    if (dupBadge && dupCount > 0) {
+      dupBadge.style.display = 'inline-flex';
+      dupBadge.textContent = `${dupCount} already synced`;
+    }
+  } catch (_) {}
+}
+
+async function saveLastSync(count) {
+  await chrome.storage.local.set({ temuLastSync: Date.now(), temuLastSyncCount: count }).catch(() => {});
+}
+
+// ── Core: copy rows to clipboard after syncing ─────────────────────────────────────
+
+async function processSheetsSyncResult(rows, ordersFound, failedCount) {
+  if (!rows || rows.length === 0) {
+    setStatus('⚠️', 'No orders found in selected date range.', 'error');
+    return;
+  }
+
+  const columns         = getSelectedColumns();
+  const includeHeaders  = $('sheetsIncludeHeaders')?.checked !== false;
+  const newOnly         = $('sheetsNewOnly')?.checked || false;
+
+  // Duplicate filtering
+  const registry = await loadSheetsRegistry();
+  let rowsToExport = rows;
+  let dupCount = 0;
+  if (newOnly) {
+    rowsToExport = rows.filter(r => !registry[r.orderNumber]);
+    dupCount = rows.length - rowsToExport.length;
+  }
+
+  if (rowsToExport.length === 0) {
+    setStatus('ℹ️', `All ${rows.length} orders were already synced before. Uncheck "New Only" to copy all.`, 'info');
+    return;
+  }
+
+  const tsv = buildTSV(rowsToExport, columns, includeHeaders);
+  const copied = await copyTextToClipboard(tsv);
+
+  // Update registry
+  const orderNums = rowsToExport.map(r => r.orderNumber).filter(Boolean);
+  await updateSheetsRegistry(orderNums);
+  await saveLastSync(rowsToExport.length);
+
+  // Store for "Copy Again"
+  _lastSheetRows = rows;
+
+  // Show result card
+  const resultEl    = $('sheetsResult');
+  const countEl     = $('sheetsResultCount');
+  const subEl       = $('sheetsResultSub');
+  const failNoteEl  = $('sheetsFailNote');
+  if (resultEl) {
+    resultEl.style.display = 'block';
+    countEl.innerHTML = copied
+      ? `✅ ${rowsToExport.length} order${rowsToExport.length !== 1 ? 's' : ''} copied to clipboard!`
+      : `⚠️ ${rowsToExport.length} rows ready (clipboard write failed — see below)`;
+    subEl.textContent = dupCount > 0 ? `(${dupCount} duplicate${dupCount !== 1 ? 's' : ''} skipped)` : `${rows.length} total orders found`;
+    failNoteEl.textContent = failedCount > 0 ? `⚠️ ${failedCount} order${failedCount !== 1 ? 's' : ''} failed to extract` : '';
+  }
+
+  if (copied) {
+    setStatus('📋', `${rowsToExport.length} rows copied! Open Sheets → Ctrl+V to paste.`, 'success');
+  } else {
+    // Fallback: show manual copy textarea
+    setStatus('⚠️', 'Clipboard blocked. Data is ready — try clicking "Copy Again" button.', 'info');
+  }
+
+  // Update last sync display
+  await loadSheetsLastSync();
+}
+
+// ── Message handler for sheetsSyncReady ───────────────────────────────────────────────
+// Add to existing chrome.runtime.onMessage listener:
+
+chrome.runtime.onMessage.addListener(msg => {
+  if (msg.type !== 'sheetsSyncReady') return;
+
+  // Hide progress, cancel button
+  progressSec.style.display = 'none';
+  liveCounter.style.display = 'none';
+  cancelBtn.style.display   = 'none';
+  running = false;
+
+  // Disable all sheets sync buttons
+  ['sheetsSyncToday','sheetsSyncYesterday','sheetsSyncLast7','sheetsSyncCustomBtn'].forEach(id => {
+    const el = $(id); if (el) el.disabled = false;
+  });
+
+  // Read rows from session storage and process
+  chrome.storage.session.get('sheetsSyncRows', async data => {
+    try {
+      const rows = data.sheetsSyncRows ? JSON.parse(data.sheetsSyncRows) : [];
+      await processSheetsSyncResult(rows, msg.ordersFound, msg.failedCount);
+    } catch (e) {
+      setStatus('❌', 'Failed to process synced data: ' + e.message, 'error');
+    }
+    // Clear session data
+    chrome.storage.session.remove('sheetsSyncRows').catch(() => {});
+  });
+});
+
+// ── Helper: kick off a Sheets Sync for a given date range ───────────────────────────
+
+function startSheetsSync(fromDate, toDate, maxPages = 10) {
+  if (!currentListTabId) {
+    setStatus('⚠️', 'Please open the Temu Shipped orders tab first.', 'error');
+    return;
+  }
+  running = true;
+  // Show progress UI
+  progressSec.style.display = 'block';
+  stepsRow.style.display    = 'flex';
+  cancelBtn.style.display   = 'flex';
+  liveCounter.style.display = 'none';
+  $('sheetsResult').style.display = 'none';
+  setStatus('🔄', 'Scanning Shipped orders…', 'info');
+
+  // Disable all sheets sync buttons during run
+  ['sheetsSyncToday','sheetsSyncYesterday','sheetsSyncLast7','sheetsSyncCustomBtn'].forEach(id => {
+    const el = $(id); if (el) el.disabled = true;
+  });
+
+  const speed     = speedSlider?.value || 2;
+  const tabDelay  = speed === '1' ? 2000 : speed === '3' ? 600 : 1200;
+  const randExtra = speed === '1' ? 1500 : speed === '3' ? 400 : 800;
+
+  chrome.runtime.sendMessage({
+    type: 'startSheetsSync', listTabId: currentListTabId,
+    fromDate, toDate, tabDelay, randExtra, maxPages
+  });
+}
+
+// ── Button Handlers for Sheets Tab ──────────────────────────────────────────────────
+
+// Today's Labels
+$('sheetsSyncToday').addEventListener('click', () => {
+  const now   = new Date();
+  const start = new Date(now); start.setHours(0, 0, 0, 0);
+  startSheetsSync(toLocalISO(start), toLocalISO(now), 15);
+});
+
+// Yesterday
+$('sheetsSyncYesterday').addEventListener('click', () => {
+  const now   = new Date();
+  const start = new Date(now); start.setDate(start.getDate()-1); start.setHours(0,0,0,0);
+  const end   = new Date(now); end.setDate(end.getDate()-1); end.setHours(23,59,59,0);
+  startSheetsSync(toLocalISO(start), toLocalISO(end), 15);
+});
+
+// Last 7 days
+$('sheetsSyncLast7').addEventListener('click', () => {
+  const now   = new Date();
+  const start = new Date(now); start.setDate(start.getDate()-7); start.setHours(0,0,0,0);
+  startSheetsSync(toLocalISO(start), toLocalISO(now), 50);
+});
+
+// Toggle custom range panel
+$('sheetsSyncCustom').addEventListener('click', () => {
+  const panel = $('sheetsCustomRange');
+  if (!panel) return;
+  const isHidden = panel.style.display === 'none';
+  panel.style.display = isHidden ? 'block' : 'none';
+  if (isHidden && !$('sheetsDateFrom').value) {
+    // Pre-fill with today
+    const now = new Date(); const start = new Date(now); start.setHours(0,0,0,0);
+    $('sheetsDateFrom').value = toLocalISO(start);
+    $('sheetsDateTo').value   = toLocalISO(now);
+  }
+});
+
+// Custom range sync
+$('sheetsSyncCustomBtn').addEventListener('click', () => {
+  const from = $('sheetsDateFrom').value;
+  const to   = $('sheetsDateTo').value;
+  if (!from || !to) { setStatus('⚠️', 'Please select both From and To dates.', 'error'); return; }
+  startSheetsSync(from, to, 999);
+});
+
+// Copy Again
+$('sheetsCopyAgain').addEventListener('click', async () => {
+  if (!_lastSheetRows.length) { setStatus('⚠️', 'No data to copy. Run a sync first.', 'info'); return; }
+  const columns = getSelectedColumns();
+  const includeHeaders = $('sheetsIncludeHeaders')?.checked !== false;
+  const tsv = buildTSV(_lastSheetRows, columns, includeHeaders);
+  const ok = await copyTextToClipboard(tsv);
+  if (ok) setStatus('📋', `${_lastSheetRows.length} rows copied again! Ctrl+V in Sheets.`, 'success');
+  else setStatus('⚠️', 'Clipboard write failed.', 'error');
+});
+
+// Save column settings when changed
+$('sheetsColGrid').addEventListener('change', () => {
+  const cols = {};
+  document.querySelectorAll('#sheetsColGrid input[data-col]').forEach(inp => {
+    cols[inp.dataset.col] = inp.checked;
+  });
+  chrome.storage.local.set({ temuSheetsColumns: cols }).catch(() => {});
+});
+
+// Load saved column settings
+chrome.storage.local.get('temuSheetsColumns', ({ temuSheetsColumns }) => {
+  if (!temuSheetsColumns) return;
+  document.querySelectorAll('#sheetsColGrid input[data-col]').forEach(inp => {
+    if (inp.dataset.col in temuSheetsColumns) {
+      inp.checked = temuSheetsColumns[inp.dataset.col];
+    }
+  });
+});
+
+// Check for pending sync data (popup was closed during sync, then reopened)
+chrome.storage.session.get(['sheetsSyncRows', 'sheetsSyncOrderCount'], async data => {
+  if (data.sheetsSyncRows) {
+    try {
+      const rows = JSON.parse(data.sheetsSyncRows);
+      if (rows.length > 0) {
+        // Switch to sheets tab and show result
+        switchTab('sheets');
+        setStatus('📋', `${rows.length} synced orders ready to copy! Click below.`, 'info');
+        await processSheetsSyncResult(rows, rows.length, 0);
+        chrome.storage.session.remove('sheetsSyncRows').catch(() => {});
+      }
+    } catch (_) {}
+  }
 });
 
 // ── Selection Mode — direct page reading via executeScript ───────────────────

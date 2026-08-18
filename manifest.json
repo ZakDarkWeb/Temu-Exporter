@@ -1,15 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Tab Exporter",
-  "version": "5.0",
+  "version": "6.0",
 
-  "description": "Export Temu seller orders to CSV/JSON/Excel. 3 modes: By Pages, By Date Range, By Selection (overlay checkboxes).",
+  "description": "Export Temu seller orders to CSV/JSON/Excel/Sheets. 4 modes: By Pages, By Date Range, By Selection, Sheets Sync.",
   "permissions": [
     "tabs",
     "scripting",
     "activeTab",
     "downloads",
-    "storage"
+    "storage",
+    "notifications",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "https://seller.temu.com/*"

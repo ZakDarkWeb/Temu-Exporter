@@ -11,21 +11,24 @@ try {
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const BATCH_SIZE      = 3;    // Fix 1: Added BATCH_SIZE constant for manual mode batching
+const BATCH_SIZE      = 3;    // manual mode batching
 const PARALLEL_BATCH  = 1;    // Process tabs one-by-one: more reliable, no retry waste
 const MAX_RETRIES     = 3;
 const RETRY_DELAY_MS  = 1500;
 const TAB_LOAD_TIMEOUT = 30000; // 30s per tab load
 
+// ── Cancel flag — set by cancelExport message, checked in every batch loop ────
+let cancelRequested = false;
+
 const EXPORT_COLS = [
-  'shippingDate', 'orderDate', 'trackingNumber',
+  'labelPurchasedDate', 'shippingDate', 'orderDate', 'trackingNumber',
   'orderNumber',  'customerName', 'productDetails', 'qty',
   'estimatedRevenue', 'shippingCost'
 ];
 const EXPORT_HEADERS = [
-  'Shipping Date', 'Order Date', 'Tracking Number',
-  'Order No',      'Customer Name', 'Product Details', 'Qty (No)',
-  'Est. Revenue',  'Shipping Cost'
+  'Label Date', 'Shipping Date', 'Order Date', 'Tracking Number',
+  'Order No',   'Customer Name', 'Product Details', 'Qty (No)',
+  'Est. Revenue', 'Shipping Cost'
 ];
 
 // ── Utility ────────────────────────────────────────────────────────────────────
@@ -108,19 +111,35 @@ chrome.runtime.onMessage.addListener((msg) => {
     msg.filterFromDate || '',
     msg.filterToDate   || ''
   );
-  // ── New Mode 2: Date Range export ────────────────────────────────────────────
+  // ── Mode 2: Date Range export ─────────────────────────────────────────────────
   if (msg.type === 'startDateExport') runDateExport(
     msg.listTabId, msg.fromDate, msg.toDate, msg.format || 'csv',
     msg.tabDelay  ?? 1000,
     msg.randExtra ?? 1000,
-    msg.maxPages  || 999
+    msg.maxPages  || 999,
+    false /* sheetsMode */
   );
-  // ── New Mode 3: Selection export ─────────────────────────────────────────────
+  // ── Mode 4: Sheets Sync — scan by date, store rows in session, popup copies to clipboard ──
+  if (msg.type === 'startSheetsSync') runDateExport(
+    msg.listTabId, msg.fromDate, msg.toDate, 'csv',
+    msg.tabDelay  ?? 1200,
+    msg.randExtra ?? 800,
+    msg.maxPages  || 999,
+    true /* sheetsMode */
+  );
+  // ── Mode 3: Selection export ──────────────────────────────────────────────────
   if (msg.type === 'startSelectionExport') runSelectionExport(
     msg.selectedUrls, msg.format || 'csv',
     msg.tabDelay  ?? 1000,
     msg.randExtra ?? 1000
   );
+  // ── Cancel running export ────────────────────────────────────────────────────
+  if (msg.type === 'cancelExport') {
+    cancelRequested = true;
+    clearState();
+    chrome.action.setBadgeText({ text: '' }).catch(() => {}); // clear badge on cancel
+    sendMsg({ type: 'cancelled' });
+  }
   // Popup asking for current state on open
   if (msg.type === 'getState') {
     chrome.storage.session.get(['running', 'lastMsg'], (data) => {
@@ -184,17 +203,17 @@ async function runExport(format) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MODE 2 — Auto: paginate list page → open tabs → extract → export → close tabs
+// MODE 2 — Auto: paginate list page → collect URLs → extract → export
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function runAutoExport(listTabId, fromPage, toPage, format, tabDelay = 1000, randExtra = 1000,
                              filterEnabled = false, filterFromDate = '', filterToDate = '') {
+  cancelRequested = false; // reset cancel flag
   const totalPages   = toPage - fromPage + 1;
   const allOrderUrls = [];
 
   // ── Phase 1: Collect order URLs by paginating the list ─────────────────────
   try {
-    // Jump to fromPage if not page 1
     if (fromPage > 1) {
       sendMsg({ type: 'autoProgress', stage: 'navigating', page: fromPage, totalPages, scraped: 0 });
       await navigateListToPage(listTabId, fromPage);
@@ -202,10 +221,9 @@ async function runAutoExport(listTabId, fromPage, toPage, format, tabDelay = 100
     }
 
     for (let page = fromPage; page <= toPage; page++) {
+      if (cancelRequested) return;
       sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages, scraped: allOrderUrls.length });
-
-      // Small delay to ensure page is rendered
-      await sleep(700); // wait for page render
+      await sleep(700);
 
       const links = await getOrderLinksFromListTab(listTabId);
       links.forEach(l => { if (!allOrderUrls.includes(l)) allOrderUrls.push(l); });
@@ -217,10 +235,8 @@ async function runAutoExport(listTabId, fromPage, toPage, format, tabDelay = 100
           sendMsg({ type: 'autoProgress', stage: 'scraping', page: toPage, totalPages, scraped: allOrderUrls.length, note: 'No more pages found' });
           break;
         }
-        // Give SPA time to start routing before we start detecting page change
         await sleep(1500);
         await waitForListPageChange(listTabId, prevFirst);
-        // Extra buffer after page settles
         await sleep(800);
       }
     }
@@ -235,181 +251,62 @@ async function runAutoExport(listTabId, fromPage, toPage, format, tabDelay = 100
     return;
   }
 
-  // ── Phase 2: Sequential tab processing — 1 tab at a time ──────────────────
-  // Each order: open tab → wait load → waitForPageReady polls → extract → close → delay
-  const orderRecords = [], retryQueue = [], seenIds = new Set();
-  const total = allOrderUrls.length;
-
-  // Helper: try to record a successfully extracted order
-  function recordOrder(data) {
-    if (!data) return false;
-    const key = data.orderNumber || `__noid_${orderRecords.length}`;
-    if (seenIds.has(key)) return false;
-    let passesFilter = true;
-    if (filterEnabled && filterFromDate && filterToDate) {
-      const dateForFilter = data.purchaseDateRaw || data.purchaseDate;
-      passesFilter = isDateInRange(dateForFilter, filterFromDate, filterToDate);
-    }
-    if (passesFilter) { seenIds.add(key); orderRecords.push(data); return true; }
-    return false;
-  }
-
-  for (let i = 0; i < total; i += PARALLEL_BATCH) {
-    const batchUrls = allOrderUrls.slice(i, i + PARALLEL_BATCH);
-    sendMsg({ type: 'autoProgress', stage: 'extracting', current: i, total, totalPages,
-              retrying: 0, retryTotal: 0 });
-
-    // ① Open all tabs in batch simultaneously
-    const openResults = await Promise.allSettled(
-      batchUrls.map(url => chrome.tabs.create({ url, active: false }))
-    );
-
-    const openTabs = [];
-    openResults.forEach((r, idx) => {
-      if (r.status === 'fulfilled') openTabs.push({ tab: r.value, url: batchUrls[idx] });
-      else retryQueue.push(batchUrls[idx]); // immediate open fail → retry queue
-    });
-
-    // ② Wait for all tabs to fully load + React to render
-    await Promise.allSettled(openTabs.map(({ tab }) => waitForTabLoad(tab.id)));
-    await sleep(300); // tiny buffer before polling starts
-
-    // ③ Extract from all tabs in parallel
-    const extractResults = await Promise.allSettled(
-      openTabs.map(({ tab }) => processTabWithRetry(tab))
-    );
-
-    extractResults.forEach((r, idx) => {
-      const { url } = openTabs[idx];
-      if (r.status === 'fulfilled' && r.value.ok && r.value.data) {
-        recordOrder(r.value.data);
-      } else {
-        retryQueue.push(url); // extraction failed → retry queue
-      }
-    });
-
-    // ④ Close all batch tabs simultaneously
-    await Promise.allSettled(openTabs.map(({ tab }) => chrome.tabs.remove(tab.id).catch(() => {})));
-
-    // ⑤ Delay between batches (not within batch)
-    if (i + PARALLEL_BATCH < total) {
-      await sleep(tabDelay + Math.floor(Math.random() * randExtra));
-    }
-  }
-
-  // ── Phase 2b: Retry Queue — slow sequential processing of failed orders ────
-  // After all normal batches, retry each failed URL one at a time with longer waits.
-  const permanentFails = [];
-
-  if (retryQueue.length > 0) {
-    for (let ri = 0; ri < retryQueue.length; ri++) {
-      const url = retryQueue[ri];
-      sendMsg({ type: 'autoProgress', stage: 'retrying',
-                current: orderRecords.length, total,
-                retrying: ri + 1, retryTotal: retryQueue.length, totalPages });
-
-      let retryTab;
-      try {
-        retryTab = await chrome.tabs.create({ url, active: false });
-      } catch(e) {
-        try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); } catch(_) { permanentFails.push(url); }
-        continue;
-      }
-
-      await waitForTabLoad(retryTab.id);
-      // waitForPageReady inside processTabWithRetry handles React render timing
-
-      const retryResult = await processTabWithRetry(retryTab);
-      if (retryResult.ok && retryResult.data) {
-        recordOrder(retryResult.data);
-      } else {
-        // Permanently failed — extract order number from URL for user report
-        try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); }
-        catch(_) { permanentFails.push(url); }
-      }
-
-      await chrome.tabs.remove(retryTab.id).catch(() => {});
-      await sleep(2000 + Math.floor(Math.random() * 2000)); // longer delay between retries
-    }
-  }
-
-  if (orderRecords.length === 0) {
-    sendMsg({ type: 'noData', failedCount: permanentFails.length });
-    return;
-  }
-
-  // ── Phase 3: Flatten, sort, export ────────────────────────────────────────
-  const flatRows = flattenToRows(orderRecords);
-  sortRows(flatRows);
-
-  try {
-    const { dataUrl, filename } = generateExport(flatRows, orderRecords.length, format);
-    chrome.downloads.download({ url: dataUrl, filename });
-    sendMsg({
-      type:          'autoDone',
-      ordersFound:    orderRecords.length,
-      rowsExported:   flatRows.length,
-      failedCount:    permanentFails.length,
-      failedOrders:   permanentFails.slice(0, 20), // max 20 for popup display
-      pagesScraped:   totalPages,
-      filterEnabled,
-      filterFromDate,
-      filterToDate,
-      format
-    });
-  } catch (err) {
-    sendMsg({ type: 'error', message: `Export generation failed: ${err.message}` });
-  }
+  // ── Phase 2+: Shared batch + retry + export ────────────────────────────────
+  await _processBatchAndExport(
+    allOrderUrls, format, tabDelay, randExtra,
+    filterEnabled, filterFromDate, filterToDate,
+    totalPages, null /* no labelDateMap for By Pages mode */
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MODE 2b — Date Range Export: scan list pages, extract only date-matched orders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 1000, randExtra = 1000, maxPages = 999) {
+async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 1000, randExtra = 1000, maxPages = 999, sheetsMode = false) {
+  cancelRequested = false; // reset cancel flag
   const fromTs = fromDate ? new Date(fromDate).getTime() : 0;
   const toTs   = toDate   ? new Date(toDate).getTime()   : Infinity;
 
+  // ── BUG 4 FIX: Navigate to page 1 before scanning ─────────────────────────
   sendMsg({ type: 'autoProgress', stage: 'navigating', page: 1, totalPages: maxPages, scraped: 0 });
+  try {
+    await navigateListToPage(listTabId, 1);
+    await sleep(2000);
+  } catch(e) { /* ignore — page might already be at page 1 */ }
 
   const allOrderUrls = [];
+  const labelDateMap = {}; // url → dateStr (for export column)
 
-  // ── Phase 1: Scan pages, read dates from list, collect matching URLs ─────────
+  // ── Phase 1: Scan pages, read label dates, collect matching URLs ──────────
   try {
     let page = 1;
-    let keepGoing = true;
+    let noDatePageCount = 0; // BUG 5 FIX: track pages with zero label dates
 
-    while (keepGoing) {
+    while (true) {
+      if (cancelRequested) return;
       sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: maxPages,
                 scraped: allOrderUrls.length });
 
       await sleep(700);
 
-      // Read order rows with dates from current list page
       const [{ result: pageData }] = await chrome.scripting.executeScript({
         target: { tabId: listTabId },
         func: function() {
           var baseUrl = window.location.origin + '/order-detail.html';
           var rows = [];
-
           document.querySelectorAll('tr').forEach(function(tr) {
-            if (tr.querySelector('th')) return; // skip header
+            if (tr.querySelector('th')) return;
             var text = tr.textContent || '';
-
-            // PO number: no \b — "PO-211-123Copy" pattern (Copy button attached)
             var snMatch = text.match(/(PO-\d+-\d{9,})/);
             if (!snMatch) return;
             var sn = snMatch[1];
-
             // Label purchased date: "Label purchased: Aug 15, 2026, 12:09 am PKT"
-            // This is in the Order Status column (._ubKt01zt span)
             var labelMatch = text.match(/Label purchased:\s*([A-Za-z]{3}\s+\d{1,2},\s*\d{4},\s*\d{1,2}:\d{2}\s*(?:am|pm))/i);
             var dateStr = labelMatch ? labelMatch[1].trim() : '';
-
             var url = baseUrl + '?parent_order_sn=' + encodeURIComponent(sn);
             rows.push({ sn, url, dateStr });
           });
-
           return rows;
         }
       });
@@ -420,36 +317,44 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
       let hasAnyDate = false;
 
       pageData.forEach(function(row) {
-        // Use parseDateStr for consistent parsing of "Aug 15, 2026, 12:09 am"
-        // parseDateStr also strips trailing timezone abbreviations (PKT, EST etc)
         var rowTs = parseDateStr(row.dateStr);
-
         if (rowTs > 0) {
           hasAnyDate = true;
           if (rowTs >= fromTs && rowTs <= toTs) {
-            if (!allOrderUrls.includes(row.url)) allOrderUrls.push(row.url);
+            if (!allOrderUrls.includes(row.url)) {
+              allOrderUrls.push(row.url);
+              labelDateMap[row.url] = row.dateStr; // store for export column
+            }
           }
           if (rowTs >= fromTs) allOlderThanFrom = false;
         }
-        // Note: orders with no label date (unshipped, no label yet) are excluded
-        // since we're filtering by label purchased date.
       });
 
-      // Smart early exit 1: all dates older than FROM date — no point going further
+      // BUG 5 FIX: Track consecutive pages with no label dates at all
+      if (!hasAnyDate) {
+        noDatePageCount++;
+        if (noDatePageCount >= 5) {
+          sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: page,
+                    scraped: allOrderUrls.length, note: '5 consecutive pages with no label dates — stopping' });
+          break;
+        }
+      } else {
+        noDatePageCount = 0; // reset counter when dates are found
+      }
+
+      // Smart early exit: all label dates on this page are older than FROM date
       if (hasAnyDate && allOlderThanFrom) {
         sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: page,
-                  scraped: allOrderUrls.length, note: 'Early exit — all orders older than date range' });
+                  scraped: allOrderUrls.length, note: 'Early exit — all labels older than date range' });
         break;
       }
 
-      // Smart early exit 2: reached the user's max-pages limit
       if (page >= maxPages) {
         sendMsg({ type: 'autoProgress', stage: 'scraping', page, totalPages: maxPages,
                   scraped: allOrderUrls.length, note: `Stopped at page ${maxPages} (user limit)` });
         break;
       }
 
-      // Try next page
       const prevFirst = pageData[0] ? pageData[0].url : null;
       const clicked = await navigateNextOnList(listTabId);
       if (!clicked) break;
@@ -468,10 +373,11 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
     return;
   }
 
-  // ── Phase 2+: Same parallel batch + retry as Auto mode ───────────────────────
-  // Pass date filter to be applied after extraction (catches rows where date wasn't parseable)
-  await _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
-    true, fromDate, toDate, '?');
+  // ── Phase 2+: Batch extract + retry + export ───────────────────────────────
+  await _processBatchAndExport(
+    allOrderUrls, format, tabDelay, randExtra,
+    false, '', '', maxPages, labelDateMap, sheetsMode
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -479,12 +385,12 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExtra = 1000) {
+  cancelRequested = false;
   if (!selectedUrls || selectedUrls.length === 0) {
     sendMsg({ type: 'noData', failedCount: 0 });
     return;
   }
-  // Process only the selected URLs using the same parallel batch system
-  await _processBatchAndExport(selectedUrls, format, tabDelay, randExtra, false, '', '', selectedUrls.length);
+  await _processBatchAndExport(selectedUrls, format, tabDelay, randExtra, false, '', '', selectedUrls.length, null);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -492,11 +398,13 @@ async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExt
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
-                                       filterEnabled, filterFromDate, filterToDate, totalPagesLabel) {
+                                       filterEnabled, filterFromDate, filterToDate,
+                                       totalPagesLabel, labelDateMap, sheetsMode = false) {
   const orderRecords = [], retryQueue = [], seenIds = new Set();
   const total = allOrderUrls.length;
+  let failedCount = 0;
 
-  function recordOrder(data) {
+  function recordOrder(data, sourceUrl) {
     if (!data) return false;
     const key = data.orderNumber || `__noid_${orderRecords.length}`;
     if (seenIds.has(key)) return false;
@@ -505,13 +413,24 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
       const dateForFilter = data.purchaseDateRaw || data.purchaseDate;
       passesFilter = isDateInRange(dateForFilter, filterFromDate, filterToDate);
     }
-    if (passesFilter) { seenIds.add(key); orderRecords.push(data); return true; }
+    if (passesFilter) {
+      // IMP 6: Attach label date from list-page scan if available
+      if (labelDateMap && sourceUrl && labelDateMap[sourceUrl]) {
+        data.labelPurchasedDate = labelDateMap[sourceUrl];
+      }
+      seenIds.add(key);
+      orderRecords.push(data);
+      return true;
+    }
     return false;
   }
 
   for (let i = 0; i < total; i += PARALLEL_BATCH) {
+    if (cancelRequested) break; // IMP 4: check cancel flag
     const batchUrls = allOrderUrls.slice(i, i + PARALLEL_BATCH);
+    // IMP 5: include live extracted/failed counts
     sendMsg({ type: 'autoProgress', stage: 'extracting', current: i, total,
+              extracted: orderRecords.length, failed: failedCount,
               totalPages: totalPagesLabel, retrying: 0, retryTotal: 0 });
 
     const openResults = await Promise.allSettled(
@@ -520,19 +439,23 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
     const openTabs = [];
     openResults.forEach((r, idx) => {
       if (r.status === 'fulfilled') openTabs.push({ tab: r.value, url: batchUrls[idx] });
-      else retryQueue.push(batchUrls[idx]);
+      else { retryQueue.push(batchUrls[idx]); failedCount++; }
     });
 
     await Promise.allSettled(openTabs.map(({ tab }) => waitForTabLoad(tab.id)));
-    await sleep(500); // small buffer — waitForPageReady polls for actual content
+    await sleep(500);
 
     const extractResults = await Promise.allSettled(
       openTabs.map(({ tab }) => processTabWithRetry(tab))
     );
     extractResults.forEach((r, idx) => {
       const { url } = openTabs[idx];
-      if (r.status === 'fulfilled' && r.value.ok && r.value.data) recordOrder(r.value.data);
-      else retryQueue.push(url);
+      if (r.status === 'fulfilled' && r.value.ok && r.value.data) {
+        if (!recordOrder(r.value.data, url)) failedCount++;
+      } else {
+        retryQueue.push(url);
+        failedCount++;
+      }
     });
 
     await Promise.allSettled(openTabs.map(({ tab }) => chrome.tabs.remove(tab.id).catch(() => {})));
@@ -541,10 +464,12 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
 
   // Retry queue
   const permanentFails = [];
-  if (retryQueue.length > 0) {
+  if (!cancelRequested && retryQueue.length > 0) {
     for (let ri = 0; ri < retryQueue.length; ri++) {
+      if (cancelRequested) break;
       const url = retryQueue[ri];
       sendMsg({ type: 'autoProgress', stage: 'retrying', current: orderRecords.length, total,
+                extracted: orderRecords.length, failed: permanentFails.length,
                 retrying: ri + 1, retryTotal: retryQueue.length, totalPages: totalPagesLabel });
       let retryTab;
       try { retryTab = await chrome.tabs.create({ url, active: false }); }
@@ -553,10 +478,10 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
         continue;
       }
       await waitForTabLoad(retryTab.id);
-      // Note: waitForPageReady in processTabWithRetry handles render timing
       const retryResult = await processTabWithRetry(retryTab);
-      if (retryResult.ok && retryResult.data) recordOrder(retryResult.data);
-      else {
+      if (retryResult.ok && retryResult.data) {
+        recordOrder(retryResult.data, url);
+      } else {
         try { permanentFails.push(new URL(url).searchParams.get('parent_order_sn') || url); }
         catch(_) { permanentFails.push(url); }
       }
@@ -573,13 +498,47 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
   const flatRows = flattenToRows(orderRecords);
   sortRows(flatRows);
   try {
-    const { dataUrl, filename } = generateExport(flatRows, orderRecords.length, format);
-    chrome.downloads.download({ url: dataUrl, filename });
-    sendMsg({
-      type: 'autoDone', ordersFound: orderRecords.length, rowsExported: flatRows.length,
-      failedCount: permanentFails.length, failedOrders: permanentFails.slice(0, 20),
-      pagesScraped: totalPagesLabel, filterEnabled, filterFromDate, filterToDate, format
-    });
+    if (sheetsMode) {
+      // ── SHEETS MODE: store rows in session — popup reads + copies to clipboard ──────
+      const rowsJson = JSON.stringify(flatRows);
+      await chrome.storage.session.set({ sheetsSyncRows: rowsJson, sheetsSyncOrderCount: orderRecords.length });
+
+      // Chrome badge: show order count in green
+      chrome.action.setBadgeText({ text: String(orderRecords.length) }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#10b981' }).catch(() => {});
+
+      // Chrome notification
+      chrome.notifications.create('temu_sheets_done', {
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Temu Exporter — Labels Synced! ✅',
+        message: `${orderRecords.length} orders ready. Open extension → Click “Copy to Clipboard” → Ctrl+V in Sheets.`
+      });
+
+      sendMsg({
+        type: 'sheetsSyncReady',
+        ordersFound:  orderRecords.length,
+        rowsExported: flatRows.length,
+        failedCount:  permanentFails.length,
+        failedOrders: permanentFails.slice(0, 20),
+        pagesScraped: totalPagesLabel
+      });
+    } else {
+      // ── NORMAL MODE: download file ─────────────────────────────────────────────────
+      const { dataUrl, filename } = generateExport(flatRows, orderRecords.length, format);
+      chrome.downloads.download({ url: dataUrl, filename });
+
+      // badge: show count briefly
+      chrome.action.setBadgeText({ text: String(orderRecords.length) }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#6366f1' }).catch(() => {});
+      setTimeout(() => chrome.action.setBadgeText({ text: '' }).catch(() => {}), 30000);
+
+      sendMsg({
+        type: 'autoDone', ordersFound: orderRecords.length, rowsExported: flatRows.length,
+        failedCount: permanentFails.length, failedOrders: permanentFails.slice(0, 20),
+        pagesScraped: totalPagesLabel, filterEnabled, filterFromDate, filterToDate, format
+      });
+    }
   } catch (err) {
     sendMsg({ type: 'error', message: `Export generation failed: ${err.message}` });
   }
@@ -901,6 +860,7 @@ function flattenToRows(orderRecords) {
     if (packages.length === 1) {
       const pkg = packages[0];
       products.forEach((prod, prodIdx) => rows.push({
+        labelPurchasedDate: prodIdx === 0 ? (order.labelPurchasedDate || '') : '',
         shippingDate:     pkg.shipmentDate,
         orderDate:        order.purchaseDate,
         trackingNumber:   pkg.trackingNumber,
@@ -909,7 +869,6 @@ function flattenToRows(orderRecords) {
         productDetails:   prod.title,
         productVariant:   prod.variant  || '',
         qty:              prod.qty,
-        // ✔ Revenue, Cost, BasePrice, Courier only on FIRST product row
         estimatedRevenue: prodIdx === 0 ? (order.estimatedRevenue || '') : '',
         shippingCost:     prodIdx === 0 ? (order.shippingCost     || '') : '',
         basePrice:        prodIdx === 0 ? (order.basePrice        || '') : '',
@@ -921,6 +880,7 @@ function flattenToRows(orderRecords) {
         const pkg  = packages[ri % packages.length];
         const prod = products[ri] || products[products.length - 1] || { title: '', variant: '', qty: '' };
         rows.push({
+          labelPurchasedDate: ri === 0 ? (order.labelPurchasedDate || '') : '',
           shippingDate:     pkg.shipmentDate,
           orderDate:        order.purchaseDate,
           trackingNumber:   pkg.trackingNumber,
@@ -929,7 +889,6 @@ function flattenToRows(orderRecords) {
           productDetails:   prod.title,
           productVariant:   prod.variant  || '',
           qty:              prod.qty,
-          // ✔ Revenue, Cost, BasePrice, Courier only on FIRST row of this order
           estimatedRevenue: ri === 0 ? (order.estimatedRevenue || '') : '',
           shippingCost:     ri === 0 ? (order.shippingCost     || '') : '',
           basePrice:        ri === 0 ? (order.basePrice        || '') : '',
