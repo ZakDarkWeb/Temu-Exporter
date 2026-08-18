@@ -56,6 +56,8 @@ let running          = false;
 
 // ── Clear badge whenever popup is opened ─────────────────────────────────────
 chrome.action.setBadgeText({ text: '' }).catch(() => {});
+// Compute stats dashboard on popup open
+setTimeout(computeStats, 300);
 
 // ── Date filter defaults ────────────────────────────────────────────
 function toLocalISO(d) {
@@ -1751,3 +1753,193 @@ initDateDefaults();
     dateFrom.value = toISO(from7);
   }
 })();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATS DASHBOARD MODULE v6.2
+// Reads from local history — no re-scanning. Runs on popup open.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function parseRevenue(str) {
+  if (!str) return 0;
+  const n = parseFloat(String(str).replace(/[^0-9.]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+async function computeStats() {
+  try {
+    const data = await chrome.storage.local.get('temuExportHistory');
+    const hist  = data.temuExportHistory || [];
+
+    const now      = new Date();
+    const todayStart = new Date(now); todayStart.setHours(0,0,0,0);
+    const weekStart  = new Date(now); weekStart.setDate(now.getDate()-7); weekStart.setHours(0,0,0,0);
+
+    let todayOrders = 0, todayRev = 0;
+    let weekOrders  = 0, weekRev  = 0;
+
+    hist.forEach(entry => {
+      const rows = entry.rows || [];
+      if (!rows.length) return; // download-mode entries have no rows
+
+      const entryDate = new Date(entry.syncedAt);
+      const isToday = entryDate >= todayStart;
+      const isWeek  = entryDate >= weekStart;
+
+      rows.forEach(row => {
+        const rev = parseRevenue(row.estimatedRevenue);
+        if (isToday) { todayOrders++; todayRev += rev; }
+        if (isWeek)  { weekOrders++;  weekRev  += rev; }
+      });
+    });
+
+    // Format
+    const fmt = n => n === 0 ? '—' : '$' + n.toFixed(2);
+    const fmtN = n => n === 0 ? '—' : String(n);
+
+    const el = id => document.getElementById(id);
+    if (el('dashTodayOrders'))  el('dashTodayOrders').textContent  = fmtN(todayOrders);
+    if (el('dashTodayRevenue')) el('dashTodayRevenue').textContent = fmt(todayRev);
+    if (el('dashWeekOrders'))   el('dashWeekOrders').textContent   = fmtN(weekOrders);
+    if (el('dashWeekRevenue'))  el('dashWeekRevenue').textContent  = fmt(weekRev);
+  } catch (e) {
+    console.warn('Stats compute failed:', e);
+    ['dashTodayOrders','dashTodayRevenue','dashWeekOrders','dashWeekRevenue'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    });
+  }
+}
+
+// Refresh stats whenever a new history entry is saved (sheets sync complete)
+// We hook into processSheetsSyncResult's end — computeStats() is cheap so run after any sync
+const _origSave = saveToHistory;
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATUS TRACKER MODULE v6.2
+// Collects order URLs from history, sends to background to scan, renders table.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const STATUS_MAX_ORDERS = 50;
+
+// Map raw status text to badge class + label
+function mapStatus(raw) {
+  const s = (raw || '').toLowerCase();
+  if (s.includes('delivered'))                   return { cls: 'badge-delivered', icon: '✅', label: 'Delivered' };
+  if (s.includes('in transit') || s.includes('transit') || s.includes('shipped') && !s.includes('label'))
+    return { cls: 'badge-transit', icon: '🚚', label: 'In Transit' };
+  if (s.includes('waiting') || s.includes('pickup'))
+    return { cls: 'badge-waiting', icon: '🕑', label: 'Awaiting Pickup' };
+  if (s.includes('label'))                       return { cls: 'badge-label',   icon: '📋', label: 'Label Created' };
+  if (!raw || raw === 'Unknown')                  return { cls: 'badge-unknown', icon: '⚪', label: 'Unknown' };
+  return { cls: 'badge-unknown', icon: '⚪', label: raw.slice(0,20) };
+}
+
+// Collect last N order detail URLs from history
+async function collectOrderUrlsFromHistory(limit) {
+  const hist = await loadHistory();
+  const urls = [];
+  const seen = new Set();
+  for (const entry of hist) {
+    for (const row of (entry.rows || [])) {
+      if (row.detailUrl && !seen.has(row.detailUrl)) {
+        seen.add(row.detailUrl);
+        urls.push(row.detailUrl);
+        if (urls.length >= limit) return urls;
+      }
+    }
+  }
+  return urls;
+}
+
+// Render status results table
+let _statusResults = [];
+function renderStatusTable(results) {
+  _statusResults = results;
+  const tbody = document.getElementById('statusTableBody');
+  if (!tbody) return;
+
+  tbody.innerHTML = results.map(r => {
+    const { cls, icon, label } = mapStatus(r.status);
+    const orderShort = (r.orderId || r.url?.split('parent_order_sn=')[1]?.split('&')[0] || '?').slice(-12);
+    const trackShort = (r.tracking || '—').slice(-15);
+    const dateShort  = (r.lastDate || '—').replace(/ PKT.*/, '').replace(/ UTC.*/, '');
+    return `<tr>
+      <td title="${r.orderId || ''}">${orderShort}</td>
+      <td>${trackShort}</td>
+      <td><span class="status-badge ${cls}">${icon} ${label}</span></td>
+      <td>${dateShort}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Start status check
+async function startStatusCheck() {
+  const btn  = document.getElementById('statusCheckBtn');
+  const wrap = document.getElementById('statusResultsWrap');
+  if (btn) { btn.disabled = true; btn.textContent = '🔄 Collecting order URLs…'; }
+  if (wrap) wrap.style.display = 'none';
+
+  const urls = await collectOrderUrlsFromHistory(STATUS_MAX_ORDERS);
+  if (urls.length === 0) {
+    setStatus('⚠️', 'No order history with detail URLs found. Run a Sheets Sync first to populate history.', 'info');
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Check Delivery Status (Last 50 Orders)'; }
+    return;
+  }
+
+  setStatus('🔄', `Checking status of ${urls.length} orders… (may take ${Math.ceil(urls.length * 1.5)}s)`, 'info');
+  if (btn) btn.textContent = `🔄 Scanning 0 / ${urls.length}…`;
+
+  chrome.runtime.sendMessage({ type: 'startStatusCheck', orderUrls: urls });
+}
+
+// Progress updates during scan
+chrome.runtime.onMessage.addListener(msg => {
+  if (msg.type === 'statusProgress') {
+    const btn = document.getElementById('statusCheckBtn');
+    if (btn) btn.textContent = `🔄 Scanning ${msg.done} / ${msg.total}…`;
+  }
+  if (msg.type === 'statusCheckReady') {
+    const btn  = document.getElementById('statusCheckBtn');
+    const wrap = document.getElementById('statusResultsWrap');
+    const title = document.getElementById('statusResultsTitle');
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Check Delivery Status (Last 50 Orders)'; }
+
+    chrome.storage.session.get('statusCheckResults', data => {
+      try {
+        const results = data.statusCheckResults ? JSON.parse(data.statusCheckResults) : [];
+        renderStatusTable(results);
+
+        // Count by status type
+        const delivered = results.filter(r => mapStatus(r.status).cls === 'badge-delivered').length;
+        const transit   = results.filter(r => mapStatus(r.status).cls === 'badge-transit').length;
+        const waiting   = results.filter(r => mapStatus(r.status).cls === 'badge-waiting').length;
+
+        if (title) title.textContent = `${results.length} orders checked — ✅ ${delivered} delivered, 🚚 ${transit} in transit, 🕑 ${waiting} awaiting`;
+        if (wrap) wrap.style.display = 'block';
+        setStatus('✅', `Status check done: ${delivered} delivered, ${transit} in transit, ${waiting} awaiting pickup`, 'success');
+        chrome.storage.session.remove('statusCheckResults').catch(() => {});
+      } catch(e) {
+        setStatus('❌', 'Status check result parse failed: ' + e.message, 'error');
+      }
+    });
+  }
+});
+
+// Wire button
+const statusCheckBtnEl = document.getElementById('statusCheckBtn');
+if (statusCheckBtnEl) statusCheckBtnEl.addEventListener('click', startStatusCheck);
+
+// CSV download from status results
+document.getElementById('statusCsvBtn').addEventListener('click', () => {
+  if (!_statusResults.length) return;
+  const rows = [['Order ID', 'Tracking', 'Status', 'Last Event', 'Last Date', 'Courier', 'Product']];
+  _statusResults.forEach(r => {
+    rows.push([r.orderId||'', r.tracking||'', r.status||'', r.lastEvent||'', r.lastDate||'', r.courier||'', r.product||'']);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const url = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'temu_delivery_status.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+});

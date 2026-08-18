@@ -155,7 +155,101 @@ chrome.runtime.onMessage.addListener((msg) => {
       chrome.runtime.sendMessage({ type: 'stateSnapshot', ...data }).catch(() => {});
     });
   }
+  // ── Status Tracker: check delivery status for a list of order URLs ──────────
+  if (msg.type === 'startStatusCheck') {
+    runStatusCheck(msg.orderUrls || []).catch(e => {
+      sendMsg({ type: 'error', message: 'Status check failed: ' + e.message });
+    });
+  }
 });
+
+// ── Status Tracker ─────────────────────────────────────────────────────────────
+//   Opens each order detail page in a hidden tab, reads delivery status, closes it.
+//   DOM selectors confirmed from live seller.temu.com/order-detail.html page.
+
+async function runStatusCheck(orderUrls) {
+  if (!orderUrls || orderUrls.length === 0) {
+    sendMsg({ type: 'statusCheckReady', results: [], error: 'No order URLs provided.' });
+    return;
+  }
+  sendMsg({ type: 'statusProgress', done: 0, total: orderUrls.length });
+
+  const results = [];
+  for (let i = 0; i < orderUrls.length; i++) {
+    const url = orderUrls[i];
+    let tab;
+    try {
+      tab = await chrome.tabs.create({ url, active: false });
+      // Wait for page to load
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('timeout')), 15000);
+        function onUpdated(tabId, info) {
+          if (tabId === tab.id && info.status === 'complete') {
+            clearTimeout(timeout);
+            chrome.tabs.onUpdated.removeListener(onUpdated);
+            resolve();
+          }
+        }
+        chrome.tabs.onUpdated.addListener(onUpdated);
+      });
+      // Small settle delay for React rendering
+      await new Promise(r => setTimeout(r, 800));
+
+      // Extract status from page
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: function() {
+          function txt(sel, fallback) {
+            const el = document.querySelector(sel);
+            return el ? el.textContent.trim() : (fallback || '');
+          }
+          // Order ID from breadcrumb / page title area
+          const orderId   = txt('._2k6GgcRG ._1KnTNdCB span') || txt('._2k6GgcRG span:last-child') || '';
+          // Product name
+          const product   = txt('._3A964f3j') || txt('._1NCZ7KPp .elli_outerWrapper_123') || '';
+          // Tracking number
+          const tracking  = txt('._2GydpeUD ._1KnTNdCB span') || '';
+          // Main delivery status (e.g. "Shipped", "Waiting for pickup")
+          const statusMain = txt('._2Vn1-Twz._24ZwUHjY') || txt('._2mobrKj6') || '';
+          // Package-level status
+          const pkgStatus  = txt('._2mobrKj6._zuJsGkxq') || txt('._2mobrKj6') || '';
+          // Latest timeline event text
+          const timelineEvent = txt('._dHI0jzvQ ._2-A9xoFi div') || txt('.TLE_itemDotDefault_123._TLE_itemDotDefaultCurrent_123 ~ .TLE_itemBody_123 .TLE_itemTitle_123') || '';
+          // Latest timeline date
+          const timelineDate = txt('._2UwizOIL') || txt('._1ZFc1gJB') || '';
+          // Courier name
+          const courier = txt('._2OTvT66D') || '';
+          return {
+            orderId:   orderId.replace(/\s+/g, ' ').trim(),
+            product:   product.slice(0, 50),
+            tracking:  tracking || '',
+            status:    pkgStatus || statusMain || 'Unknown',
+            lastEvent: timelineEvent.slice(0, 60),
+            lastDate:  timelineDate,
+            courier:   courier
+          };
+        }
+      });
+      if (result && result.result) {
+        results.push({ url, ...result.result });
+      } else {
+        results.push({ url, orderId: url.split('parent_order_sn=')[1]?.split('&')[0] || '?', status: 'Read Failed', tracking: '', lastEvent: '', lastDate: '', product: '', courier: '' });
+      }
+    } catch (e) {
+      results.push({ url, orderId: '?', status: 'Error: ' + e.message.slice(0, 30), tracking: '', lastEvent: '', lastDate: '', product: '', courier: '' });
+    } finally {
+      if (tab) chrome.tabs.remove(tab.id).catch(() => {});
+    }
+    sendMsg({ type: 'statusProgress', done: i + 1, total: orderUrls.length });
+    // Small gap between tabs
+    if (i < orderUrls.length - 1) await new Promise(r => setTimeout(r, 600));
+  }
+
+  // Store results in session and notify popup
+  await chrome.storage.session.set({ statusCheckResults: JSON.stringify(results) }).catch(() => {});
+  sendMsg({ type: 'statusCheckReady', count: results.length });
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MODE 1 — Manual: export open order-detail tabs

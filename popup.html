@@ -1774,6 +1774,95 @@
       0%,100% { box-shadow: 0 0 0 3px rgba(59,130,246,0.15), 0 0 14px var(--blue-glow); }
       50%      { box-shadow: 0 0 0 6px rgba(59,130,246,0.08), 0 0 22px var(--blue-glow); }
     }
+    /* ── STATS DASHBOARD BAR ──────────────────────────────────────────────── */
+    .dash-bar {
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid var(--border);
+      padding: 7px 14px;
+      display: flex; gap: 0; overflow: hidden;
+    }
+    .dash-cell {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; padding: 0 8px;
+      border-right: 1px solid var(--border);
+    }
+    .dash-cell:last-child { border-right: none; }
+    .dash-label {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+      color: var(--muted); text-transform: uppercase; margin-bottom: 2px;
+    }
+    .dash-value {
+      font-size: 13px; font-weight: 900; color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .dash-value.green { color: #34d399; }
+    .dash-value.blue  { color: #60a5fa; }
+    .dash-loading { opacity: 0.4; font-size: 11px; }
+    /* ── STATUS TRACKER ────────────────────────────────────────────────────── */
+    .status-tracker-section {
+      margin-top: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+    .status-tracker-title {
+      font-size: 11px; font-weight: 800; color: var(--text);
+      margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+    }
+    .status-tracker-sub {
+      font-size: 10px; color: var(--muted); margin-bottom: 8px;
+    }
+    #statusCheckBtn {
+      width: 100%; padding: 9px 12px;
+      background: linear-gradient(135deg, #1a2a1a, #14532d);
+      border: 1px solid rgba(34,197,94,0.35); border-radius: var(--r-lg);
+      color: #4ade80; font-size: 11px; font-weight: 800;
+      cursor: pointer; font-family: inherit;
+      transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    #statusCheckBtn:hover { background: linear-gradient(135deg,#1e3a1e,#166534); border-color: rgba(34,197,94,0.55); }
+    #statusCheckBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-results-wrap {
+      margin-top: 10px; display: none;
+    }
+    .status-results-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 6px;
+    }
+    .status-results-title { font-size: 10px; font-weight: 700; color: var(--text); }
+    .status-csv-btn {
+      font-size: 9px; font-weight: 700; padding: 3px 8px;
+      border-radius: var(--r-sm); cursor: pointer;
+      background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.35);
+      color: #a5b4fc; font-family: inherit; transition: all 0.15s;
+    }
+    .status-csv-btn:hover { background: rgba(99,102,241,0.2); }
+    .status-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 9.5px;
+      max-height: 200px; overflow-y: auto; display: block;
+      scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+    }
+    .status-table thead { position: sticky; top: 0; background: #1a1f2e; z-index: 1; }
+    .status-table th {
+      padding: 5px 6px; text-align: left;
+      color: var(--muted); font-weight: 700; font-size: 9px;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .status-table td {
+      padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.04);
+      color: var(--text); vertical-align: middle;
+    }
+    .status-table tr:last-child td { border-bottom: none; }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 2px 6px; border-radius: 10px; font-size: 9px; font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge-delivered  { background: rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); color: #34d399; }
+    .badge-transit    { background: rgba(59,130,246,0.12);  border:1px solid rgba(59,130,246,0.3);  color: #60a5fa; }
+    .badge-waiting    { background: rgba(251,191,36,0.12);  border:1px solid rgba(251,191,36,0.3);  color: #fbbf24; }
+    .badge-label      { background: rgba(168,85,247,0.12);  border:1px solid rgba(168,85,247,0.3);  color: #c084fc; }
+    .badge-unknown    { background: rgba(100,116,139,0.12); border:1px solid rgba(100,116,139,0.3); color: #94a3b8; }
   </style>
 </head>
 
@@ -1787,6 +1876,26 @@
       <div class="header-sub" id="headerSub">Detecting page&hellip;</div>
     </div>
     <span class="mode-pill manual" id="modePill">Manual</span>
+  </div>
+
+  <!-- Stats Dashboard Bar -->
+  <div class="dash-bar" id="dashBar">
+    <div class="dash-cell">
+      <div class="dash-label">Today Orders</div>
+      <div class="dash-value blue" id="dashTodayOrders"><span class="dash-loading">&#x2022;&#x2022;&#x2022;</span></div>
+    </div>
+    <div class="dash-cell">
+      <div class="dash-label">Today Revenue</div>
+      <div class="dash-value green" id="dashTodayRevenue"><span class="dash-loading">&#x2022;&#x2022;&#x2022;</span></div>
+    </div>
+    <div class="dash-cell">
+      <div class="dash-label">Week Orders</div>
+      <div class="dash-value blue" id="dashWeekOrders"><span class="dash-loading">&#x2022;&#x2022;&#x2022;</span></div>
+    </div>
+    <div class="dash-cell">
+      <div class="dash-label">Week Revenue</div>
+      <div class="dash-value green" id="dashWeekRevenue"><span class="dash-loading">&#x2022;&#x2022;&#x2022;</span></div>
+    </div>
   </div>
 
   <div class="body">
@@ -2095,6 +2204,30 @@
 
         <!-- Last Sync Info -->
         <div class="sheets-last-sync" id="sheetsLastSync" style="display:none;"></div>
+
+        <!-- Status Tracker -->
+        <div class="status-tracker-section">
+          <div class="status-tracker-title">&#x1F69A; Delivery Status Tracker</div>
+          <div class="status-tracker-sub">Last 50 shipped orders ki delivery status check karo (order detail pages scan karta hai)</div>
+          <button id="statusCheckBtn">&#x1F50D; Check Delivery Status (Last 50 Orders)</button>
+          <div class="status-results-wrap" id="statusResultsWrap">
+            <div class="status-results-header">
+              <span class="status-results-title" id="statusResultsTitle"></span>
+              <button class="status-csv-btn" id="statusCsvBtn">&#x2B07; Download CSV</button>
+            </div>
+            <table class="status-table" id="statusTable">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Tracking</th>
+                  <th>Status</th>
+                  <th>Last Update</th>
+                </tr>
+              </thead>
+              <tbody id="statusTableBody"></tbody>
+            </table>
+          </div>
+        </div>
 
       </div>
 
