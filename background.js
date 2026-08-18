@@ -140,6 +140,15 @@ chrome.runtime.onMessage.addListener((msg) => {
     chrome.action.setBadgeText({ text: '' }).catch(() => {}); // clear badge on cancel
     sendMsg({ type: 'cancelled' });
   }
+  // ── History: re-download a past export ───────────────────────────────────────
+  if (msg.type === 'downloadFromHistory') {
+    try {
+      const { dataUrl, filename } = generateExport(msg.rows, msg.rows.length, msg.format || 'xlsx');
+      chrome.downloads.download({ url: dataUrl, filename });
+    } catch (e) {
+      sendMsg({ type: 'error', message: 'History download failed: ' + e.message });
+    }
+  }
   // Popup asking for current state on open
   if (msg.type === 'getState') {
     chrome.storage.session.get(['running', 'lastMsg'], (data) => {

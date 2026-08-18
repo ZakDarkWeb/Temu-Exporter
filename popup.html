@@ -636,6 +636,76 @@
       color: #fbbf24; font-weight: 600; margin-left: 6px;
     }
 
+    /* ── HISTORY TAB CSS ──────────────────────────────────────────────────────────────── */
+    .hist-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .hist-title {
+      font-size: 12px; font-weight: 800; color: var(--text);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .hist-clear-all {
+      font-size: 10px; color: #f87171; background: none; border: 1px solid rgba(248,113,113,0.3);
+      border-radius: var(--r-sm); padding: 3px 8px; cursor: pointer; font-family: inherit;
+      transition: all 0.15s;
+    }
+    .hist-clear-all:hover { background: rgba(248,113,113,0.1); }
+    .hist-list {
+      display: flex; flex-direction: column; gap: 7px;
+      max-height: 320px; overflow-y: auto;
+      scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+    }
+    .hist-entry {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 10px 12px;
+      transition: border-color 0.15s;
+    }
+    .hist-entry:hover { border-color: rgba(255,255,255,0.12); }
+    .hist-entry-top {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .hist-entry-label {
+      font-size: 12px; font-weight: 700; color: var(--text); line-height: 1.3;
+    }
+    .hist-entry-time {
+      font-size: 10px; color: var(--muted); margin-top: 2px;
+    }
+    .hist-mode-badge {
+      font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
+      flex-shrink: 0; margin-left: 6px;
+    }
+    .hist-mode-sheets { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3); color: #34d399; }
+    .hist-mode-xlsx   { background: rgba(99,102,241,0.12);  border: 1px solid rgba(99,102,241,0.3);  color: #a5b4fc; }
+    .hist-mode-csv    { background: rgba(251,191,36,0.12);  border: 1px solid rgba(251,191,36,0.3);  color: #fbbf24; }
+    .hist-stats {
+      font-size: 10px; color: var(--muted); margin-bottom: 8px;
+    }
+    .hist-stats strong { color: var(--primary); }
+    .hist-actions {
+      display: flex; gap: 5px; flex-wrap: wrap;
+    }
+    .hist-btn {
+      font-size: 10px; font-weight: 700; padding: 4px 9px; border-radius: var(--r-sm);
+      cursor: pointer; font-family: inherit; border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04); color: var(--text);
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .hist-btn:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); }
+    .hist-btn.green { border-color: rgba(16,185,129,0.4); color: #34d399; }
+    .hist-btn.green:hover { background: rgba(16,185,129,0.1); }
+    .hist-btn.purple { border-color: rgba(99,102,241,0.4); color: #a5b4fc; }
+    .hist-btn.purple:hover { background: rgba(99,102,241,0.1); }
+    .hist-btn.red { border-color: rgba(248,113,113,0.3); color: #f87171; margin-left: auto; }
+    .hist-btn.red:hover { background: rgba(248,113,113,0.1); }
+    .hist-empty {
+      text-align: center; padding: 30px 16px;
+      color: var(--muted); font-size: 12px; line-height: 1.6;
+    }
+    .hist-empty-icon { font-size: 28px; margin-bottom: 8px; }
+
     /* ── PAGE RANGE ──────────────────────────────────────────────────────────── */
     .page-range {
       display: flex;
@@ -1770,10 +1840,11 @@
 
       <!-- Mode Tabs -->
       <div class="mode-tabs" id="modeTabs">
-        <button class="mode-tab active" id="tabPages" data-tab="pages">&#x1F4C4; By Pages</button>
-        <button class="mode-tab" id="tabDate" data-tab="date">&#x1F4C5; By Date</button>
-        <button class="mode-tab" id="tabSelect" data-tab="select">&#x2611; Select</button>
-        <button class="mode-tab" id="tabSheets" data-tab="sheets">&#x1F4CA; Sheets</button>
+        <button class="mode-tab active" id="tabPages"   data-tab="pages">&#x1F4C4; Pages</button>
+        <button class="mode-tab"         id="tabDate"    data-tab="date">&#x1F4C5; Date</button>
+        <button class="mode-tab"         id="tabSelect"  data-tab="select">&#x2611; Select</button>
+        <button class="mode-tab"         id="tabSheets"  data-tab="sheets">&#x1F4CA; Sheets</button>
+        <button class="mode-tab"         id="tabHistory" data-tab="history">&#x1F552; History</button>
       </div>
 
       <!-- TAB: By Pages -->
@@ -2025,6 +2096,23 @@
         <!-- Last Sync Info -->
         <div class="sheets-last-sync" id="sheetsLastSync" style="display:none;"></div>
 
+      </div>
+
+      </div>
+
+      <!-- TAB: History -->
+      <div class="tab-content" id="tabContentHistory">
+        <div class="hist-header">
+          <div class="hist-title">&#x1F552; Export History</div>
+          <button class="hist-clear-all" id="histClearAll">&#x1F5D1; Clear All</button>
+        </div>
+        <div class="hist-list" id="histList">
+          <!-- Dynamically rendered by popup.js -->
+          <div class="hist-empty">
+            <div class="hist-empty-icon">&#x1F4CB;</div>
+            No exports yet. Run an export and it will appear here.
+          </div>
+        </div>
       </div>
 
       <!-- Shared: Speed + Format -->

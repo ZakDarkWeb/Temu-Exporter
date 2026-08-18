@@ -489,6 +489,16 @@ chrome.runtime.onMessage.addListener(msg => {
     }
     setStatus(msg.failedCount ? '⚠️' : '🎉', doneMsg, msg.failedCount ? 'info' : 'success');
     autoBtnTxt.textContent = '✅ Done!'; autoBtn.disabled = true;
+    // Save to history (metadata only — rows are in the downloaded file)
+    saveToHistory({
+      label: msg.filterEnabled
+        ? `Date: ${(msg.filterFromDate||'').slice(0,10)} → ${(msg.filterToDate||'').slice(0,10)}`
+        : (activeTab === 'pages' ? 'Pages Export' : 'Auto Export'),
+      mode:         msg.format || 'xlsx',
+      ordersFound:  msg.ordersFound,
+      rowsExported: msg.rowsExported,
+      rows:         [] // rows stored in downloaded file; not kept in memory for download-mode
+    }).catch(() => {});
     setTimeout(() => { autoBtnTxt.textContent = getAutoBtnLabel(); autoBtn.disabled = false; running = false; }, 4000);
   }
 
@@ -542,20 +552,22 @@ chrome.runtime.onMessage.addListener(msg => {
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
-let activeTab = 'pages';  // 'pages' | 'date' | 'select' | 'sheets'
+let activeTab = 'pages';  // 'pages' | 'date' | 'select' | 'sheets' | 'history'
 
 const tabContentMap = {
   pages:  $('tabContentPages'),
   date:   $('tabContentDate'),
   select: $('tabContentSelect'),
-  sheets: $('tabContentSheets')
+  sheets:  $('tabContentSheets'),
+  history: $('tabContentHistory')
 };
 
 function getAutoBtnLabel() {
   if (activeTab === 'pages')  return '🚀 Start Auto-Export';
   if (activeTab === 'date')   return '🗓️ Start Date Export';
   if (activeTab === 'select') return '☑ Export Selected';
-  if (activeTab === 'sheets') return null; // Sheets tab has its own buttons
+  if (activeTab === 'sheets')  return null; // own buttons
+  if (activeTab === 'history') return null; // no main action
   return '🚀 Start';
 }
 
@@ -583,7 +595,9 @@ function switchTab(tab) {
   if (tab === 'select') { startSelectionPolling(); checkLabelRun(); }
   else stopSelectionPolling();
   // Load sheets last sync info when switching to sheets tab
-  if (tab === 'sheets') loadSheetsLastSync();
+  if (tab === 'sheets')  loadSheetsLastSync();
+  // Render history when switching to history tab
+  if (tab === 'history') renderHistory();
 }
 
 // Wire tab buttons
@@ -596,6 +610,136 @@ chrome.storage.local.get('lastActiveTab', ({ lastActiveTab }) => {
   if (lastActiveTab && tabContentMap[lastActiveTab]) {
     switchTab(lastActiveTab);
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HISTORY MODULE v6.0
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const HIST_KEY      = 'temuExportHistory';
+const HIST_MAX      = 15;  // keep last 15 exports
+const HIST_MAX_ROWS = 1000; // truncate very large exports to save storage
+
+// ── Save an export to history ─────────────────────────────────────────────────────
+
+async function saveToHistory({ label, mode, ordersFound, rowsExported, rows }) {
+  try {
+    const data = await chrome.storage.local.get(HIST_KEY);
+    const hist = data[HIST_KEY] || [];
+    // Truncate rows if too large
+    const safeRows = rows && rows.length > HIST_MAX_ROWS ? rows.slice(0, HIST_MAX_ROWS) : (rows || []);
+    // Prepend newest entry
+    hist.unshift({
+      id:           Date.now(),
+      label,
+      mode,          // 'sheets' | 'xlsx' | 'csv' | 'json'
+      ordersFound:  ordersFound || 0,
+      rowsExported: rowsExported || safeRows.length,
+      rows:         safeRows,
+      syncedAt:     Date.now()
+    });
+    // Keep only last HIST_MAX entries
+    if (hist.length > HIST_MAX) hist.splice(HIST_MAX);
+    await chrome.storage.local.set({ [HIST_KEY]: hist });
+  } catch (e) {
+    console.warn('History save failed:', e);
+  }
+}
+
+// ── Load history array ────────────────────────────────────────────────────────────────
+
+async function loadHistory() {
+  try {
+    const data = await chrome.storage.local.get(HIST_KEY);
+    return data[HIST_KEY] || [];
+  } catch (_) { return []; }
+}
+
+async function deleteHistoryEntry(id) {
+  const hist = await loadHistory();
+  const updated = hist.filter(e => e.id !== id);
+  await chrome.storage.local.set({ [HIST_KEY]: updated });
+}
+
+async function clearHistory() {
+  await chrome.storage.local.remove(HIST_KEY);
+}
+
+// ── Render the history list into the DOM ────────────────────────────────────────────
+
+async function renderHistory() {
+  const listEl = $('histList');
+  if (!listEl) return;
+  const hist = await loadHistory();
+
+  if (hist.length === 0) {
+    listEl.innerHTML = `<div class="hist-empty"><div class="hist-empty-icon">\ud83d\udccb</div>No exports yet. Run an export and it will appear here.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = hist.map(entry => {
+    const d = new Date(entry.syncedAt);
+    const timeStr = d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    const modeClass = entry.mode === 'sheets' ? 'hist-mode-sheets' : entry.mode === 'xlsx' ? 'hist-mode-xlsx' : 'hist-mode-csv';
+    const modeLabel = entry.mode === 'sheets' ? '\ud83d\udcca Sheets' : entry.mode === 'xlsx' ? '\ud83d\udcca XLSX' : entry.mode === 'csv' ? '\ud83d\udcc4 CSV' : entry.mode.toUpperCase();
+    const hasRows   = entry.rows && entry.rows.length > 0;
+    const copyBtn   = hasRows ? `<button class="hist-btn green" data-action="copy" data-id="${entry.id}" title="Copy to clipboard (paste in Google Sheets)">\ud83d\udccb Copy</button>` : '';
+    const xlsxBtn   = hasRows ? `<button class="hist-btn purple" data-action="xlsx" data-id="${entry.id}">\ud83d\udcca XLSX</button>` : '';
+    const csvBtn    = hasRows ? `<button class="hist-btn" data-action="csv" data-id="${entry.id}">\ud83d\udcc4 CSV</button>` : '';
+    const noDataNote= !hasRows ? `<span style="font-size:10px;color:var(--muted);">(row data not stored for this export)</span>` : '';
+    return `
+      <div class="hist-entry" data-id="${entry.id}">
+        <div class="hist-entry-top">
+          <div>
+            <div class="hist-entry-label">${entry.label}</div>
+            <div class="hist-entry-time">${timeStr}</div>
+          </div>
+          <span class="hist-mode-badge ${modeClass}">${modeLabel}</span>
+        </div>
+        <div class="hist-stats"><strong>${entry.ordersFound}</strong> orders &mdash; <strong>${entry.rowsExported}</strong> rows</div>
+        <div class="hist-actions">
+          ${copyBtn}${xlsxBtn}${csvBtn}${noDataNote}
+          <button class="hist-btn red" data-action="delete" data-id="${entry.id}" title="Delete this entry">\ud83d\uddd1</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── History list event delegation ────────────────────────────────────────────────────
+
+document.getElementById('histList').addEventListener('click', async e => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const id     = Number(btn.dataset.id);
+  const hist   = await loadHistory();
+  const entry  = hist.find(h => h.id === id);
+  if (!entry) return;
+
+  if (action === 'copy') {
+    const columns = getSelectedColumns();
+    const includeHeaders = true;
+    const tsv = buildTSV(entry.rows, columns.length ? columns : SHEETS_ALL_COLS.map(c => c.key), includeHeaders);
+    const ok = await copyTextToClipboard(tsv);
+    setStatus(ok ? '\ud83d\udccb' : '\u26a0\ufe0f',
+      ok ? `${entry.rows.length} rows copied! Ctrl+V in Sheets.` : 'Clipboard write failed.',
+      ok ? 'success' : 'error');
+  }
+  else if (action === 'xlsx' || action === 'csv') {
+    chrome.runtime.sendMessage({ type: 'downloadFromHistory', rows: entry.rows, format: action });
+    setStatus('\u2b07\ufe0f', `Downloading ${action.toUpperCase()}\u2026`, 'info');
+  }
+  else if (action === 'delete') {
+    await deleteHistoryEntry(id);
+    renderHistory();
+  }
+});
+
+// Clear All
+$('histClearAll').addEventListener('click', async () => {
+  if (!confirm('Clear all export history?')) return;
+  await clearHistory();
+  renderHistory();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
