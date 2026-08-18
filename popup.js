@@ -54,6 +54,9 @@ let currentMode      = 'manual';
 let currentListTabId = null;
 let running          = false;
 
+// ── Clear badge whenever popup is opened ─────────────────────────────────────
+chrome.action.setBadgeText({ text: '' }).catch(() => {});
+
 // ── Date filter defaults ────────────────────────────────────────────
 function toLocalISO(d) {
   const pad = n => String(n).padStart(2, '0');
