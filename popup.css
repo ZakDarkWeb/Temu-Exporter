@@ -1,20 +1,13 @@
 /*
- * popup.css — v6.2 Design Refresh
+ * popup.css — v6.3 Design Refresh (SAFE version)
  * Supplements popup.html inline styles.
- * All additions are additive / override-based — no existing functionality broken.
+ * DOES NOT touch display/position/visibility of structural layout elements.
  */
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   1. DESIGN TOKEN OVERRIDES — Unify the green/blue palette
+   1. UNIFIED COLOR TOKENS
    ══════════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* Unify greens — #4ade80 and rgba(34,197,94) replaced by --primary family */
-  --c-green-text:   #34d399;     /* was #4ade80 in statusCheckBtn */
-  --c-green-border: rgba(16,185,129,0.4);
-  --c-green-bg-lo:  rgba(16,185,129,0.06);
-  --c-green-bg-hi:  rgba(16,185,129,0.15);
-
-  /* Status badge token colours */
   --badge-delivered-bg:  rgba(16,185,129,0.10);
   --badge-delivered-brd: rgba(16,185,129,0.32);
   --badge-delivered-txt: #34d399;
@@ -33,23 +26,20 @@
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   2. STATS DASHBOARD BAR — glassmorphism redesign + entrance animation
+   2. STATS DASHBOARD BAR — entrance animation only, no layout changes
    ══════════════════════════════════════════════════════════════════════════════ */
 .dash-bar {
-  background:    linear-gradient(180deg, rgba(16,185,129,0.04) 0%, rgba(0,0,0,0) 100%),
-                 rgba(255,255,255,0.025);
+  background: linear-gradient(180deg, rgba(16,185,129,0.05) 0%, rgba(0,0,0,0) 100%),
+              rgba(255,255,255,0.025);
   border-bottom: 1px solid rgba(16,185,129,0.12);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   padding: 8px 14px 9px;
   display: flex;
   gap: 0;
   overflow: hidden;
-  animation: dashBarReveal 0.45s cubic-bezier(0.16,1,0.3,1) both;
+  animation: dashBarReveal 0.4s cubic-bezier(0.16,1,0.3,1) both;
 }
-
 @keyframes dashBarReveal {
-  from { opacity: 0; transform: translateY(-6px); }
+  from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -60,9 +50,8 @@
   align-items: center;
   padding: 3px 8px;
   border-right: 1px solid rgba(255,255,255,0.07);
-  position: relative;
-  transition: background 0.2s;
   border-radius: 6px;
+  transition: background 0.2s;
 }
 .dash-cell:last-child { border-right: none; }
 .dash-cell:hover { background: rgba(255,255,255,0.03); }
@@ -70,33 +59,28 @@
 .dash-label {
   font-size: 8.5px;
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.5px;
   color: #475569;
   text-transform: uppercase;
   margin-bottom: 3px;
 }
-
 .dash-value {
   font-size: 14px;
   font-weight: 900;
   color: #f1f5f9;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
-  transition: color 0.4s, transform 0.3s;
 }
 .dash-value.green { color: #34d399; }
 .dash-value.blue  { color: #60a5fa; }
-
-/* Number count-up trigger animation */
 .dash-value.counting {
   animation: countPop 0.4s cubic-bezier(0.18,0.89,0.32,1.28) both;
 }
 @keyframes countPop {
-  0%   { transform: scale(0.7); opacity: 0.3; }
-  60%  { transform: scale(1.15); }
-  100% { transform: scale(1);  opacity: 1; }
+  0%   { transform: scale(0.75); opacity: 0.3; }
+  65%  { transform: scale(1.12); }
+  100% { transform: scale(1);    opacity: 1; }
 }
-
 .dash-loading {
   opacity: 0.3;
   font-size: 11px;
@@ -109,40 +93,24 @@
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   3. TAB CONTENT — smooth fade+slide transition (replaces instant display:none)
+   3. TAB CONTENT — animation on active only, NEVER touch display/position
    ══════════════════════════════════════════════════════════════════════════════ */
-
-/* FIX: contain the active tab's scale(1.02) inside the pill border */
-.mode-tabs {
-  overflow: hidden;
-}
-
-/* FIX: don't use position:absolute on inactive tabs — it breaks parent height.
-   Simply animate the .active state appearance. Inactive tabs stay display:none. */
-.tab-content {
-  display: none;          /* same as original */
-}
-
 .tab-content.active {
-  display: block;         /* same as original */
-  animation: tabReveal 0.28s cubic-bezier(0.16,1,0.3,1) both;
+  animation: tabReveal 0.25s cubic-bezier(0.16,1,0.3,1) both;
 }
-
 @keyframes tabReveal {
-  from { opacity: 0; transform: translateY(5px); }
+  from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-
 /* ══════════════════════════════════════════════════════════════════════════════
-   4. STATUS TRACKER SECTION — consistent with sheet buttons
+   4. STATUS TRACKER BUTTON — matches sheets-big-btn style
    ══════════════════════════════════════════════════════════════════════════════ */
 .status-tracker-section {
   margin-top: 14px;
   border-top: 1px solid rgba(255,255,255,0.06);
   padding-top: 12px;
 }
-
 .status-tracker-title {
   font-size: 10px;
   font-weight: 800;
@@ -154,7 +122,6 @@
   align-items: center;
   gap: 6px;
 }
-
 .status-tracker-sub {
   font-size: 10px;
   color: #475569;
@@ -162,12 +129,11 @@
   line-height: 1.45;
 }
 
-/* Redesigned status check button — now matches sheets-big-btn style */
 #statusCheckBtn {
   width: 100%;
   padding: 11px 16px;
   background: linear-gradient(135deg, #064e3b 0%, #065f46 100%);
-  border: 1px solid var(--c-green-border);
+  border: 1px solid rgba(16,185,129,0.4);
   border-radius: var(--r-lg);
   color: #fff;
   font-size: 12px;
@@ -184,16 +150,17 @@
   overflow: hidden;
   letter-spacing: 0.02em;
 }
-
-/* Shimmer on statusCheckBtn */
 #statusCheckBtn::after {
   content: '';
   position: absolute;
   top: 0; left: -100%; width: 60%; height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
-  animation: shimmer 2.8s infinite;
+  animation: shimmerBtn 2.8s infinite;
 }
-
+@keyframes shimmerBtn {
+  0%   { left: -100%; }
+  100% { left: 200%;  }
+}
 #statusCheckBtn:hover:not(:disabled) {
   background: linear-gradient(135deg, #065f46 0%, #047857 100%);
   transform: translateY(-1px);
@@ -201,13 +168,9 @@
   border-color: rgba(16,185,129,0.6);
 }
 #statusCheckBtn:active:not(:disabled) { transform: translateY(0); }
-#statusCheckBtn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none;
-}
+#statusCheckBtn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
-/* Loading spinner inside statusCheckBtn */
+/* Spinner inside status check button */
 #statusCheckBtn .sc-spinner {
   width: 14px; height: 14px;
   border: 2px solid rgba(255,255,255,0.2);
@@ -218,15 +181,17 @@
   flex-shrink: 0;
 }
 #statusCheckBtn.sc-loading .sc-spinner { display: block; }
-#statusCheckBtn.sc-loading .sc-icon   { display: none;  }
+#statusCheckBtn.sc-loading .sc-icon    { display: none;  }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   5. STATUS TABLE — staggered row entrance animations
+   5. STATUS RESULTS WRAP — slide-in when shown
    ══════════════════════════════════════════════════════════════════════════════ */
-.status-results-wrap {
-  margin-top: 10px;
-  display: none;
-  animation: fadeSlide 0.3s cubic-bezier(0.16,1,0.3,1) both;
+.status-results-wrap.visible {
+  animation: resultsReveal 0.3s cubic-bezier(0.16,1,0.3,1) both;
+}
+@keyframes resultsReveal {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .status-results-header {
@@ -235,7 +200,6 @@
   align-items: center;
   margin-bottom: 8px;
 }
-
 .status-results-title {
   font-size: 10px;
   font-weight: 700;
@@ -243,7 +207,7 @@
   line-height: 1.4;
 }
 
-/* CSV download button — enhanced */
+/* CSV button */
 .status-csv-btn {
   font-size: 9px;
   font-weight: 800;
@@ -254,22 +218,17 @@
   border: 1px solid rgba(99,102,241,0.3);
   color: #a5b4fc;
   font-family: inherit;
-  transition: all 0.18s cubic-bezier(0.4,0,0.2,1);
+  transition: all 0.18s;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  position: relative;
 }
 .status-csv-btn:hover:not(:disabled) {
   background: rgba(99,102,241,0.18);
   border-color: rgba(99,102,241,0.5);
   transform: translateY(-1px);
-  box-shadow: 0 3px 10px rgba(99,102,241,0.2);
 }
-.status-csv-btn:active:not(:disabled) { transform: translateY(0); }
 .status-csv-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* Spinner inside CSV btn */
 .status-csv-btn .csv-spinner {
   width: 9px; height: 9px;
   border: 1.5px solid rgba(165,180,252,0.3);
@@ -278,18 +237,19 @@
   display: none;
   animation: spin 0.65s linear infinite;
 }
-.status-csv-btn.csv-loading .csv-spinner    { display: block; }
-.status-csv-btn.csv-loading .csv-icon       { display: none;  }
-.status-csv-btn.csv-loading .csv-label      { opacity: 0.6;   }
+.status-csv-btn.csv-loading .csv-spinner { display: block; }
+.status-csv-btn.csv-loading .csv-icon   { display: none;  }
+.status-csv-btn.csv-loading .csv-label  { opacity: 0.6;   }
 
-/* Table container */
+/* ══════════════════════════════════════════════════════════════════════════════
+   6. STATUS TABLE — staggered row entrance
+   ══════════════════════════════════════════════════════════════════════════════ */
 .status-table-wrap {
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid rgba(255,255,255,0.06);
   overflow: hidden;
-  background: rgba(0,0,0,0.2);
+  background: rgba(0,0,0,0.18);
 }
-
 .status-table {
   width: 100%;
   border-collapse: collapse;
@@ -300,14 +260,12 @@
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.08) transparent;
 }
-
 .status-table thead {
   position: sticky;
   top: 0;
-  background: linear-gradient(180deg, #111827 0%, #0f1623 100%);
+  background: #111827;
   z-index: 1;
 }
-
 .status-table th {
   padding: 6px 8px;
   text-align: left;
@@ -319,33 +277,29 @@
   border-bottom: 1px solid rgba(255,255,255,0.06);
   white-space: nowrap;
 }
-
 .status-table td {
   padding: 6px 8px;
   border-bottom: 1px solid rgba(255,255,255,0.035);
   color: #cbd5e1;
   vertical-align: middle;
 }
-
 .status-table tr:last-child td { border-bottom: none; }
 
-/* Staggered row entrance — rows are given --ri CSS var in JS */
+/* Staggered row entrance via --ri CSS var set in JS */
 .status-table tbody tr {
   opacity: 0;
-  transform: translateX(-8px);
-  animation: rowSlideIn 0.3s cubic-bezier(0.16,1,0.3,1) forwards;
-  animation-delay: calc(var(--ri, 0) * 40ms);
+  animation: rowSlideIn 0.28s cubic-bezier(0.16,1,0.3,1) forwards;
+  animation-delay: calc(var(--ri, 0) * 35ms);
   transition: background 0.15s;
 }
 .status-table tbody tr:hover { background: rgba(255,255,255,0.025); }
-
 @keyframes rowSlideIn {
-  from { opacity: 0; transform: translateX(-8px); }
+  from { opacity: 0; transform: translateX(-6px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   6. STATUS BADGES — glow pulse per type, scale on status change
+   7. STATUS BADGES — glow pulses + entrance flash
    ══════════════════════════════════════════════════════════════════════════════ */
 .status-badge {
   display: inline-flex;
@@ -357,9 +311,7 @@
   font-weight: 800;
   white-space: nowrap;
   letter-spacing: 0.03em;
-  transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1),
-              box-shadow 0.3s ease,
-              background 0.4s ease;
+  transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1);
 }
 .status-badge:hover { transform: scale(1.06); }
 
@@ -370,7 +322,7 @@
   animation: glowDelivered 3s ease-in-out infinite;
 }
 @keyframes glowDelivered {
-  0%,100% { box-shadow: 0 0 0 0 transparent; }
+  0%,100% { box-shadow: none; }
   50%      { box-shadow: 0 0 8px rgba(16,185,129,0.3); }
 }
 
@@ -381,7 +333,7 @@
   animation: glowTransit 2.5s ease-in-out infinite;
 }
 @keyframes glowTransit {
-  0%,100% { box-shadow: 0 0 0 0 transparent; }
+  0%,100% { box-shadow: none; }
   50%      { box-shadow: 0 0 7px rgba(59,130,246,0.28); }
 }
 
@@ -392,7 +344,7 @@
   animation: glowWaiting 2s ease-in-out infinite;
 }
 @keyframes glowWaiting {
-  0%,100% { box-shadow: 0 0 0 0 transparent; }
+  0%,100% { box-shadow: none; }
   50%      { box-shadow: 0 0 7px rgba(251,191,36,0.25); }
 }
 
@@ -401,171 +353,68 @@
   border: 1px solid var(--badge-label-brd);
   color: var(--badge-label-txt);
 }
-
 .badge-unknown {
   background: var(--badge-unknown-bg);
   border: 1px solid var(--badge-unknown-brd);
   color: var(--badge-unknown-txt);
 }
-
-/* When a badge status changes — triggered via JS adding .badge-changed class */
 .status-badge.badge-changed {
-  animation: badgeFlash 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
+  animation: badgeFlash 0.45s cubic-bezier(0.34,1.56,0.64,1) both;
 }
 @keyframes badgeFlash {
   0%   { transform: scale(0.8); opacity: 0.4; }
-  60%  { transform: scale(1.18); }
-  100% { transform: scale(1); opacity: 1; }
+  65%  { transform: scale(1.15); }
+  100% { transform: scale(1);    opacity: 1; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   7. HISTORY ENTRIES — staggered slide-in on render
+   8. HISTORY ENTRIES — staggered entrance via --hi var
    ══════════════════════════════════════════════════════════════════════════════ */
 .hist-entry {
-  background: linear-gradient(160deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.015) 100%);
+  background: linear-gradient(160deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015));
   border: 1px solid rgba(255,255,255,0.07);
   border-radius: 14px;
   padding: 11px 13px;
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
-  /* Stagger: set --hi via JS */
   opacity: 0;
-  transform: translateY(6px);
-  animation: histEntryReveal 0.32s cubic-bezier(0.16,1,0.3,1) forwards;
+  animation: histEntryReveal 0.3s cubic-bezier(0.16,1,0.3,1) forwards;
   animation-delay: calc(var(--hi, 0) * 45ms);
 }
 .hist-entry:hover {
-  border-color: rgba(255,255,255,0.14);
+  border-color: rgba(255,255,255,0.13);
   box-shadow: 0 4px 16px rgba(0,0,0,0.2);
   transform: translateY(-1px);
 }
 @keyframes histEntryReveal {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(5px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
-/* Mode badges — refined */
 .hist-mode-badge {
-  font-size: 8.5px;
-  font-weight: 800;
-  padding: 2px 8px;
-  border-radius: 20px;
-  flex-shrink: 0;
-  margin-left: 6px;
+  font-size: 8.5px; font-weight: 800;
+  padding: 2px 8px; border-radius: 20px;
+  flex-shrink: 0; margin-left: 6px;
   letter-spacing: 0.03em;
 }
-
-/* History action buttons — refined hover */
 .hist-btn {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-family: inherit;
+  font-size: 10px; font-weight: 700;
+  padding: 4px 10px; border-radius: 8px;
+  cursor: pointer; font-family: inherit;
   border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.03);
-  color: #cbd5e1;
-  transition: all 0.18s cubic-bezier(0.4,0,0.2,1);
-  white-space: nowrap;
+  background: rgba(255,255,255,0.03); color: #cbd5e1;
+  transition: all 0.18s; white-space: nowrap;
 }
-.hist-btn:hover {
-  background: rgba(255,255,255,0.09);
-  border-color: rgba(255,255,255,0.18);
-  transform: translateY(-1px);
-}
+.hist-btn:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.18); transform: translateY(-1px); }
 .hist-btn:active { transform: translateY(0); }
-
-.hist-btn.green { border-color: rgba(16,185,129,0.35); color: #34d399; }
-.hist-btn.green:hover { background: rgba(16,185,129,0.1); box-shadow: 0 0 8px rgba(16,185,129,0.15); }
-
-.hist-btn.purple { border-color: rgba(99,102,241,0.35); color: #a5b4fc; }
+.hist-btn.green  { border-color: rgba(16,185,129,0.35); color: #34d399; }
+.hist-btn.green:hover  { background: rgba(16,185,129,0.1); }
+.hist-btn.purple { border-color: rgba(99,102,241,0.35);  color: #a5b4fc; }
 .hist-btn.purple:hover { background: rgba(99,102,241,0.1); }
-
-.hist-btn.red { border-color: rgba(248,113,113,0.25); color: #f87171; margin-left: auto; }
-.hist-btn.red:hover { background: rgba(248,113,113,0.09); }
+.hist-btn.red    { border-color: rgba(248,113,113,0.25);  color: #f87171; margin-left: auto; }
+.hist-btn.red:hover    { background: rgba(248,113,113,0.09); }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   8. BUTTON SPINNER — generic (reused across multiple buttons)
+   9. SHARED SPIN KEYFRAME
    ══════════════════════════════════════════════════════════════════════════════ */
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   9. PANEL / SECTION TRANSITIONS
-   ══════════════════════════════════════════════════════════════════════════════ */
-/* Status results wrap entrance */
-.status-results-wrap.visible {
-  display: block !important;
-  animation: resultsReveal 0.35s cubic-bezier(0.16,1,0.3,1) both;
-}
-@keyframes resultsReveal {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* Sheets result card entrance */
-.sheets-result {
-  animation: fadeIn 0.32s cubic-bezier(0.16,1,0.3,1) both !important;
-}
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-5px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   10. LIVE COUNTER — pulse while scanning
-   ══════════════════════════════════════════════════════════════════════════════ */
-#liveCounter {
-  display: none;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: #34d399;
-  padding: 6px 0;
-  animation: fadeSlide 0.3s ease both;
-}
-#liveCounter.visible { display: flex; }
-
-.live-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 8px rgba(16,185,129,0.6);
-  animation: pulseDot 1.2s ease-in-out infinite;
-  flex-shrink: 0;
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   11. MISCELLANEOUS CONSISTENCY FIXES
-   ══════════════════════════════════════════════════════════════════════════════ */
-
-/* Consistent cancel button colour */
-#cancelBtn {
-  background: rgba(244,63,94,0.08) !important;
-  border-color: rgba(244,63,94,0.25) !important;
-  color: #f87171 !important;
-}
-
-/* Stepper buttons active state */
-.stepper-btn:active { transform: scale(0.82) !important; }
-
-/* Quick-date buttons consistent active */
-.quick-date-btn { font-family: inherit; }
-
-/* Sheet last-sync info text */
-.sheets-last-sync { font-size: 9.5px; line-height: 1.5; }
-
-/* Status table: add wrapper for better scroll containment */
-#statusTable {
-  max-height: 210px;
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   12. RESPONSIVE REFINEMENTS  (popup max 400px)
-   ══════════════════════════════════════════════════════════════════════════════ */
-@media (max-width: 390px) {
-  .dash-label { font-size: 7.5px; letter-spacing: 0.3px; }
-  .dash-value { font-size: 12px; }
-  .mode-tab   { font-size: 9.5px; padding: 7px 2px; }
 }
