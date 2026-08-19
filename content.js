@@ -55,6 +55,7 @@
       border: 1px solid rgba(0, 212, 170, 0.25);
       border-radius: 16px;
       width: 228px;
+      max-height: 400px;
       overflow: hidden;
       box-shadow:
         0 0 0 1px rgba(0,212,170,0.07),
@@ -63,13 +64,13 @@
         inset 0 1px 0 rgba(255,255,255,0.04);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       -webkit-font-smoothing: antialiased;
-      transition: width 0.25s ease, height 0.25s ease, border-radius 0.25s ease;
+      transition: width 0.25s ease, max-height 0.3s ease, border-radius 0.25s ease;
     }
 
     /* ── MINIMIZED ─────────────────────────────────────────── */
     /* 'minimized' class is on .card itself, so use .card.minimized selectors */
     .card.minimized {
-      width: 44px; height: 44px; border-radius: 50%;
+      width: 44px; max-height: 44px; border-radius: 50%;
       border-color: rgba(0,212,170,0.55);
       box-shadow: 0 4px 24px rgba(0,0,0,0.8), 0 0 28px rgba(0,212,170,0.22);
       cursor: pointer;

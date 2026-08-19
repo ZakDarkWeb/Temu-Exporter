@@ -250,8 +250,17 @@
     cursor: pointer; font-family: inherit;
     position: relative;
     white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+    min-width: 0;
     transition: color 0.2s;
     letter-spacing: 0.1px;
+  }
+  /* Settings gear tab — fixed small width, not flex:1 */
+  #tabSettings {
+    flex: 0 0 34px;
+    font-size: 14px;
+    padding: 8px 4px 9px;
+    border-left: 1px solid var(--border);
   }
   .mode-tab::after {
     content: '';
@@ -270,6 +279,9 @@
   .mode-tab.active::after {
     left: 8%; right: 8%;
   }
+  #tabSettings::after { display: none; } /* no underline on gear tab */
+  #tabSettings.active { color: var(--accent); }
+
 
   /* ── TAB CONTENT ─────────────────────────────────────────── */
   .tab-content { display: none; flex-direction: column; gap: 8px; padding-top: 8px; }
