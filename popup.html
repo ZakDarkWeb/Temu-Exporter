@@ -7,7 +7,6 @@
   <title>Temu Order Exporter</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="popup.css">
   <style>
     /* ── Reset & Tokens ─────────────────────────────────────────────────────── */
     *,
@@ -2209,39 +2208,26 @@
         <!-- Status Tracker -->
         <div class="status-tracker-section">
           <div class="status-tracker-title">&#x1F69A; Delivery Status Tracker</div>
-          <div class="status-tracker-sub">Last 50 shipped orders ki delivery status check karo (background mein order detail pages scan karta hai)</div>
-          <button id="statusCheckBtn">
-            <span class="sc-spinner"></span>
-            <span class="sc-icon">&#x1F50D;</span>
-            Check Delivery Status (Last 50 Orders)
-          </button>
+          <div class="status-tracker-sub">Last 50 shipped orders ki delivery status check karo (order detail pages scan karta hai)</div>
+          <button id="statusCheckBtn">&#x1F50D; Check Delivery Status (Last 50 Orders)</button>
           <div class="status-results-wrap" id="statusResultsWrap">
             <div class="status-results-header">
               <span class="status-results-title" id="statusResultsTitle"></span>
-              <button class="status-csv-btn" id="statusCsvBtn">
-                <span class="csv-spinner"></span>
-                <span class="csv-icon">&#x2B07;</span>
-                <span class="csv-label">Download CSV</span>
-              </button>
+              <button class="status-csv-btn" id="statusCsvBtn">&#x2B07; Download CSV</button>
             </div>
-            <div class="status-table-wrap">
-              <table class="status-table" id="statusTable">
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Tracking</th>
-                    <th>Status</th>
-                    <th>Last Update</th>
-                  </tr>
-                </thead>
-                <tbody id="statusTableBody"></tbody>
-              </table>
-            </div>
+            <table class="status-table" id="statusTable">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Tracking</th>
+                  <th>Status</th>
+                  <th>Last Update</th>
+                </tr>
+              </thead>
+              <tbody id="statusTableBody"></tbody>
+            </table>
           </div>
         </div>
-
-
-      </div>
 
       </div>
 
