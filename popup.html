@@ -1127,7 +1127,113 @@
   }
   .settings-reset-btn:hover { background: rgba(239,68,68,0.12); }
 
-  /* ── UI POLISH v8.8 ────────────────────────────────────────── */
+  /* ── P0 SAVED BATCH CONSOLIDATION ──────────────────────────── */
+  .saved-batch-card {
+    width: 100%;
+    background: linear-gradient(145deg, rgba(0,212,170,0.10), rgba(17,24,39,0.98));
+    border: 1px solid rgba(0,212,170,0.30);
+    border-radius: var(--r-lg);
+    padding: 11px 12px 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.20);
+  }
+  .saved-batch-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .saved-batch-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 30px;
+    background: rgba(0,212,170,0.15);
+    border: 1px solid rgba(0,212,170,0.22);
+    font-size: 15px;
+  }
+  .saved-batch-heading {
+    flex: 1;
+    min-width: 0;
+  }
+  .saved-batch-title {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+  .saved-batch-meta {
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+  .saved-batch-status {
+    flex: 0 0 auto;
+    padding: 3px 7px;
+    border-radius: var(--r-full);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+  }
+  .saved-batch-status.ready { color: #05251d; background: var(--accent); }
+  .saved-batch-status.waiting { color: var(--muted); background: rgba(100,116,139,0.18); border: 1px solid var(--border2); }
+  .saved-batch-body {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    min-width: 0;
+  }
+  .saved-batch-count {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 66px;
+    min-width: 0;
+  }
+  .saved-batch-count strong {
+    color: var(--accent);
+    font-size: 20px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .saved-batch-count span {
+    color: var(--muted);
+    font-size: 8px;
+    font-weight: 700;
+    margin-top: 3px;
+    white-space: nowrap;
+  }
+  .saved-batch-export {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    padding: 0 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .saved-batch-export:disabled { opacity: .45; cursor: not-allowed; }
+  .saved-batch-clear {
+    flex: 0 0 auto;
+    height: 34px;
+    padding: 0 9px;
+    color: var(--muted);
+    font-size: 9px;
+  }
+  /* Keep legacy handlers available but remove their duplicate normal-UI controls. */
+  #restoreBanner,
+  #saveForLabelBtn,
+  #saveRunStatus,
+  #selDebugBox,
+  .sel-debug-btn { display: none !important; }
+
+  /* ── UI POLISH v8.9 ────────────────────────────────────────── */
   body {
     width: 390px;
     min-width: 390px;
@@ -1346,12 +1452,29 @@
     </div>
 
     <!-- Status -->
-    <div class="status idle" id="statusBox">
+    <div class="status success" id="statusBox">
       <span class="status-icon" id="statusIcon">&#x1F50D;</span>
       <span class="status-msg" id="statusMsg">Detecting page type&hellip;</span>
-    </div>
+      </div>
 
-    <!-- AUTO PANEL -->
+      <!-- Global Saved Batch workspace -->
+      <div class="saved-batch-card" id="lastBulkBanner" style="display:none;">
+        <div class="saved-batch-head">
+          <div class="saved-batch-icon">&#x1F4E6;</div>
+          <div class="saved-batch-heading">
+            <div class="saved-batch-title">Saved Label Batch</div>
+            <div class="saved-batch-meta" id="lastBulkMeta">Select orders on Unshipped before buying labels</div>
+          </div>
+          <span class="saved-batch-status" id="savedBatchStatus">Ready</span>
+        </div>
+        <div class="saved-batch-body">
+          <div class="saved-batch-count"><strong id="lastBulkCount">0</strong><span>orders saved</span></div>
+          <button class="btn-restore saved-batch-export" id="exportLastBulkBtn">&#x1F4CA; Export to Excel</button>
+          <button class="btn-clear-run saved-batch-clear" id="clearLastBulkBtn" title="Clear the saved batch and start a new one">New Batch</button>
+        </div>
+      </div>
+
+      <!-- AUTO PANEL -->
     <div id="autoPanel">
       <div class="panel-head">
         <div class="panel-head-dot"></div>
@@ -1362,7 +1485,7 @@
       <div class="mode-tabs" id="modeTabs">
         <button class="mode-tab active" id="tabPages"   data-tab="pages">&#x1F4C4; Pages</button>
         <button class="mode-tab"         id="tabDate"    data-tab="date">&#x1F4C5; Date</button>
-        <button class="mode-tab"         id="tabSelect"  data-tab="select">&#x2611; Select</button>
+        <button class="mode-tab"         id="tabSelect"  data-tab="select">&#x1F4E6; Saved Batch</button>
         <button class="mode-tab"         id="tabSheets"  data-tab="sheets">&#x1F4CA; Sheets</button>
         <button class="mode-tab"         id="tabHistory" data-tab="history">&#x1F552; History</button>
         <button class="mode-tab"         id="tabSettings" data-tab="settings">&#x2699;&#xFE0F;</button>
@@ -1462,7 +1585,7 @@
 
       <!-- TAB: By Selection -->
       <div class="tab-content" id="tabContentSelect">
-        <div class="tab-section-label">&#x2611; Tick orders on Temu page &mdash; extension auto-detects</div>
+        <div class="tab-section-label">&#x2611; Select orders on <strong>Unshipped</strong> &mdash; saving is automatic</div>
 
         <!-- LABEL SYNC: Restore Banner -->
         <div class="restore-banner" id="restoreBanner" style="display:none;">
@@ -1473,17 +1596,6 @@
           </div>
           <button class="btn-restore" id="restoreSelBtn">&#x1F501; Restore Selection</button>
           <button class="btn-clear-run" id="clearRunBtn" title="Clear label run">&times;</button>
-        </div>
-
-        <!-- Persistent latest bulk label purchase -->
-        <div class="restore-banner" id="lastBulkBanner" style="display:none; border-color:rgba(0,212,170,0.35);">
-          <div class="restore-info">
-            <span class="restore-count" id="lastBulkCount">0</span>
-            <span class="restore-label">saved label batch</span>
-            <span class="restore-saved-at" id="lastBulkMeta"></span>
-          </div>
-          <button class="btn-restore" id="exportLastBulkBtn">&#x1F4CA; Export Saved Batch (Excel)</button>
-          <button class="btn-clear-run" id="clearLastBulkBtn" title="Clear saved label batch">&times;</button>
         </div>
 
         <!-- Restore result feedback -->
@@ -1503,27 +1615,16 @@
           <button class="btn-clear-sel" id="clearSelBtn" disabled>&times; Clear All</button>
         </div>
 
-        <!-- LABEL SYNC: Save Button -->
-        <button class="btn-save-run" id="saveForLabelBtn" disabled title="Select orders first, then save for label run">
-          &#x1F4CB; Save Selection for Label Run
-        </button>
-        <div class="save-run-status" id="saveRunStatus"></div>
-
         <!-- Debug output (hidden by default) -->
         <div class="sel-debug-box" id="selDebugBox" style="display:none;">
           <div class="sel-debug-title">&#x1F50D; Debug Info (share this)</div>
           <pre class="sel-debug-pre" id="selDebugPre"></pre>
         </div>
 
-        <div class="sel-instructions">
-          <div class="sel-step">&#x2460; On <strong>Unshipped</strong> tab &mdash; tick orders &rarr; click
-            <strong>&ldquo;&#x1F4CB; Save for Label Run&rdquo;</strong></div>
-          <div class="sel-step">&#x2461; Buy labels in bulk, then switch to <strong>Shipped</strong> tab</div>
-          <div class="sel-step">&#x2462; Open popup &rarr; click <strong>&ldquo;&#x1F501; Restore
-              Selection&rdquo;</strong> per page</div>
-          <div class="sel-step">&#x2463; Click <strong>&ldquo;&#x2611; Export Selected&rdquo;</strong> below</div>
-          <div class="sel-note">&#x1F4A1; Or just tick orders directly here and export</div>
-          <button class="sel-debug-btn" id="debugDetectBtn">&#x1F50D; Debug Detection</button>
+        <div class="sel-instructions saved-batch-instructions">
+          <div class="sel-step">&#x2460; Select orders on Temu&rsquo;s <strong>Unshipped</strong> tab.</div>
+          <div class="sel-step">&#x2461; Buy labels normally; the saved batch stays available when orders move to Shipped.</div>
+          <div class="sel-step">&#x2462; Open this popup and click <strong>Export to Excel</strong>.</div>
         </div>
       </div>
 
@@ -1755,7 +1856,7 @@
             <label class="settings-toggle-row">
               <span class="settings-toggle-icon">&#x2611;</span>
               <span class="settings-toggle-label">Select Tab
-                <span class="settings-toggle-sub">Label run workflow</span>
+                <span class="settings-toggle-sub">Saved label workflow</span>
               </span>
               <input type="checkbox" class="tab-visibility-toggle" data-tab-target="select" id="visSelect" checked>
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
@@ -1781,7 +1882,7 @@
         <div class="settings-section">
           <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
           <div class="settings-about-card">
-            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.8</span></div>
+            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.9</span></div>
             <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
             <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
           </div>
@@ -1811,7 +1912,7 @@
 
   </div>
 
-  <div class="footer">v8.8 &middot; UI Polish &middot; Live DOM &middot; Auto-Retry</div>
+  <div class="footer">v8.9 &middot; Saved Batch &middot; UI Polish &middot; Auto-Retry</div>
 
   <script src="popup.js"></script>
 </body>

@@ -1385,6 +1385,7 @@ function checkLabelRun() {
 const lastBulkBanner = $('lastBulkBanner');
 const lastBulkCount  = $('lastBulkCount');
 const lastBulkMeta   = $('lastBulkMeta');
+const savedBatchStatus = $('savedBatchStatus');
 const exportLastBulkBtn = $('exportLastBulkBtn');
 const clearLastBulkBtn  = $('clearLastBulkBtn');
 
@@ -1392,19 +1393,30 @@ function checkLastBulkPurchase() {
   if (!lastBulkBanner) return;
   chrome.storage.local.get(['temuPrePurchaseBatch_v1'], data => {
     const record = data.temuPrePurchaseBatch_v1;
-    if (!record || !Array.isArray(record.orderUrls) || record.orderUrls.length === 0) {
-      lastBulkBanner.style.display = 'none';
+    lastBulkBanner.style.display = 'block';
+    const hasBatch = !!record && Array.isArray(record.orderUrls) && record.orderUrls.length > 0;
+    if (!hasBatch) {
+      if (lastBulkCount) lastBulkCount.textContent = '0';
+      if (lastBulkMeta) lastBulkMeta.textContent = 'Select orders on Unshipped before buying labels';
+      if (savedBatchStatus) savedBatchStatus.textContent = 'Waiting';
+      if (savedBatchStatus) savedBatchStatus.className = 'saved-batch-status waiting';
+      if (exportLastBulkBtn) { exportLastBulkBtn.disabled = true; exportLastBulkBtn.textContent = '📊 Export to Excel'; }
       return;
     }
-    lastBulkBanner.style.display = 'flex';
     if (lastBulkCount) lastBulkCount.textContent = record.orderUrls.length;
     if (lastBulkMeta) {
-      const task = 'Saved before label purchase';
       let when = '';
       try { when = new Date(record.savedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch (_) {}
-      lastBulkMeta.textContent = `${task}${when ? ' · ' + when : ''}`;
+      lastBulkMeta.textContent = `Saved before label purchase${when ? ' · ' + when : ''}`;
     }
-    if (exportLastBulkBtn) exportLastBulkBtn.disabled = false;
+    if (savedBatchStatus) { savedBatchStatus.textContent = 'Ready'; savedBatchStatus.className = 'saved-batch-status ready'; }
+    if (exportLastBulkBtn) { exportLastBulkBtn.disabled = false; exportLastBulkBtn.textContent = '📊 Export to Excel'; }
+  });
+}
+
+if (chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.temuPrePurchaseBatch_v1) checkLastBulkPurchase();
   });
 }
 
@@ -1414,7 +1426,7 @@ if (exportLastBulkBtn) {
     exportLastBulkBtn.textContent = '⏳ Exporting…';
     chrome.runtime.sendMessage({ type: 'exportPrePurchaseBatch' }, () => {
       if (chrome.runtime.lastError) {
-        setStatus('⚠️', 'Last bulk export failed', 'error');
+        setStatus('⚠️', 'Saved batch export failed', 'error');
         exportLastBulkBtn.disabled = false;
         exportLastBulkBtn.textContent = '📊 Export Excel';
       }
@@ -1426,7 +1438,8 @@ if (clearLastBulkBtn) {
   clearLastBulkBtn.addEventListener('click', () => {
     chrome.storage.local.remove(['temuPrePurchaseBatch_v1'], () => {
       checkLastBulkPurchase();
-      setStatus('✅', 'Saved label batch cleared', 'success');
+      setStatus('✅', 'New batch started — previous selection cleared', 'success');
+      if (savedBatchStatus) { savedBatchStatus.textContent = 'Waiting'; savedBatchStatus.className = 'saved-batch-status waiting'; }
     });
   });
 }
