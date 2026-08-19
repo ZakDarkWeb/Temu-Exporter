@@ -57,6 +57,7 @@
       width: 228px;
       max-height: 400px;
       overflow: hidden;
+      contain: paint;  /* clips ALL child visual overflow — glows, shadows, animations */
       box-shadow:
         0 0 0 1px rgba(0,212,170,0.07),
         0 12px 40px rgba(0,0,0,0.85),
@@ -179,11 +180,11 @@
     .btn-primary {
       background: linear-gradient(130deg, #00d4aa 0%, #00ba96 55%, #00a882 100%);
       color: #00170f;
-      box-shadow: 0 0 22px rgba(0,212,170,0.3), 0 3px 12px rgba(0,0,0,0.5);
+      box-shadow: 0 0 8px rgba(0,212,170,0.2), 0 3px 10px rgba(0,0,0,0.4);
     }
     .btn-primary:hover {
       transform: translateY(-2px);
-      box-shadow: 0 0 32px rgba(0,212,170,0.5), 0 6px 20px rgba(0,0,0,0.55);
+      box-shadow: 0 0 14px rgba(0,212,170,0.3), 0 5px 16px rgba(0,0,0,0.45);
     }
     .btn-primary:active { transform: scale(0.97); }
 
