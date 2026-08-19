@@ -1044,6 +1044,77 @@
     font-size: 10px !important; color: var(--muted2) !important; font-weight: 600 !important;
   }
 
+
+  /* ── SETTINGS TAB ────────────────────────────────────────── */
+  .settings-section {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 12px;
+  }
+  .settings-section-title {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.6px; color: var(--muted2);
+  }
+  .settings-desc {
+    font-size: 9px; color: var(--muted); line-height: 1.5;
+  }
+  .settings-toggle-list { display: flex; flex-direction: column; gap: 1px; }
+  .settings-toggle-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 6px; border-radius: var(--r-sm);
+    cursor: pointer; transition: background 0.15s;
+  }
+  .settings-toggle-row:hover { background: rgba(255,255,255,0.03); }
+  .settings-toggle-icon { font-size: 14px; flex-shrink: 0; width: 20px; text-align: center; }
+  .settings-toggle-label {
+    flex: 1; font-size: 11px; font-weight: 700; color: var(--text2);
+    display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  }
+  .settings-toggle-sub { font-size: 9px; font-weight: 500; color: var(--muted); }
+  .settings-toggle-row input[type="checkbox"] { display: none; }
+  .toggle-track {
+    width: 34px; height: 18px; border-radius: 9px; flex-shrink: 0;
+    background: var(--surface2); border: 1px solid var(--border2);
+    position: relative; transition: background 0.2s, border-color 0.2s;
+  }
+  .toggle-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--muted2); position: absolute;
+    top: 2px; left: 2px;
+    transition: transform 0.2s ease, background 0.2s;
+  }
+  .settings-toggle-row input:checked ~ .toggle-track {
+    background: rgba(0,212,170,0.18); border-color: rgba(0,212,170,0.5);
+  }
+  .settings-toggle-row input:checked ~ .toggle-track .toggle-thumb {
+    transform: translateX(16px); background: var(--accent);
+    box-shadow: 0 0 6px rgba(0,212,170,0.5);
+  }
+  .settings-toggle-row.tab-disabled .settings-toggle-label,
+  .settings-toggle-row.tab-disabled .settings-toggle-icon { opacity: 0.4; }
+
+  .settings-about-card {
+    background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+    border-radius: var(--r-md); overflow: hidden;
+  }
+  .settings-about-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; font-size: 10px; color: var(--muted2);
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-about-row:last-child { border-bottom: none; }
+  .settings-about-val { font-weight: 700; color: var(--text2); }
+  .settings-green { color: var(--accent) !important; }
+
+  .settings-reset-btn {
+    width: 100%; padding: 8px;
+    background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.2);
+    border-radius: var(--r-sm); color: #f87171;
+    font-size: 10px; font-weight: 700; cursor: pointer; font-family: inherit;
+    transition: all 0.15s;
+  }
+  .settings-reset-btn:hover { background: rgba(239,68,68,0.12); }
+
 </style>
 
 </head>
@@ -1136,6 +1207,7 @@
         <button class="mode-tab"         id="tabSelect"  data-tab="select">&#x2611; Select</button>
         <button class="mode-tab"         id="tabSheets"  data-tab="sheets">&#x1F4CA; Sheets</button>
         <button class="mode-tab"         id="tabHistory" data-tab="history">&#x1F552; History</button>
+        <button class="mode-tab"         id="tabSettings" data-tab="settings">&#x2699;&#xFE0F;</button>
       </div>
 
       <!-- TAB: By Pages -->
@@ -1488,6 +1560,65 @@
         </div>
       </div>
     </div>
+
+      <!-- TAB: Settings -->
+      <div class="tab-content" id="tabContentSettings">
+        <div class="settings-section">
+          <div class="settings-section-title">&#x1F441; Visible Tabs</div>
+          <div class="settings-desc">Toggle which tabs appear in the tab bar. Disabled tabs are hidden but not removed.</div>
+          <div class="settings-toggle-list">
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F4C4;</span>
+              <span class="settings-toggle-label">Pages Tab
+                <span class="settings-toggle-sub">Export by page range</span>
+              </span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="pages" id="visPages" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F4C5;</span>
+              <span class="settings-toggle-label">Date Tab
+                <span class="settings-toggle-sub">Export by date range</span>
+              </span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="date" id="visDate" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x2611;</span>
+              <span class="settings-toggle-label">Select Tab
+                <span class="settings-toggle-sub">Label run workflow</span>
+              </span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="select" id="visSelect" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F4CA;</span>
+              <span class="settings-toggle-label">Sheets Tab
+                <span class="settings-toggle-sub">Google Sheets sync</span>
+              </span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="sheets" id="visSheets" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F552;</span>
+              <span class="settings-toggle-label">History Tab
+                <span class="settings-toggle-sub">Past exports &amp; re-download</span>
+              </span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="history" id="visHistory" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
+          <div class="settings-about-card">
+            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.3</span></div>
+            <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
+            <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
+          </div>
+          <button class="settings-reset-btn" id="resetSettingsBtn">&#x21BA; Reset All Settings to Default</button>
+        </div>
+      </div>
 
     <!-- Live extraction counter (IMP 5) -->
     <div id="liveCounter" style="display:none; font-size:11px; color:var(--muted); text-align:center; margin-top:4px; letter-spacing:0.3px;"></div>

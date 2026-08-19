@@ -561,7 +561,8 @@ const tabContentMap = {
   date:   $('tabContentDate'),
   select: $('tabContentSelect'),
   sheets:  $('tabContentSheets'),
-  history: $('tabContentHistory')
+  history:  $('tabContentHistory'),
+  settings: $('tabContentSettings')
 };
 
 function getAutoBtnLabel() {
@@ -569,7 +570,8 @@ function getAutoBtnLabel() {
   if (activeTab === 'date')   return '🗓️ Start Date Export';
   if (activeTab === 'select') return '☑ Export Selected';
   if (activeTab === 'sheets')  return null; // own buttons
-  if (activeTab === 'history') return null; // no main action
+  if (activeTab === 'history')  return null;
+  if (activeTab === 'settings') return null;
   return '🚀 Start';
 }
 
@@ -613,6 +615,73 @@ chrome.storage.local.get('lastActiveTab', ({ lastActiveTab }) => {
     switchTab(lastActiveTab);
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SETTINGS MODULE v8.3 — Tab Visibility Toggles
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TAB_VIS_KEYS = ['pages', 'date', 'select', 'sheets', 'history'];
+const DEFAULT_VIS  = { pages: true, date: true, select: true, sheets: true, history: true };
+
+function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function applyTabVisibility(vis) {
+  TAB_VIS_KEYS.forEach(key => {
+    const btn = document.getElementById('tab' + capitalise(key));
+    const chk = document.getElementById('vis' + capitalise(key));
+    const isOn = vis[key] !== false;
+    if (btn) btn.style.display = isOn ? '' : 'none';
+    if (chk) {
+      chk.checked = isOn;
+      const row = chk.closest('.settings-toggle-row');
+      if (row) row.classList.toggle('tab-disabled', !isOn);
+    }
+  });
+  // If current tab was hidden, jump to first visible
+  if (vis[activeTab] === false) {
+    const first = TAB_VIS_KEYS.find(k => vis[k] !== false);
+    if (first) switchTab(first);
+  }
+}
+
+function loadTabVisibility() {
+  chrome.storage.local.get('tabVisibility', ({ tabVisibility }) => {
+    applyTabVisibility(Object.assign({}, DEFAULT_VIS, tabVisibility || {}));
+  });
+}
+
+document.querySelectorAll('.tab-visibility-toggle').forEach(chk => {
+  chk.addEventListener('change', () => {
+    const key = chk.dataset.tabTarget;
+    chrome.storage.local.get('tabVisibility', ({ tabVisibility }) => {
+      const vis = Object.assign({}, DEFAULT_VIS, tabVisibility || {});
+      vis[key] = chk.checked;
+      // Prevent hiding ALL tabs
+      if (!TAB_VIS_KEYS.some(k => vis[k] !== false)) { chk.checked = true; vis[key] = true; return; }
+      chrome.storage.local.set({ tabVisibility: vis });
+      applyTabVisibility(vis);
+    });
+  });
+});
+
+const resetSettingsBtn = $('resetSettingsBtn');
+if (resetSettingsBtn) {
+  resetSettingsBtn.addEventListener('click', () => {
+    chrome.storage.local.remove(['tabVisibility', 'lastActiveTab'], () => {
+      applyTabVisibility(DEFAULT_VIS);
+      // re-check all toggles
+      TAB_VIS_KEYS.forEach(k => {
+        const chk = document.getElementById('vis' + capitalise(k));
+        const row = chk && chk.closest('.settings-toggle-row');
+        if (chk) chk.checked = true;
+        if (row) row.classList.remove('tab-disabled');
+      });
+      switchTab('select');
+    });
+  });
+}
+
+loadTabVisibility();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HISTORY MODULE v6.0
