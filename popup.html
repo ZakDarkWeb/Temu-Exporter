@@ -1127,6 +1127,152 @@
   }
   .settings-reset-btn:hover { background: rgba(239,68,68,0.12); }
 
+  /* ── UI POLISH v8.8 ────────────────────────────────────────── */
+  body {
+    width: 390px;
+    min-width: 390px;
+    max-width: 390px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .body {
+    width: 100%;
+    padding: 12px 14px 14px;
+    gap: 10px;
+  }
+  .mode-tabs {
+    min-height: 44px;
+    align-items: stretch;
+  }
+  .mode-tab {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.15;
+    padding: 7px 3px 8px;
+  }
+  #tabSettings {
+    min-height: 44px;
+    flex-basis: 38px;
+  }
+  .tab-content {
+    width: 100%;
+    min-width: 0;
+    gap: 10px;
+  }
+  .tab-section-label,
+  .status-msg,
+  .date-mode-note,
+  .sel-instructions,
+  .sheets-hero-sub,
+  .settings-desc {
+    overflow-wrap: anywhere;
+  }
+  .page-range,
+  .date-range-card,
+  .restore-banner,
+  .sel-controls,
+  .format-row,
+  .speed-row {
+    width: 100%;
+    min-width: 0;
+  }
+  .page-range {
+    gap: 7px;
+  }
+  .page-field,
+  .date-field {
+    min-width: 0;
+  }
+  .stepper-input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .page-arrow {
+    flex: 0 0 18px;
+    text-align: center;
+  }
+  .format-row {
+    align-items: center;
+    gap: 10px;
+  }
+  .format-row label {
+    flex: 0 0 auto;
+  }
+  .format-row select {
+    min-width: 0;
+    height: 34px;
+  }
+  .speed-row {
+    min-height: 30px;
+    gap: 7px;
+  }
+  .speed-slider {
+    min-width: 60px;
+  }
+  #autoBtn,
+  #manualBtn,
+  #cancelBtn {
+    width: calc(100% - 28px);
+    min-width: 0;
+    margin-left: 14px !important;
+    margin-right: 14px !important;
+    flex-shrink: 0;
+  }
+  #autoBtn,
+  #manualBtn {
+    height: 46px;
+    padding: 0 44px;
+    line-height: 1.1;
+  }
+  #autoBtnTxt,
+  #manualBtnTxt {
+    display: block;
+    width: 100%;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    line-height: 1;
+  }
+  #cancelBtn {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 8px 12px;
+    line-height: 1.1;
+  }
+  .footer {
+    width: 100%;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted2);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.4;
+    letter-spacing: .1px;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  @media (max-width: 360px) {
+    body { width: 100%; min-width: 0; max-width: none; }
+    .mode-tab { font-size: 9px; padding-left: 2px; padding-right: 2px; }
+    .body { padding-left: 10px; padding-right: 10px; }
+    .speed-label { font-size: 10px; }
+    .speed-value { min-width: 48px; }
+  }
 </style>
 
 </head>
@@ -1635,7 +1781,7 @@
         <div class="settings-section">
           <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
           <div class="settings-about-card">
-            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.7</span></div>
+            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.8</span></div>
             <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
             <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
           </div>
@@ -1665,7 +1811,7 @@
 
   </div>
 
-  <div class="footer">v8.7 &middot; Live DOM Hardening &middot; Cancel &middot; Auto-Retry</div>
+  <div class="footer">v8.8 &middot; UI Polish &middot; Live DOM &middot; Auto-Retry</div>
 
   <script src="popup.js"></script>
 </body>

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.7
+// Temu Order Exporter — Content Script v8.8
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -303,7 +303,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.7 · Quick Export</div>
+          <div class="version">v8.8 · UI Polish</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
