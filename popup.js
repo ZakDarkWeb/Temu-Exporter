@@ -679,7 +679,7 @@ async function renderHistory() {
     return;
   }
 
-  listEl.innerHTML = hist.map(entry => {
+  listEl.innerHTML = hist.map((entry, hi) => {
     const d = new Date(entry.syncedAt);
     const timeStr = d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
     const modeClass = entry.mode === 'sheets' ? 'hist-mode-sheets' : entry.mode === 'xlsx' ? 'hist-mode-xlsx' : 'hist-mode-csv';
@@ -690,7 +690,7 @@ async function renderHistory() {
     const csvBtn    = hasRows ? `<button class="hist-btn" data-action="csv" data-id="${entry.id}">\ud83d\udcc4 CSV</button>` : '';
     const noDataNote= !hasRows ? `<span style="font-size:10px;color:var(--muted);">(row data not stored for this export)</span>` : '';
     return `
-      <div class="hist-entry" data-id="${entry.id}">
+      <div class="hist-entry" data-id="${entry.id}" style="--hi:${hi}">
         <div class="hist-entry-top">
           <div>
             <div class="hist-entry-label">${entry.label}</div>
@@ -1765,12 +1765,23 @@ function parseRevenue(str) {
   return isNaN(n) ? 0 : n;
 }
 
+// Animated number count-up (CSS keyframe fires on .counting class)
+function animateDashValue(el, finalText) {
+  if (!el) return;
+  el.textContent = finalText;
+  el.classList.remove('counting');
+  void el.offsetWidth; // force reflow to restart animation
+  el.classList.add('counting');
+  // Remove class after animation completes
+  setTimeout(() => el.classList.remove('counting'), 450);
+}
+
 async function computeStats() {
   try {
     const data = await chrome.storage.local.get('temuExportHistory');
     const hist  = data.temuExportHistory || [];
 
-    const now      = new Date();
+    const now        = new Date();
     const todayStart = new Date(now); todayStart.setHours(0,0,0,0);
     const weekStart  = new Date(now); weekStart.setDate(now.getDate()-7); weekStart.setHours(0,0,0,0);
 
@@ -1779,12 +1790,10 @@ async function computeStats() {
 
     hist.forEach(entry => {
       const rows = entry.rows || [];
-      if (!rows.length) return; // download-mode entries have no rows
-
+      if (!rows.length) return;
       const entryDate = new Date(entry.syncedAt);
       const isToday = entryDate >= todayStart;
       const isWeek  = entryDate >= weekStart;
-
       rows.forEach(row => {
         const rev = parseRevenue(row.estimatedRevenue);
         if (isToday) { todayOrders++; todayRev += rev; }
@@ -1792,15 +1801,15 @@ async function computeStats() {
       });
     });
 
-    // Format
-    const fmt = n => n === 0 ? '—' : '$' + n.toFixed(2);
+    const fmt  = n => n === 0 ? '—' : '$' + n.toFixed(2);
     const fmtN = n => n === 0 ? '—' : String(n);
+    const g = id => document.getElementById(id);
 
-    const el = id => document.getElementById(id);
-    if (el('dashTodayOrders'))  el('dashTodayOrders').textContent  = fmtN(todayOrders);
-    if (el('dashTodayRevenue')) el('dashTodayRevenue').textContent = fmt(todayRev);
-    if (el('dashWeekOrders'))   el('dashWeekOrders').textContent   = fmtN(weekOrders);
-    if (el('dashWeekRevenue'))  el('dashWeekRevenue').textContent  = fmt(weekRev);
+    // Stagger each cell's animation
+    setTimeout(() => animateDashValue(g('dashTodayOrders'),  fmtN(todayOrders)),   0);
+    setTimeout(() => animateDashValue(g('dashTodayRevenue'), fmt(todayRev)),        80);
+    setTimeout(() => animateDashValue(g('dashWeekOrders'),   fmtN(weekOrders)),    160);
+    setTimeout(() => animateDashValue(g('dashWeekRevenue'),  fmt(weekRev)),         240);
   } catch (e) {
     console.warn('Stats compute failed:', e);
     ['dashTodayOrders','dashTodayRevenue','dashWeekOrders','dashWeekRevenue'].forEach(id => {
