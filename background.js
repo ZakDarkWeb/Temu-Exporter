@@ -161,7 +161,37 @@ chrome.runtime.onMessage.addListener((msg) => {
       sendMsg({ type: 'error', message: 'Status check failed: ' + e.message });
     });
   }
+  // ── Content Script: Quick Export Today (from in-page floating panel) ─────────
+  if (msg.type === 'quickExport' || msg.type === 'quickSheetsSync') {
+    const sheetsMode = msg.type === 'quickSheetsSync';
+    // Find the active seller.temu.com tab to use as listTabId
+    chrome.tabs.query({ url: 'https://seller.temu.com/*', active: true }, async (tabs) => {
+      let listTab = tabs[0];
+      if (!listTab) {
+        // Fall back to any seller tab
+        const allTabs = await chrome.tabs.query({ url: 'https://seller.temu.com/*' });
+        listTab = allTabs[0];
+      }
+      if (!listTab) {
+        sendMsg({ type: 'error', message: 'No Temu seller tab found. Please navigate to seller.temu.com first.' });
+        return;
+      }
+      const fromDate = msg.fromDate || (() => { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString(); })();
+      const toDate   = msg.toDate   || new Date().toISOString();
+      runDateExport(
+        listTab.id,
+        fromDate,
+        toDate,
+        'xlsx',
+        1200,  // tabDelay
+        800,   // randExtra
+        999,   // maxPages
+        sheetsMode
+      ).catch(e => sendMsg({ type: 'error', message: 'Quick export failed: ' + e.message }));
+    });
+  }
 });
+
 
 // ── Status Tracker ─────────────────────────────────────────────────────────────
 //   Opens each order detail page in a hidden tab, reads delivery status, closes it.
