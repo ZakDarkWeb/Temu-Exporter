@@ -28,23 +28,20 @@
     return { fromDate: from.toISOString(), toDate: to.toISOString() };
   }
 
-  // ── Detect active tab (Shipped / Unshipped) ───────────────────────────────
+  // ── Detect active tab using URL only (NO DOM queries = zero overhead) ───────
   function isOnShippedTab() {
     const url = window.location.href;
+    // Must be on seller.temu.com
     if (!url.includes('seller.temu.com')) return false;
-    // Check active tab in page
-    const activeTabEl = document.querySelector(
-      '[class*="shipStatus"][class*="active"], ' +
-      '[class*="tab"][class*="active"][class*="shipped" i], ' +
-      'li.active a[href*="shipped" i], ' +
-      '.tab-item.active'
-    );
-    if (activeTabEl) {
-      const text = (activeTabEl.textContent || '').toLowerCase();
-      return text.includes('shipped') || text.includes('dispatch');
-    }
-    // Fallback: check URL params
-    return url.includes('ship_status=2') || url.includes('shipped') || url.includes('orders');
+    // Must be on an orders-related page
+    if (!url.includes('order') && !url.includes('orders')) return false;
+    return true;
+  }
+
+  function isOnOrdersPage() {
+    const url = window.location.href;
+    return url.includes('seller.temu.com') &&
+           (url.includes('order') || url.includes('manage') || url.includes('shipped'));
   }
 
   // ── Inject CSS (into main document, not shadow — panel uses inline styles) ─
@@ -456,20 +453,26 @@
     wireButtons();
 
     // Initial status based on page
-    if (!isOnShippedTab()) {
-      setStatus('ℹ️ Go to Shipped tab to export', '');
+    if (!isOnOrdersPage()) {
+      setStatus('ℹ️ Go to Orders tab to export', '');
+      panel.style.display = 'none';
     }
 
-    // Watch for tab changes (Temu is SPA)
-    const observer = new MutationObserver(() => {
-      if (isOnShippedTab()) {
-        if (!running) setStatus('✅ Shipped tab ready', 'ready');
-        setButtons(false);
+    // ── Watch for SPA navigation using URL polling (lightweight — no DOM scanning) ──
+    let _lastUrl = window.location.href;
+    setInterval(() => {
+      const currentUrl = window.location.href;
+      if (currentUrl === _lastUrl) return; // URL hasn't changed — do nothing
+      _lastUrl = currentUrl;
+      // URL changed: update panel visibility and status
+      if (isOnOrdersPage()) {
+        panel.style.display = '';
+        if (!running) setStatus('✅ Orders page ready', 'ready');
       } else {
-        if (!running) setStatus('ℹ️ Go to Shipped tab to export', '');
+        // Hide panel on non-order pages (e.g. product listings, settings)
+        panel.style.display = 'none';
       }
-    });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    }, 3000); // Check every 3 seconds — negligible CPU cost
   }
 
   // ── Wait for DOM ready ────────────────────────────────────────────────────
