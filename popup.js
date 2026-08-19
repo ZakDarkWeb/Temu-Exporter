@@ -1868,15 +1868,15 @@ function renderStatusTable(results) {
   const tbody = document.getElementById('statusTableBody');
   if (!tbody) return;
 
-  tbody.innerHTML = results.map(r => {
+  tbody.innerHTML = results.map((r, i) => {
     const { cls, icon, label } = mapStatus(r.status);
     const orderShort = (r.orderId || r.url?.split('parent_order_sn=')[1]?.split('&')[0] || '?').slice(-12);
     const trackShort = (r.tracking || '—').slice(-15);
     const dateShort  = (r.lastDate || '—').replace(/ PKT.*/, '').replace(/ UTC.*/, '');
-    return `<tr>
+    return `<tr style="--ri:${i}">
       <td title="${r.orderId || ''}">${orderShort}</td>
       <td>${trackShort}</td>
-      <td><span class="status-badge ${cls}">${icon} ${label}</span></td>
+      <td><span class="status-badge ${cls} badge-changed">${icon} ${label}</span></td>
       <td>${dateShort}</td>
     </tr>`;
   }).join('');
@@ -1886,8 +1886,8 @@ function renderStatusTable(results) {
 async function startStatusCheck() {
   const btn  = document.getElementById('statusCheckBtn');
   const wrap = document.getElementById('statusResultsWrap');
-  if (btn) { btn.disabled = true; btn.textContent = '🔄 Collecting order URLs…'; }
-  if (wrap) wrap.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.classList.add('sc-loading'); }
+  if (wrap) { wrap.style.display = 'none'; wrap.classList.remove('visible'); }
 
   const urls = await collectOrderUrlsFromHistory(STATUS_MAX_ORDERS);
   if (urls.length === 0) {
@@ -1906,7 +1906,7 @@ async function startStatusCheck() {
 chrome.runtime.onMessage.addListener(msg => {
   if (msg.type === 'statusProgress') {
     const btn = document.getElementById('statusCheckBtn');
-    if (btn) btn.textContent = `🔄 Scanning ${msg.done} / ${msg.total}…`;
+    if (btn) { btn.classList.add('sc-loading'); btn.textContent = `🔄 Scanning ${msg.done} / ${msg.total}…`; }
   }
   if (msg.type === 'statusCheckReady') {
     const btn  = document.getElementById('statusCheckBtn');
@@ -1940,8 +1940,11 @@ const statusCheckBtnEl = document.getElementById('statusCheckBtn');
 if (statusCheckBtnEl) statusCheckBtnEl.addEventListener('click', startStatusCheck);
 
 // CSV download from status results
-document.getElementById('statusCsvBtn').addEventListener('click', () => {
+document.getElementById('statusCsvBtn').addEventListener('click', function() {
   if (!_statusResults.length) return;
+  const csvBtn = this;
+  csvBtn.disabled = true;
+  csvBtn.classList.add('csv-loading');
   const rows = [['Order ID', 'Tracking', 'Status', 'Last Event', 'Last Date', 'Courier', 'Product']];
   _statusResults.forEach(r => {
     rows.push([r.orderId||'', r.tracking||'', r.status||'', r.lastEvent||'', r.lastDate||'', r.courier||'', r.product||'']);
@@ -1951,4 +1954,5 @@ document.getElementById('statusCsvBtn').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = url; a.download = 'temu_delivery_status.csv';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => { csvBtn.disabled = false; csvBtn.classList.remove('csv-loading'); }, 1000);
 });
