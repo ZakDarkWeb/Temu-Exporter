@@ -548,8 +548,6 @@
     _lastUrl = cur;
     host.style.display = isOnOrdersPage() ? '' : 'none';
     if (isOnOrdersPage() && !running) setStatus('Ready to export', 's-ready');
-    // Check if navigated to task detail page
-    if (isOnTaskDetailPage()) initLabelBatchExport();
   }, 3000);
 
   // Initial visibility
