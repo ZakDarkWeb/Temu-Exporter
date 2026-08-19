@@ -52,7 +52,7 @@
     /* ── CARD ───────────────────────────────────────────────── */
     .card {
       background: #0d1117;
-      border: 1px solid rgba(0,212,170,0.3);
+      border: 1px solid rgba(0, 212, 170, 0.25);
       border-radius: 16px;
       width: 228px;
       overflow: hidden;
@@ -63,23 +63,30 @@
         inset 0 1px 0 rgba(255,255,255,0.04);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       -webkit-font-smoothing: antialiased;
+      transition: width 0.25s ease, height 0.25s ease, border-radius 0.25s ease;
     }
 
-    /* ── MINIMIZED ──────────────────────────────────────────── */
-    .minimized .card {
+    /* ── MINIMIZED ─────────────────────────────────────────── */
+    /* 'minimized' class is on .card itself, so use .card.minimized selectors */
+    .card.minimized {
       width: 44px; height: 44px; border-radius: 50%;
       border-color: rgba(0,212,170,0.55);
       box-shadow: 0 4px 24px rgba(0,0,0,0.8), 0 0 28px rgba(0,212,170,0.22);
       cursor: pointer;
     }
-    .minimized .body,
-    .minimized .title,
-    .minimized .actions,
-    .minimized .header-line { display: none !important; }
-    .minimized .header {
+    .card.minimized .body,
+    .card.minimized .title-wrap,
+    .card.minimized .actions,
+    .card.minimized .header-line { display: none !important; }
+    .card.minimized .header {
       height: 44px; padding: 0; justify-content: center; cursor: pointer;
     }
-    .minimized .logo { width: 22px; height: 22px; font-size: 13px; }
+    .card.minimized .logo {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: rgba(0,212,170,0.12);
+      border-color: rgba(0,212,170,0.4);
+    }
+    .card.minimized .logo svg { width: 16px; height: 16px; }
 
     /* ── HEADER ─────────────────────────────────────────────── */
     .header {
@@ -472,20 +479,25 @@
 
   // ── Minimize ──────────────────────────────────────────────────────────────
   const minBtn = $('minBtn');
+  const cardEl = wrapper.firstElementChild; // the .card div
+
+  function setMinimized(val) {
+    minimized = val;
+    cardEl.classList.toggle('minimized', minimized);
+    if (minBtn) minBtn.textContent = minimized ? '+' : '—';
+  }
+
   if (minBtn) {
     minBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      minimized = !minimized;
-      wrapper.firstElementChild.classList.toggle('minimized', minimized);
-      minBtn.textContent = minimized ? '+' : '—';
+      setMinimized(!minimized);
     });
   }
-  // Click minimized to expand
-  host.addEventListener('click', () => {
+  // Click anywhere on minimized card to expand
+  cardEl.addEventListener('click', (e) => {
     if (minimized) {
-      minimized = false;
-      wrapper.firstElementChild.classList.remove('minimized');
-      if (minBtn) minBtn.textContent = '—';
+      e.stopPropagation();
+      setMinimized(false);
     }
   });
 
