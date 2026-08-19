@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.5
+// Temu Order Exporter — Content Script v8.7
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -318,6 +318,7 @@
 
         <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
         <button class="btn btn-outline" id="btnSheets">📊 Sheets Sync Today</button>
+        <button class="btn btn-outline" id="btnLastBulk">📦 Last Bulk Purchase</button>
 
         <div class="progress-card" id="progressCard" style="display:none;">
           <div class="progress-row">
@@ -373,7 +374,7 @@
   }
 
   function setButtons(disabled) {
-    [$('btnExport'), $('btnSheets')].forEach(b => {
+    [$('btnExport'), $('btnSheets'), $('btnLastBulk')].forEach(b => {
       if (b) { b.disabled = disabled; if (disabled) b.setAttribute('disabled',''); else b.removeAttribute('disabled'); }
     });
   }
@@ -401,6 +402,64 @@
     el.textContent = text;
     el.style.display = 'block';
     setTimeout(() => { el.style.display = 'none'; }, 6000);
+  }
+
+  function visibleTextElements(text) {
+    return [...document.querySelectorAll('button,[role="button"],div,span')].filter(el => {
+      if ((el.textContent || '').replace(/\s+/g, ' ').trim() !== text) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    });
+  }
+
+  function hasBulkRecordsModal() {
+    const body = document.body?.innerText || '';
+    return /Buy\s+shipping\s+records/i.test(body) && visibleTextElements('View details').length > 0;
+  }
+
+  function refreshLastBulkButton() {
+    const btn = $('btnLastBulk');
+    if (!btn) return;
+    chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
+      const record = data.temuLastBulkPurchase_v1;
+      if (hasBulkRecordsModal()) {
+        btn.textContent = '📦 Capture Latest Bulk Task';
+        btn.title = 'Open the newest successful task details and replace the saved batch';
+      } else if (record?.rows?.length) {
+        btn.textContent = `📊 Export Last Bulk Purchase (${record.rows.length})`;
+        btn.title = `Task ${record.taskId || 'unknown'} · captured ${record.capturedAt || ''}`;
+      } else {
+        btn.textContent = '📦 Last Bulk Purchase';
+        btn.title = 'Open Buy shipping records, then use this button';
+      }
+    });
+  }
+
+  function handleLastBulkClick() {
+    const btn = $('btnLastBulk');
+    if (!btn) return;
+    chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
+      const record = data.temuLastBulkPurchase_v1;
+      const view = hasBulkRecordsModal() ? visibleTextElements('View details')[0] : null;
+      if (view) {
+        setStatus('Opening latest bulk task...', 's-running');
+        view.click();
+        return;
+      }
+      if (record?.rows?.length) {
+        setStatus('Exporting last bulk purchase...', 's-running');
+        chrome.runtime.sendMessage({ type: 'exportLastBulkPurchase', format: 'xlsx' });
+        return;
+      }
+      if (view) {
+        setStatus('Opening latest bulk task...', 's-running');
+        view.click();
+      } else {
+        setStatus('Open Buy shipping records first', 's-error');
+        showResult('Open the Buy shipping records window, then click this button again.');
+        setTimeout(() => setStatus('Ready to export', 's-ready'), 4500);
+      }
+    });
   }
 
   // ── Start export ──────────────────────────────────────────────────────────
@@ -476,6 +535,27 @@
       setStatus('Cancelled', 's-error');
       setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
     }
+    if (msg.type === 'lastBulkPurchaseCaptured') {
+      setStatus('Saving latest bulk purchase...', 's-running');
+      showResult(`📦 Task ${msg.taskId || ''} captured — enriching order details...`);
+      refreshLastBulkButton();
+    }
+    if (msg.type === 'lastBulkPurchaseReady') {
+      setStatus(`Last bulk purchase ready (${msg.count || 0})`, 's-done');
+      showResult(`✅ Last bulk purchase saved: ${msg.count || 0} rows`);
+      refreshLastBulkButton();
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 7000);
+    }
+    if (msg.type === 'lastBulkPurchaseExported') {
+      setStatus('Last bulk purchase exported', 's-done');
+      showResult(`✅ Excel downloaded: ${msg.count || 0} rows`);
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 5000);
+    }
+    if (msg.type === 'lastBulkPurchaseError') {
+      setStatus((msg.message || 'Last bulk purchase error').slice(0, 48), 's-error');
+      showResult('⚠️ ' + (msg.message || 'Last bulk purchase error'));
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 6000);
+    }
   });
 
   // ── Dragging (on host element directly) ──────────────────────────────────
@@ -532,6 +612,9 @@
     } else if (id === 'btnSheets') {
       if (!minimized && !running) startExport(true);
       else if (minimized) setMinimized(false);
+    } else if (id === 'btnLastBulk') {
+      if (!minimized && !running) handleLastBulkClick();
+      else if (minimized) setMinimized(false);
     } else if (id === 'btnCancel') {
       // Visual flash to confirm click registered
       btn.style.background = 'rgba(239,68,68,0.25)';
@@ -554,6 +637,8 @@
 
   // Initial visibility
   if (!isOnOrdersPage()) host.style.display = 'none';
+  refreshLastBulkButton();
+  setInterval(refreshLastBulkButton, 2000);
 
 })();
 
@@ -567,21 +652,42 @@
   const MODAL_ID = '__temu_label_batch_modal__';
 
   function isOnTaskDetailPage() {
-    return window.location.href.includes('seller.temu.com') &&
-      /task[-_]?detail|taskDetail|task_detail/i.test(window.location.href);
+    if (!window.location.href.includes('seller.temu.com')) return false;
+    const urlLooksLikeTask = /task[-_]?detail|taskDetail|task_detail|shipping[-_]?label|label[-_]?task|shipping[-_]?record/i.test(window.location.href);
+    if (!urlLooksLikeTask) return false;
+    const body = document.body?.innerText || '';
+    return /Order\s*(?:No|number|ID)|Tracking\s*number|View\s*details/i.test(body);
   }
 
   function extractTaskId() {
     // Try URL path: /task-detail/TK-xxxxxx or ?taskId=TK-xxx
-    const m = window.location.href.match(/TK-[\w\d]+/i) ||
-              window.location.href.match(/task[-_]?id[=\/]([\w\d-]+)/i);
-    return m ? m[0] : '';
+    const direct = window.location.href.match(/TK-[\w\d]+/i);
+    if (direct) return direct[0].toUpperCase();
+    const keyed = window.location.href.match(/task[-_]?id[=\/]([\w\d-]+)/i);
+    if (keyed) return keyed[1].match(/TK-[\w\d]+/i)?.[0] || keyed[1];
+    const bodyMatch = (document.body?.innerText || '').match(/Task\s*ID\s*:?\s*(TK-[\w\d-]+)/i);
+    return bodyMatch ? bodyMatch[1].toUpperCase() : '';
+  }
+
+  function extractSubmittedAt() {
+    const text = document.body?.innerText || '';
+    const m = text.match(/(?:Submission\s*time|Submitted\s*at|Purchase\s*time)\s*:?\s*([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:am|pm)\s*(?:[A-Z]{2,5}(?:\(UTC[+\-]?\d+\))?)?)/i);
+    return m ? m[1].replace(/\s+/g, ' ').trim() : new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function extractTaskCounts() {
+    const text = document.body?.innerText || '';
+    const read = pattern => Number((text.match(pattern) || [])[1] || 0);
+    const processedCount = read(/Number\s+of\s+records\s+processed[^\d]*(\d+)/i);
+    const successCount = read(/Number\s+of\s+successful\s+records[^\d]*(\d+)/i);
+    const errorCount = read(/Number\s+of\s+records\s+with\s+errors[^\d]*(\d+)/i);
+    return { processedCount, successCount, errorCount };
   }
 
   // ── Scrape orders from the "View details" table ───────────────────────────
-  function scrapeOrders(taskId) {
+  function scrapeOrders(taskId, submittedAt) {
     const orders = [];
-    const today  = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const labelDate = submittedAt || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
     // Find table — try multiple selectors since Temu uses dynamic class names
     const table = document.querySelector('table') ||
@@ -630,7 +736,7 @@
         trackingNumber: getText(idx.tracking),
         shippingService: getText(idx.service),
         shippingCost: getText(idx.cost).replace(/\$/g, '').trim(),
-        labelDate: today,
+        labelDate,
         taskId
       });
     });
@@ -821,15 +927,27 @@
     const ready = await waitForTable(12000);
     if (!ready) {
       // Show modal even if table not found (0 orders)
+      chrome.runtime.sendMessage({ type: 'lastBulkPurchaseError', message: 'Task detail table was not available.' });
       showModal([], taskId);
       return;
     }
 
     // Extra wait for React to finish rendering rows
     await new Promise(r => setTimeout(r, 800));
+    const submittedAt = extractSubmittedAt();
+    const taskCounts = extractTaskCounts();
 
-    const orders = scrapeOrders(taskId);
-    showModal(orders, taskId);
+      const orders = scrapeOrders(taskId, submittedAt);
+      chrome.runtime.sendMessage({
+        type: 'captureLastBulkPurchase',
+        taskId,
+        submittedAt,
+        processedCount: taskCounts.processedCount || orders.length,
+        successCount: taskCounts.successCount || orders.length,
+        errorCount: taskCounts.errorCount,
+        orders
+      });
+      showModal(orders, taskId);
   }
 
   // ── Run on page load ──────────────────────────────────────────────────────

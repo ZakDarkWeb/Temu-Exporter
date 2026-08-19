@@ -16,6 +16,9 @@ const PARALLEL_BATCH  = 1;    // Process tabs one-by-one: more reliable, no retr
 const MAX_RETRIES     = 3;
 const RETRY_DELAY_MS  = 1500;
 const TAB_LOAD_TIMEOUT = 15000; // 15s per tab load (reduced from 30s)
+const LAST_BULK_KEY   = 'temuLastBulkPurchase_v1';
+const MAX_BULK_ORDERS = 100;
+const lastBulkJobs    = new Map();
 
 // ── Cancel flag — set by cancelExport message, checked in every batch loop ────
 let cancelRequested = false;
@@ -108,6 +111,142 @@ function saveState(msg) {
 
 function clearState() {
   chrome.storage.session.set({ running: false, lastMsg: null }).catch(() => {});
+}
+
+function cleanBulkCell(value, max = 500) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function safeBulkTaskId(value) {
+  const match = String(value || '').match(/TK-[A-Z0-9_-]+/i);
+  return match ? match[0].toUpperCase() : '';
+}
+
+function safeBulkOrderNumber(value) {
+  const match = String(value || '').match(/PO-\d+-\d{8,}/i);
+  return match ? match[0].toUpperCase() : '';
+}
+
+function normalizeBulkSeedRows(orders, taskId) {
+  return (Array.isArray(orders) ? orders : []).slice(0, MAX_BULK_ORDERS).map(order => ({
+    labelPurchasedDate: cleanBulkCell(order.labelDate || order.labelPurchasedDate),
+    shippingDate: cleanBulkCell(order.shippingDate),
+    orderDate: cleanBulkCell(order.orderDate),
+    trackingNumber: cleanBulkCell(order.trackingNumber, 120),
+    orderNumber: safeBulkOrderNumber(order.orderNumber || order.orderNo),
+    customerName: cleanBulkCell(order.customerName, 160),
+    productDetails: cleanBulkCell(order.productDetails, 500),
+    qty: cleanBulkCell(order.qty, 30),
+    estimatedRevenue: cleanBulkCell(order.estimatedRevenue, 40),
+    shippingCost: cleanBulkCell(order.shippingCost, 40),
+    taskId
+  })).filter(row => row.orderNumber);
+}
+
+async function getLastBulkRecord() {
+  const data = await chrome.storage.local.get(LAST_BULK_KEY);
+  return data[LAST_BULK_KEY] || null;
+}
+
+async function setLastBulkRecord(record) {
+  await chrome.storage.local.set({ [LAST_BULK_KEY]: record });
+}
+
+async function enrichLastBulkRecord(seedRows) {
+  const records = [];
+  for (const seed of seedRows) {
+    let tab = null;
+    const url = 'https://seller.temu.com/order-detail.html?parent_order_sn=' + encodeURIComponent(seed.orderNumber);
+    try {
+      tab = await chrome.tabs.create({ url, active: false });
+      await waitForTabLoad(tab.id);
+      const result = await processTabWithRetry(tab, 0);
+      if (result.ok && result.data) {
+        records.push({ ...result.data, labelPurchasedDate: seed.labelPurchasedDate });
+      } else {
+        records.push({
+          orderNumber: seed.orderNumber,
+          recipientName: seed.customerName,
+          purchaseDate: seed.orderDate,
+          labelPurchasedDate: seed.labelPurchasedDate,
+          shippingCost: seed.shippingCost,
+          estimatedRevenue: seed.estimatedRevenue,
+          products: [{ title: seed.productDetails, variant: '', qty: seed.qty }],
+          packages: [{ trackingNumber: seed.trackingNumber, shipmentDate: seed.shippingDate }]
+        });
+      }
+    } catch (_) {
+      records.push({
+        orderNumber: seed.orderNumber,
+        recipientName: seed.customerName,
+        purchaseDate: seed.orderDate,
+        labelPurchasedDate: seed.labelPurchasedDate,
+        shippingCost: seed.shippingCost,
+        estimatedRevenue: seed.estimatedRevenue,
+        products: [{ title: seed.productDetails, variant: '', qty: seed.qty }],
+        packages: [{ trackingNumber: seed.trackingNumber, shipmentDate: seed.shippingDate }]
+      });
+    } finally {
+      if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+    }
+  }
+  const rows = flattenToRows(records);
+  return rows.length > 0 ? rows : seedRows;
+}
+
+async function captureLastBulkPurchase(msg) {
+  const taskId = safeBulkTaskId(msg.taskId);
+  const seedRows = normalizeBulkSeedRows(msg.orders, taskId);
+  if (!taskId || seedRows.length === 0) throw new Error('No valid task ID or order rows were found.');
+
+  const current = await getLastBulkRecord();
+  if (current?.taskId === taskId && current.status === 'ready') {
+    sendMsg({ type: 'lastBulkPurchaseReady', taskId, count: current.rows?.length || 0, status: current.status });
+    return;
+  }
+  if (lastBulkJobs.has(taskId)) return;
+
+  const record = {
+    version: 1,
+    taskId,
+    submittedAt: cleanBulkCell(msg.submittedAt, 80),
+    capturedAt: new Date().toISOString(),
+    status: Number(msg.errorCount) > 0 ? 'partial' : 'enriching',
+    processedCount: Number(msg.processedCount) || seedRows.length,
+    successCount: Number(msg.successCount) || seedRows.length,
+    errorCount: Number(msg.errorCount) || 0,
+    source: 'task_detail',
+    rows: seedRows
+  };
+  await setLastBulkRecord(record);
+  sendMsg({ type: 'lastBulkPurchaseCaptured', taskId, count: seedRows.length, status: record.status });
+
+  const job = (async () => {
+    const rows = await enrichLastBulkRecord(seedRows);
+    const ready = { ...record, rows, rowCount: rows.length, status: 'ready', enrichedAt: new Date().toISOString() };
+    await setLastBulkRecord(ready);
+    sendMsg({ type: 'lastBulkPurchaseReady', taskId, count: rows.length, status: ready.status });
+    return ready;
+  })();
+  lastBulkJobs.set(taskId, job);
+  try { await job; } finally { lastBulkJobs.delete(taskId); }
+}
+
+async function exportLastBulkPurchase(format = 'xlsx') {
+  let record = await getLastBulkRecord();
+  if (!record || !Array.isArray(record.rows) || record.rows.length === 0) {
+    throw new Error('No captured bulk purchase is available yet. Open the task details page first.');
+  }
+  const job = lastBulkJobs.get(record.taskId);
+  if (job) {
+    try { await job; } catch (_) {}
+    record = await getLastBulkRecord() || record;
+  }
+  const safeTask = safeBulkTaskId(record.taskId) || 'unknown-task';
+  const base = `temu_last_bulk_purchase_${safeTask}_${record.rows.length}orders`;
+  const result = format === 'csv' ? generateCSV(record.rows, base) : generateXLSX(record.rows, base);
+  await chrome.downloads.download({ url: result.dataUrl, filename: result.filename });
+  sendMsg({ type: 'lastBulkPurchaseExported', taskId: record.taskId, count: record.rows.length, filename: result.filename });
 }
 
 // ── Message router ─────────────────────────────────────────────────────────────
@@ -218,6 +357,20 @@ chrome.runtime.onMessage.addListener((msg) => {
       console.error('[Temu Exporter] exportLabelBatch error:', e);
       sendMsg({ type: 'error', message: 'Label batch export failed: ' + e.message });
     }
+  }
+
+  // ── Last Bulk Purchase: persist, enrich, and export the newest task ──────────
+  if (msg.type === 'captureLastBulkPurchase') {
+    captureLastBulkPurchase(msg).catch(e => {
+      console.error('[Temu Exporter] last bulk capture failed:', e);
+      sendMsg({ type: 'lastBulkPurchaseError', message: 'Last bulk purchase capture failed: ' + e.message });
+    });
+  }
+  if (msg.type === 'exportLastBulkPurchase') {
+    exportLastBulkPurchase(msg.format || 'xlsx').catch(e => {
+      console.error('[Temu Exporter] last bulk export failed:', e);
+      sendMsg({ type: 'lastBulkPurchaseError', message: 'Last bulk purchase export failed: ' + e.message });
+    });
   }
 
   // Popup asking for current state on open

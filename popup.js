@@ -302,11 +302,13 @@ async function init() {
       currentListTabId = tab.id;
       showAutoMode(true);
       checkLabelRun();
+      checkLastBulkPurchase();
     } else if (pageType === 'orders-other') {
       currentMode      = 'auto';
       currentListTabId = tab.id;
       showAutoMode(false);
       checkLabelRun();
+      checkLastBulkPurchase();
     } else {
       currentMode = 'manual';
       await scanManualTabs();
@@ -605,7 +607,7 @@ function switchTab(tab) {
   // IMP 8: remember last used tab
   chrome.storage.local.set({ lastActiveTab: tab }).catch(() => {});
   // Update selection count if switching to select tab
-  if (tab === 'select') { startSelectionPolling(); checkLabelRun(); }
+  if (tab === 'select') { startSelectionPolling(); checkLabelRun(); checkLastBulkPurchase(); }
   else stopSelectionPolling();
   // Load sheets last sync info when switching to sheets tab
   if (tab === 'sheets')  loadSheetsLastSync();
@@ -1359,6 +1361,57 @@ function checkLabelRun() {
   });
 }
 
+// ── Last Bulk Purchase — persistent latest successful task ───────────────────
+
+const lastBulkBanner = $('lastBulkBanner');
+const lastBulkCount  = $('lastBulkCount');
+const lastBulkMeta   = $('lastBulkMeta');
+const exportLastBulkBtn = $('exportLastBulkBtn');
+const clearLastBulkBtn  = $('clearLastBulkBtn');
+
+function checkLastBulkPurchase() {
+  if (!lastBulkBanner) return;
+  chrome.storage.local.get(['temuLastBulkPurchase_v1'], data => {
+    const record = data.temuLastBulkPurchase_v1;
+    if (!record || !Array.isArray(record.rows) || record.rows.length === 0) {
+      lastBulkBanner.style.display = 'none';
+      return;
+    }
+    lastBulkBanner.style.display = 'flex';
+    if (lastBulkCount) lastBulkCount.textContent = record.rows.length;
+    if (lastBulkMeta) {
+      const task = record.taskId ? `Task ${record.taskId}` : 'Latest task';
+      let when = '';
+      try { when = new Date(record.capturedAt || record.submittedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch (_) {}
+      lastBulkMeta.textContent = `${task}${when ? ' · ' + when : ''}`;
+    }
+    if (exportLastBulkBtn) exportLastBulkBtn.disabled = false;
+  });
+}
+
+if (exportLastBulkBtn) {
+  exportLastBulkBtn.addEventListener('click', () => {
+    exportLastBulkBtn.disabled = true;
+    exportLastBulkBtn.textContent = '⏳ Exporting…';
+    chrome.runtime.sendMessage({ type: 'exportLastBulkPurchase', format: 'xlsx' }, () => {
+      if (chrome.runtime.lastError) {
+        setStatus('⚠️', 'Last bulk export failed', 'error');
+        exportLastBulkBtn.disabled = false;
+        exportLastBulkBtn.textContent = '📊 Export Excel';
+      }
+    });
+  });
+}
+
+if (clearLastBulkBtn) {
+  clearLastBulkBtn.addEventListener('click', () => {
+    chrome.storage.local.remove(['temuLastBulkPurchase_v1'], () => {
+      checkLastBulkPurchase();
+      setStatus('✅', 'Last bulk purchase cleared', 'success');
+    });
+  });
+}
+
 // ── Label Sync — Restore Selection ──────────────────────────────────────────
 
 const restoreSelBtn = $('restoreSelBtn');
@@ -2017,6 +2070,36 @@ chrome.runtime.onMessage.addListener(msg => {
         setStatus('❌', 'Status check result parse failed: ' + e.message, 'error');
       }
     });
+  }
+});
+
+// Last Bulk Purchase events can arrive while the popup is open; the persistent
+// storage record remains the source of truth when the popup is reopened.
+chrome.runtime.onMessage.addListener(msg => {
+  if (!msg) return;
+  if (msg.type === 'lastBulkPurchaseCaptured') {
+    checkLastBulkPurchase();
+    setStatus('📦', `Saving last bulk purchase (${msg.count || 0} rows)…`, 'info');
+  }
+  if (msg.type === 'lastBulkPurchaseReady') {
+    checkLastBulkPurchase();
+    setStatus('✅', `Last bulk purchase ready (${msg.count || 0} rows)`, 'success');
+  }
+  if (msg.type === 'lastBulkPurchaseExported') {
+    checkLastBulkPurchase();
+    if (exportLastBulkBtn) {
+      exportLastBulkBtn.disabled = false;
+      exportLastBulkBtn.textContent = '📊 Export Excel';
+    }
+    setStatus('✅', `Excel downloaded: ${msg.count || 0} rows`, 'success');
+  }
+  if (msg.type === 'lastBulkPurchaseError') {
+    checkLastBulkPurchase();
+    if (exportLastBulkBtn) {
+      exportLastBulkBtn.disabled = false;
+      exportLastBulkBtn.textContent = '📊 Export Excel';
+    }
+    setStatus('⚠️', (msg.message || 'Last bulk purchase failed').slice(0, 90), 'error');
   }
 });
 
