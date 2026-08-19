@@ -419,10 +419,26 @@
   }
 
   function cancelExport() {
-    chrome.runtime.sendMessage({ type: 'cancelExport' });
-    running = false; setButtons(false); showProgress(false);
-    setStatus('Export cancelled', 's-error');
-    setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+    // Reset UI immediately — don't wait for background response
+    running = false;
+    setButtons(false);
+    showProgress(false);
+    setStatus('Cancelling...', 's-running');
+
+    // Send cancel to background — try-catch in case service worker is sleeping
+    try {
+      chrome.runtime.sendMessage({ type: 'cancelExport' }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn('[Temu Exporter] Cancel message error:', chrome.runtime.lastError.message);
+        }
+        setStatus('Export cancelled', 's-error');
+        setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+      });
+    } catch (err) {
+      console.warn('[Temu Exporter] cancelExport failed:', err);
+      setStatus('Export cancelled', 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+    }
   }
 
   // ── Message listener ──────────────────────────────────────────────────────
@@ -484,34 +500,45 @@
   document.addEventListener('mouseup', () => { dragging = false; host.style.transition = ''; });
 
   // ── Minimize ──────────────────────────────────────────────────────────────
-  const minBtn = $('minBtn');
   const cardEl = wrapper.firstElementChild; // the .card div
 
   function setMinimized(val) {
     minimized = val;
     cardEl.classList.toggle('minimized', minimized);
-    if (minBtn) minBtn.textContent = minimized ? '+' : '—';
+    const mb = $('minBtn');
+    if (mb) mb.textContent = minimized ? '+' : '—';
   }
 
-  if (minBtn) {
-    minBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      setMinimized(!minimized);
-    });
-  }
-  // Click anywhere on minimized card to expand
-  cardEl.addEventListener('click', (e) => {
-    if (minimized) {
-      e.stopPropagation();
-      setMinimized(false);
+  // ── ALL button events via single shadow-root delegation ───────────────────
+  // Using delegation on shadow root is more reliable than individual listeners
+  // in Shadow DOM — catches clicks even through composed event paths
+  shadow.addEventListener('click', (e) => {
+    // Find the actual button that was clicked (handle clicks on child elements too)
+    const btn = e.target.closest('button');
+    if (!btn) {
+      // Click on card background: expand if minimized
+      if (minimized) setMinimized(false);
+      return;
     }
-  });
 
-  // ── Wire action buttons ───────────────────────────────────────────────────
-  const btnE = $('btnExport'), btnS = $('btnSheets'), btnC = $('btnCancel');
-  if (btnE) btnE.addEventListener('click', () => startExport(false));
-  if (btnS) btnS.addEventListener('click', () => startExport(true));
-  if (btnC) btnC.addEventListener('click', cancelExport);
+    const id = btn.id;
+    e.stopPropagation(); // prevent Temu page handlers
+
+    if (id === 'minBtn') {
+      setMinimized(!minimized);
+    } else if (id === 'btnExport') {
+      if (!minimized && !running) startExport(false);
+      else if (minimized) setMinimized(false);
+    } else if (id === 'btnSheets') {
+      if (!minimized && !running) startExport(true);
+      else if (minimized) setMinimized(false);
+    } else if (id === 'btnCancel') {
+      // Visual flash to confirm click registered
+      btn.style.background = 'rgba(239,68,68,0.25)';
+      setTimeout(() => { btn.style.background = ''; }, 200);
+      cancelExport();
+    }
+  }, true); // useCapture:true — fires before any other handler
 
   // ── SPA navigation watcher (URL-based, 3s poll) ───────────────────────────
   let _lastUrl = window.location.href;
