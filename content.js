@@ -653,10 +653,15 @@
 
   function isOnTaskDetailPage() {
     if (!window.location.href.includes('seller.temu.com')) return false;
-    const urlLooksLikeTask = /task[-_]?detail|taskDetail|task_detail|shipping[-_]?label|label[-_]?task|shipping[-_]?record/i.test(window.location.href);
-    if (!urlLooksLikeTask) return false;
     const body = document.body?.innerText || '';
-    return /Order\s*(?:No|number|ID)|Tracking\s*number|View\s*details/i.test(body);
+    // The records modal can contain Task IDs and tracking text from the
+    // underlying orders page, so it must always win over URL heuristics.
+    if (/Buy\s+shipping\s+records/i.test(body)) return false;
+    const url = window.location.href;
+    const urlLooksLikeTask = /task[-_]?detail|taskDetail|task_detail|shipping[-_]?label|label[-_]?task|shipping[-_]?record/i.test(url);
+    const hasTaskId = /TK-[\w\d-]+/i.test(url) || /Task\s*ID\s*:?\s*TK-[\w\d-]+/i.test(body);
+    if (!hasTaskId) return false;
+    return urlLooksLikeTask || /Order\s*(?:No|number|ID)|Tracking\s*number/i.test(body);
   }
 
   function extractTaskId() {
@@ -750,8 +755,9 @@
       const start = Date.now();
       const check = () => {
         const tbl = document.querySelector('table') || document.querySelector('[class*="table"]');
-        const rows = tbl?.querySelectorAll('tbody tr');
-        if (rows && rows.length > 0) { resolve(true); return; }
+        const rows = tbl ? [...tbl.querySelectorAll('tbody tr')] : [];
+        const hasOrderRows = rows.some(row => /PO-\d+-\d{8,}/i.test(row.textContent || ''));
+        if (hasOrderRows) { resolve(true); return; }
         if (Date.now() - start > maxMs) { resolve(false); return; }
         setTimeout(check, 600);
       };
