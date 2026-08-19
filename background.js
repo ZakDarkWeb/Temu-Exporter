@@ -268,16 +268,34 @@ chrome.runtime.onMessage.addListener((msg) => {
 //   Opens each order detail page in a hidden tab, reads delivery status, closes it.
 //   DOM selectors confirmed from live seller.temu.com/order-detail.html page.
 
+// Status checks may receive URLs from extension storage or runtime messages.
+// Keep the navigation boundary explicit: only authenticated Temu order-detail
+// pages are valid targets for this feature.
+function isAllowedTemuOrderUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ''));
+    const orderId = url.searchParams.get('parent_order_sn') || '';
+    return url.protocol === 'https:' &&
+      url.hostname === 'seller.temu.com' &&
+      url.pathname === '/order-detail.html' &&
+      /^PO-\d+-\d{8,}$/i.test(orderId);
+  } catch (_) {
+    return false;
+  }
+}
+
 async function runStatusCheck(orderUrls) {
-  if (!orderUrls || orderUrls.length === 0) {
-    sendMsg({ type: 'statusCheckReady', results: [], error: 'No order URLs provided.' });
+  const candidates = Array.isArray(orderUrls) ? orderUrls : [];
+  const safeUrls = [...new Set(candidates.filter(isAllowedTemuOrderUrl))].slice(0, 50);
+  if (safeUrls.length === 0) {
+    sendMsg({ type: 'statusCheckReady', results: [], error: 'No valid Temu order-detail URLs provided.' });
     return;
   }
-  sendMsg({ type: 'statusProgress', done: 0, total: orderUrls.length });
+  sendMsg({ type: 'statusProgress', done: 0, total: safeUrls.length });
 
   const results = [];
-  for (let i = 0; i < orderUrls.length; i++) {
-    const url = orderUrls[i];
+  for (let i = 0; i < safeUrls.length; i++) {
+    const url = safeUrls[i];
     let tab;
     try {
       tab = await chrome.tabs.create({ url, active: false });
@@ -304,22 +322,67 @@ async function runStatusCheck(orderUrls) {
             const el = document.querySelector(sel);
             return el ? el.textContent.trim() : (fallback || '');
           }
+          function ownText(el) {
+            return [...(el?.childNodes || [])]
+              .filter(n => n.nodeType === 3)
+              .map(n => n.textContent.trim())
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+          }
+          // Live Temu pages keep useful semantic labels while hashed class names
+          // change. Read the value beside a label as a fallback.
+          function valueAfterLabel(label) {
+            const wanted = String(label).toLowerCase();
+            const els = [...document.querySelectorAll('div,span,td,th,p')];
+            for (const el of els) {
+              if (ownText(el).toLowerCase() !== wanted) continue;
+              const sibling = el.nextElementSibling;
+              if (sibling && sibling.textContent.trim()) return sibling.textContent.trim();
+              const parent = el.parentElement;
+              if (parent) {
+                const children = [...parent.children];
+                const index = children.indexOf(el);
+                const next = index >= 0 ? children[index + 1] : null;
+                if (next && next.textContent.trim()) return next.textContent.trim();
+              }
+            }
+            return '';
+          }
+          const bodyText = document.body?.innerText || '';
           // Order ID from breadcrumb / page title area
-          const orderId   = txt('._2k6GgcRG ._1KnTNdCB span') || txt('._2k6GgcRG span:last-child') || '';
-          // Product name
-          const product   = txt('._3A964f3j') || txt('._1NCZ7KPp .elli_outerWrapper_123') || '';
-          // Tracking number
-          const tracking  = txt('._2GydpeUD ._1KnTNdCB span') || '';
-          // Main delivery status (e.g. "Shipped", "Waiting for pickup")
-          const statusMain = txt('._2Vn1-Twz._24ZwUHjY') || txt('._2mobrKj6') || '';
-          // Package-level status
-          const pkgStatus  = txt('._2mobrKj6._zuJsGkxq') || txt('._2mobrKj6') || '';
-          // Latest timeline event text
-          const timelineEvent = txt('._dHI0jzvQ ._2-A9xoFi div') || txt('.TLE_itemDotDefault_123._TLE_itemDotDefaultCurrent_123 ~ .TLE_itemBody_123 .TLE_itemTitle_123') || '';
-          // Latest timeline date
-          const timelineDate = txt('._2UwizOIL') || txt('._1ZFc1gJB') || '';
-          // Courier name
-          const courier = txt('._2OTvT66D') || '';
+          const orderId = txt('._2k6GgcRG ._1KnTNdCB span') ||
+            txt('._2k6GgcRG span:last-child') || valueAfterLabel('Order ID');
+          // Product name: live detail pages expose a stable table ellipsis marker,
+          // but its textContent can include an injected style snippet. Prefer a
+          // cleaned candidate and reject obvious metadata-only values.
+          function cleanProductText(value) {
+            return String(value || '')
+              .replace(/\.beast-core-ellipsis-\d+\s*\{[^}]*\}/gi, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+          }
+          const productCandidates = [
+            ...document.querySelectorAll('[data-testid="beast-core-ellipsis"]'),
+            ...document.querySelectorAll('._3A964f3j, ._1NCZ7KPp .elli_outerWrapper_123')
+          ].map(el => cleanProductText(el.textContent))
+            .filter(value => value.length > 5 && !/^(Goods ID|SKU ID|Order item ID|Seller|Shipped|Pending)$/i.test(value));
+          const product = productCandidates.find(value => !/Goods ID|SKU ID|Order item ID|Base price|Retail price/i.test(value)) ||
+            productCandidates[0] || '';
+          // Tracking number and courier: use current hashed selectors first, then labels.
+          const tracking = txt('._2GydpeUD ._1KnTNdCB span') || valueAfterLabel('Tracking number');
+          const courier = txt('._2OTvT66D') || valueAfterLabel('Courier');
+          // Main/package status. The live page currently uses text such as
+          // "Waiting for pickup" and "Shipped" rather than a stable class.
+          const statusMain = txt('._2Vn1-Twz._24ZwUHjY') || txt('._2mobrKj6') ||
+            (bodyText.match(/\b(Delivered|Shipped|In transit|Waiting for pickup|Label created|Unshipped|Pending)\b/i) || [])[1] || '';
+          const pkgStatus = txt('._2mobrKj6._zuJsGkxq') || txt('._2mobrKj6') || statusMain;
+          // Latest timeline event/date, with semantic fallbacks for live pages.
+          const timelineEvent = txt('._dHI0jzvQ ._2-A9xoFi div') ||
+            txt('.TLE_itemDotDefault_123._TLE_itemDotDefaultCurrent_123 ~ .TLE_itemBody_123 .TLE_itemTitle_123') ||
+            txt('[data-testid="beast-core-timeline-timeLineItem"]') || '';
+          const timelineDate = txt('._2UwizOIL') || txt('._1ZFc1gJB') ||
+            valueAfterLabel('Shipment confirmed at') || '';
           return {
             orderId:   orderId.replace(/\s+/g, ' ').trim(),
             product:   product.slice(0, 50),
@@ -341,7 +404,7 @@ async function runStatusCheck(orderUrls) {
     } finally {
       if (tab) chrome.tabs.remove(tab.id).catch(() => {});
     }
-    sendMsg({ type: 'statusProgress', done: i + 1, total: orderUrls.length });
+    sendMsg({ type: 'statusProgress', done: i + 1, total: safeUrls.length });
     // Small gap between tabs
     if (i < orderUrls.length - 1) await new Promise(r => setTimeout(r, 600));
   }
@@ -499,7 +562,7 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
         func: function() {
           var baseUrl = window.location.origin + '/order-detail.html';
           var rows = [];
-          document.querySelectorAll('tr').forEach(function(tr) {
+          document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"], tr[class*="TB_tr_123"], tr').forEach(function(tr) {
             if (tr.querySelector('th')) return;
             var text = tr.textContent || '';
             var snMatch = text.match(/(PO-\d+-\d{9,})/);
@@ -590,11 +653,14 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
 
 async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExtra = 1000) {
   cancelRequested = false;
-  if (!selectedUrls || selectedUrls.length === 0) {
+  const safeUrls = Array.isArray(selectedUrls)
+    ? [...new Set(selectedUrls.filter(isAllowedTemuOrderUrl))].slice(0, 100)
+    : [];
+  if (safeUrls.length === 0) {
     sendMsg({ type: 'noData', failedCount: 0 });
     return;
   }
-  await _processBatchAndExport(selectedUrls, format, tabDelay, randExtra, false, '', '', selectedUrls.length, null);
+  await _processBatchAndExport(safeUrls, format, tabDelay, randExtra, false, '', '', safeUrls.length, null);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -896,7 +962,7 @@ async function getOrderLinksFromListTab(tabId) {
 
           // Strategy 2: Extract PO numbers from table rows
           if (links.length === 0) {
-            document.querySelectorAll('tr').forEach(function(tr) {
+            document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"], tr[class*="TB_tr_123"], tr').forEach(function(tr) {
               if (tr.querySelector('th')) return;
               var text = tr.textContent || '';
               var m = text.match(/(PO-\d+-\d{8,})/);
@@ -938,7 +1004,7 @@ async function waitForListPageChange(tabId, previousFirstUrl) {
         target: { tabId },
         func: function() {
           var ids = [];
-          document.querySelectorAll('tr').forEach(function(tr) {
+          document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"], tr[class*="TB_tr_123"], tr').forEach(function(tr) {
             if (tr.querySelector('th')) return;
             var text = tr.textContent || '';
             var m = text.match(/(PO-\d+-\d{8,})/);

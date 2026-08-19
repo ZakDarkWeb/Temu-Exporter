@@ -178,17 +178,26 @@ function setStep(stage) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function showFailBox(count, orderNumbers = []) {
   if (!count) { failBox.style.display = 'none'; return; }
   // orderNumbers is now an array of PO-xxx strings (not full URLs)
   const items = orderNumbers.slice(0, 8).map(sn =>
-    `<code style="font-size:10px;color:#ef4444;display:block;margin-top:2px">${sn}</code>`
+    `<code style="font-size:10px;color:#ef4444;display:block;margin-top:2px">${escapeHtml(sn)}</code>`
   );
   failBox.style.display = 'block';
   failBox.innerHTML =
-    `⚠️ <strong>${count} order${count > 1 ? 's' : ''} permanently failed</strong> after all retries — check manually:` +
+    `⚠️ <strong>${escapeHtml(count)} order${count > 1 ? 's' : ''} permanently failed</strong> after all retries — check manually:` +
     (items.length ? `<div style="margin-top:4px">${items.join('')}</div>` : '') +
-    (count > 8 ? `<div style="font-size:10px;color:#9ca3af;margin-top:2px">…and ${count - 8} more</div>` : '');
+    (count > 8 ? `<div style="font-size:10px;color:#9ca3af;margin-top:2px">…and ${escapeHtml(count - 8)} more</div>` : '');
 }
 
 function calcEstimate() {
@@ -1944,16 +1953,16 @@ function renderStatusTable(results) {
   const tbody = document.getElementById('statusTableBody');
   if (!tbody) return;
 
-  tbody.innerHTML = results.map((r, i) => {
+  tbody.innerHTML = results.map((r) => {
     const { cls, icon, label } = mapStatus(r.status);
     const orderShort = (r.orderId || r.url?.split('parent_order_sn=')[1]?.split('&')[0] || '?').slice(-12);
     const trackShort = (r.tracking || '—').slice(-15);
     const dateShort  = (r.lastDate || '—').replace(/ PKT.*/, '').replace(/ UTC.*/, '');
     return `<tr>
-      <td title="${r.orderId || ''}">${orderShort}</td>
-      <td>${trackShort}</td>
-      <td><span class="status-badge ${cls}">${icon} ${label}</span></td>
-      <td>${dateShort}</td>
+      <td title="${escapeHtml(r.orderId || '')}">${escapeHtml(orderShort)}</td>
+      <td>${escapeHtml(trackShort)}</td>
+      <td><span class="status-badge ${escapeHtml(cls)}">${icon} ${escapeHtml(label)}</span></td>
+      <td>${escapeHtml(dateShort)}</td>
     </tr>`;
   }).join('');
 }

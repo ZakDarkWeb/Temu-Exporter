@@ -303,7 +303,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.5 · Quick Export</div>
+          <div class="version">v8.7 · Quick Export</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -660,6 +660,12 @@
 
     const orderCount = orders.length;
     const previewOrders = orders.slice(0, 3);
+    const escapeHtml = value => String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
 
     const modal = document.createElement('div');
     modal.id = MODAL_ID;
@@ -732,16 +738,16 @@
             <div class="lb-count-num">${orderCount}</div>
             <div class="lb-count-label">Orders detected in this batch</div>
           </div>
-          ${taskId ? `<div style="margin-left:auto"><div class="lb-task-id">${taskId}</div></div>` : ''}
+          ${taskId ? `<div style="margin-left:auto"><div class="lb-task-id">${escapeHtml(taskId)}</div></div>` : ''}
         </div>
 
         ${orderCount > 0 ? `
         <div class="lb-preview">
           ${previewOrders.map(o => `
             <div class="lb-preview-row">
-              <span class="lb-order">${o.orderNumber}</span>
-              <span class="lb-track">${o.trackingNumber || '—'}</span>
-              <span style="font-size:9px;color:#475569;white-space:nowrap">${o.shippingCost ? '$'+o.shippingCost : ''}</span>
+              <span class="lb-order">${escapeHtml(o.orderNumber)}</span>
+              <span class="lb-track">${escapeHtml(o.trackingNumber || '—')}</span>
+              <span style="font-size:9px;color:#475569;white-space:nowrap">${o.shippingCost ? '$' + escapeHtml(o.shippingCost) : ''}</span>
             </div>
           `).join('')}
           ${orderCount > 3 ? `<div class="lb-more">+${orderCount - 3} more orders</div>` : ''}
