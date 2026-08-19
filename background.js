@@ -163,6 +163,63 @@ chrome.runtime.onMessage.addListener((msg) => {
       sendMsg({ type: 'error', message: 'History download failed: ' + e.message });
     }
   }
+  // ── Label Batch Export: export orders from a shipping label task ──────────────
+  if (msg.type === 'exportLabelBatch') {
+    try {
+      const { orders = [], taskId = '', format = 'xlsx' } = msg;
+      const now    = new Date();
+      const pad    = n => String(n).padStart(2, '0');
+      const ts     = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+      const base   = `label_batch_${taskId || ts}_${orders.length}orders`;
+
+      const LABEL_HEADERS = ['Order No', 'Tracking Number', 'Shipping Service', 'Shipping Cost', 'Package ID', 'Label Date', 'Task ID'];
+      const LABEL_KEYS    = ['orderNumber','trackingNumber','shippingService','shippingCost','packageId','labelDate','taskId'];
+
+      // Attach taskId to each row
+      const rows = orders.map(o => ({ ...o, taskId }));
+
+      let result;
+      if (format === 'csv') {
+        const esc = c => '"' + String(c == null ? '' : c).replace(/"/g, '""').replace(/[\r\n]+/g, ' ').trim() + '"';
+        const lines = [LABEL_HEADERS.map(esc).join(',')];
+        rows.forEach(r => lines.push(LABEL_KEYS.map(k => esc(r[k] ?? '')).join(',')));
+        const csv = lines.join('\r\n');
+        result = { dataUrl: 'data:text/csv;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(csv))), filename: base + '.csv' };
+      } else {
+        // Excel
+        if (!XLSX_LOADED || typeof XLSX === 'undefined') {
+          // Fallback to CSV
+          const esc = c => '"' + String(c == null ? '' : c).replace(/"/g, '""') + '"';
+          const lines = [LABEL_HEADERS.map(esc).join(',')];
+          rows.forEach(r => lines.push(LABEL_KEYS.map(k => esc(r[k] ?? '')).join(',')));
+          const csv = lines.join('\r\n');
+          result = { dataUrl: 'data:text/csv;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(csv))), filename: base + '.csv' };
+        } else {
+          const wsData = [LABEL_HEADERS];
+          rows.forEach(r => wsData.push(LABEL_KEYS.map(k => r[k] ?? '')));
+          const wb = XLSX.utils.book_new();
+          const ws = XLSX.utils.aoa_to_sheet(wsData);
+          // Style header row
+          LABEL_HEADERS.forEach((_, ci) => {
+            const cell = XLSX.utils.encode_cell({ r: 0, c: ci });
+            if (!ws[cell]) return;
+            ws[cell].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '00A882' } }, alignment: { horizontal: 'center' } };
+          });
+          // Set column widths
+          ws['!cols'] = [{ wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 14 }, { wch: 26 }, { wch: 20 }, { wch: 26 }];
+          XLSX.utils.book_append_sheet(wb, ws, 'Label Batch');
+          const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+          result = { dataUrl: 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + wbout, filename: base + '.xlsx' };
+        }
+      }
+      chrome.downloads.download({ url: result.dataUrl, filename: result.filename });
+      sendMsg({ type: 'labelBatchExported', count: orders.length, filename: result.filename });
+    } catch (e) {
+      console.error('[Temu Exporter] exportLabelBatch error:', e);
+      sendMsg({ type: 'error', message: 'Label batch export failed: ' + e.message });
+    }
+  }
+
   // Popup asking for current state on open
   if (msg.type === 'getState') {
     chrome.storage.session.get(['running', 'lastMsg'], (data) => {
