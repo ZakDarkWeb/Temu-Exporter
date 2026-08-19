@@ -232,6 +232,15 @@ async function captureLastBulkPurchase(msg) {
   try { await job; } finally { lastBulkJobs.delete(taskId); }
 }
 
+async function exportPrePurchaseBatch() {
+  const data = await chrome.storage.local.get('temuPrePurchaseBatch_v1');
+  const record = data.temuPrePurchaseBatch_v1;
+  const urls = [...new Set((record?.orderUrls || []).filter(isAllowedTemuOrderUrl))].slice(0, 100);
+  if (urls.length === 0) throw new Error('No saved Unshipped selection is available. Select orders before buying labels.');
+  sendMsg({ type: 'prePurchaseExportStarted', count: urls.length });
+  await _processBatchAndExport(urls, 'xlsx', 500, 300, false, '', '', 1, null, false, 3);
+}
+
 async function exportLastBulkPurchase(format = 'xlsx') {
   let record = await getLastBulkRecord();
   if (!record || !Array.isArray(record.rows) || record.rows.length === 0) {
@@ -370,6 +379,12 @@ chrome.runtime.onMessage.addListener((msg) => {
     exportLastBulkPurchase(msg.format || 'xlsx').catch(e => {
       console.error('[Temu Exporter] last bulk export failed:', e);
       sendMsg({ type: 'lastBulkPurchaseError', message: 'Last bulk purchase export failed: ' + e.message });
+    });
+  }
+  if (msg.type === 'exportPrePurchaseBatch') {
+    exportPrePurchaseBatch().catch(e => {
+      console.error('[Temu Exporter] pre-purchase export failed:', e);
+      sendMsg({ type: 'prePurchaseExportError', message: 'Saved selection export failed: ' + e.message });
     });
   }
 
@@ -822,7 +837,8 @@ async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExt
 
 async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
                                        filterEnabled, filterFromDate, filterToDate,
-                                       totalPagesLabel, labelDateMap, sheetsMode = false) {
+                                       totalPagesLabel, labelDateMap, sheetsMode = false,
+                                       parallelBatch = PARALLEL_BATCH) {
   const orderRecords = [], retryQueue = [], seenIds = new Set();
   const total = allOrderUrls.length;
   let failedCount = 0;
@@ -848,9 +864,10 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
     return false;
   }
 
-  for (let i = 0; i < total; i += PARALLEL_BATCH) {
+  const workerBatch = Math.max(1, Math.min(3, Number(parallelBatch) || PARALLEL_BATCH));
+  for (let i = 0; i < total; i += workerBatch) {
     if (cancelRequested) break; // IMP 4: check cancel flag
-    const batchUrls = allOrderUrls.slice(i, i + PARALLEL_BATCH);
+    const batchUrls = allOrderUrls.slice(i, i + workerBatch);
     // IMP 5: include live extracted/failed counts
     sendMsg({ type: 'autoProgress', stage: 'extracting', current: i, total,
               extracted: orderRecords.length, failed: failedCount,
@@ -882,7 +899,7 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
     });
 
     await Promise.allSettled(openTabs.map(({ tab }) => chrome.tabs.remove(tab.id).catch(() => {})));
-    if (i + PARALLEL_BATCH < total) await sleep(tabDelay + Math.floor(Math.random() * randExtra));
+    if (i + workerBatch < total) await sleep(tabDelay + Math.floor(Math.random() * randExtra));
   }
 
   // Retry queue

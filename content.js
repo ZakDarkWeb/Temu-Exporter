@@ -420,17 +420,14 @@
   function refreshLastBulkButton() {
     const btn = $('btnLastBulk');
     if (!btn) return;
-    chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
-      const record = data.temuLastBulkPurchase_v1;
-      if (hasBulkRecordsModal()) {
-        btn.textContent = '📦 Capture Latest Bulk Task';
-        btn.title = 'Open the newest successful task details and replace the saved batch';
-      } else if (record?.rows?.length) {
-        btn.textContent = `📊 Export Last Bulk Purchase (${record.rows.length})`;
-        btn.title = `Task ${record.taskId || 'unknown'} · captured ${record.capturedAt || ''}`;
+    chrome.storage.local.get('temuPrePurchaseBatch_v1', data => {
+      const record = data.temuPrePurchaseBatch_v1;
+      if (record?.orderUrls?.length) {
+        btn.textContent = `📊 Export Saved Batch (${record.orderUrls.length})`;
+        btn.title = `Saved before label purchase · ${record.savedAt || ''}`;
       } else {
-        btn.textContent = '📦 Last Bulk Purchase';
-        btn.title = 'Open Buy shipping records, then use this button';
+        btn.textContent = '📦 Select Orders Before Buying Labels';
+        btn.title = 'Select orders on the Unshipped tab first';
       }
     });
   }
@@ -438,29 +435,80 @@
   function handleLastBulkClick() {
     const btn = $('btnLastBulk');
     if (!btn) return;
-    chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
-      const record = data.temuLastBulkPurchase_v1;
-      const view = hasBulkRecordsModal() ? visibleTextElements('View details')[0] : null;
-      if (view) {
-        setStatus('Opening latest bulk task...', 's-running');
-        view.click();
-        return;
-      }
-      if (record?.rows?.length) {
-        setStatus('Exporting last bulk purchase...', 's-running');
-        chrome.runtime.sendMessage({ type: 'exportLastBulkPurchase', format: 'xlsx' });
-        return;
-      }
-      if (view) {
-        setStatus('Opening latest bulk task...', 's-running');
-        view.click();
+    chrome.storage.local.get('temuPrePurchaseBatch_v1', data => {
+      const record = data.temuPrePurchaseBatch_v1;
+      if (record?.orderUrls?.length) {
+        setStatus('Exporting saved label batch...', 's-running');
+        chrome.runtime.sendMessage({ type: 'exportPrePurchaseBatch' });
       } else {
-        setStatus('Open Buy shipping records first', 's-error');
-        showResult('Open the Buy shipping records window, then click this button again.');
+        setStatus('No saved Unshipped selection', 's-error');
+        showResult('Select orders on Unshipped before buying labels.');
         setTimeout(() => setStatus('Ready to export', 's-ready'), 4500);
       }
     });
   }
+
+  function isUnshippedOrdersPage() {
+    const body = document.body?.innerText || '';
+    return /Buy\s+shipping\s+in\s+bulk/i.test(body) &&
+      !/Edit\s+shipping\s+information/i.test(body);
+  }
+
+  function collectVisibleSelection() {
+    const selected = {};
+    const visible = [];
+    const baseUrl = window.location.origin + '/order-detail.html';
+    const rows = document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"], tr[class*="TB_tr_123"], tr');
+    rows.forEach(row => {
+      if (row.querySelector('th')) return;
+      const match = (row.textContent || '').match(/(PO-\d+-\d{8,})/);
+      if (!match) return;
+      const po = match[1];
+      visible.push(po);
+      const checked = row.querySelector('input[type="checkbox"]:checked') ||
+        row.querySelector('label[data-checked="true"], [data-testid="beast-core-checkbox"][data-checked="true"], .CBX_active_123');
+      if (checked) selected[po] = baseUrl + '?parent_order_sn=' + encodeURIComponent(po);
+    });
+    return { visible, selected };
+  }
+
+  let preSelectionHash = '';
+  function persistPrePurchaseSelection() {
+    if (!isUnshippedOrdersPage()) return;
+    const { visible, selected } = collectVisibleSelection();
+    if (!visible.length) return;
+    const hash = JSON.stringify({ visible, selected });
+    if (hash === preSelectionHash) return;
+    preSelectionHash = hash;
+    chrome.storage.local.get('temuPrePurchaseBatch_v1', data => {
+      const previous = data.temuPrePurchaseBatch_v1 || {};
+      const orderMap = {};
+      (previous.orderUrls || []).forEach(url => {
+        const m = String(url).match(/parent_order_sn=([^&]+)/i);
+        if (m) orderMap[decodeURIComponent(m[1])] = url;
+      });
+      visible.forEach(po => delete orderMap[po]);
+      Object.assign(orderMap, selected);
+      const orderUrls = Object.values(orderMap);
+      if (orderUrls.length === 0) {
+        chrome.storage.local.remove('temuPrePurchaseBatch_v1');
+        refreshLastBulkButton();
+        return;
+      }
+      chrome.storage.local.set({ temuPrePurchaseBatch_v1: {
+        savedAt: new Date().toISOString(),
+        source: 'unshipped-content-auto-selection',
+        poNumbers: Object.keys(orderMap),
+        orderUrls,
+        count: orderUrls.length
+      }}, refreshLastBulkButton);
+    });
+  }
+
+  // The popup may be closed while the user selects orders. Keep capture in the
+  // content script so the selection survives pagination, label purchase, and
+  // popup/tab closure.
+  setInterval(persistPrePurchaseSelection, 1000);
 
   // ── Start export ──────────────────────────────────────────────────────────
   function startExport(sheetsMode) {
@@ -534,6 +582,14 @@
       running = false; setButtons(false); showProgress(false);
       setStatus('Cancelled', 's-error');
       setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+    }
+    if (msg.type === 'prePurchaseExportStarted') {
+      setStatus(`Exporting saved batch (${msg.count || 0})...`, 's-running');
+    }
+    if (msg.type === 'prePurchaseExportError') {
+      setStatus((msg.message || 'Saved batch export failed').slice(0, 48), 's-error');
+      showResult('⚠️ ' + (msg.message || 'Saved batch export failed'));
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 6000);
     }
     if (msg.type === 'lastBulkPurchaseCaptured') {
       setStatus('Saving latest bulk purchase...', 's-running');

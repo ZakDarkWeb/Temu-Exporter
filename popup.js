@@ -1229,6 +1229,12 @@ async function readPageSelections() {
           });
         }
 
+        // Detect the pre-purchase tab from its live bulk action. This is more
+        // reliable than the URL because Temu switches tabs inside one SPA route.
+        var bodyText = document.body ? (document.body.innerText || '') : '';
+        var isUnshipped = /Buy\s+shipping\s+in\s+bulk/i.test(bodyText) &&
+          !/Edit\s+shipping\s+information/i.test(bodyText);
+
         // ── Unique page key detection using visible PO numbers fingerprint ────
         // Using visible POs fingerprint as the sole page identifier eliminates race conditions
         // between React table rendering and pagination rendering during transitions.
@@ -1238,12 +1244,12 @@ async function readPageSelections() {
         }
         if (!pageNum) pageNum = '1';
 
-        return { pageNum: pageNum, visiblePOs: visiblePOs, checkedPOs: checkedPOs };
+        return { pageNum: pageNum, visiblePOs: visiblePOs, checkedPOs: checkedPOs, isUnshipped: isUnshipped };
       }
     });
 
-    if (!results || !results[0]) return { pageNum: '1', visiblePOs: [], checkedPOs: {} };
-    return results[0].result || { pageNum: '1', visiblePOs: [], checkedPOs: {} };
+    if (!results || !results[0]) return { pageNum: '1', visiblePOs: [], checkedPOs: {}, isUnshipped: false };
+    return results[0].result || { pageNum: '1', visiblePOs: [], checkedPOs: {}, isUnshipped: false };
   } catch(e) {
     console.warn('[TemuExporter] readPageSelections error:', e.message);
     return { pageNum: '1', visiblePOs: [], checkedPOs: {} };
@@ -1270,7 +1276,7 @@ let _lastPollHash = '';
 
 async function _doPoll() {
   if (activeTab !== 'select' || running) return;
-  const { pageNum, visiblePOs, checkedPOs } = await readPageSelections();
+  const { pageNum, visiblePOs, checkedPOs, isUnshipped } = await readPageSelections();
 
   chrome.storage.local.get(['temuSelections_v6'], (data) => {
     let stored = data.temuSelections_v6 || {};
@@ -1298,6 +1304,19 @@ async function _doPoll() {
 
     currentSelections = allChecked;
     const count = Object.keys(currentSelections).length;
+
+    // Automatically preserve the exact Unshipped selection before labels are
+    // purchased. This is separate from the older manual label-run record.
+    if (isUnshipped && count > 0) {
+      chrome.storage.local.set({ temuPrePurchaseBatch_v1: {
+        savedAt: new Date().toISOString(),
+        source: 'unshipped-auto-selection',
+        poNumbers: Object.keys(currentSelections),
+        orderUrls: Object.values(currentSelections),
+        count
+      }});
+    }
+
     const selCountEl  = $('selCount');
     const clearSelBtn = $('clearSelBtn');
     const saveBtn     = $('saveForLabelBtn');
@@ -1371,18 +1390,18 @@ const clearLastBulkBtn  = $('clearLastBulkBtn');
 
 function checkLastBulkPurchase() {
   if (!lastBulkBanner) return;
-  chrome.storage.local.get(['temuLastBulkPurchase_v1'], data => {
-    const record = data.temuLastBulkPurchase_v1;
-    if (!record || !Array.isArray(record.rows) || record.rows.length === 0) {
+  chrome.storage.local.get(['temuPrePurchaseBatch_v1'], data => {
+    const record = data.temuPrePurchaseBatch_v1;
+    if (!record || !Array.isArray(record.orderUrls) || record.orderUrls.length === 0) {
       lastBulkBanner.style.display = 'none';
       return;
     }
     lastBulkBanner.style.display = 'flex';
-    if (lastBulkCount) lastBulkCount.textContent = record.rows.length;
+    if (lastBulkCount) lastBulkCount.textContent = record.orderUrls.length;
     if (lastBulkMeta) {
-      const task = record.taskId ? `Task ${record.taskId}` : 'Latest task';
+      const task = 'Saved before label purchase';
       let when = '';
-      try { when = new Date(record.capturedAt || record.submittedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch (_) {}
+      try { when = new Date(record.savedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch (_) {}
       lastBulkMeta.textContent = `${task}${when ? ' · ' + when : ''}`;
     }
     if (exportLastBulkBtn) exportLastBulkBtn.disabled = false;
@@ -1393,7 +1412,7 @@ if (exportLastBulkBtn) {
   exportLastBulkBtn.addEventListener('click', () => {
     exportLastBulkBtn.disabled = true;
     exportLastBulkBtn.textContent = '⏳ Exporting…';
-    chrome.runtime.sendMessage({ type: 'exportLastBulkPurchase', format: 'xlsx' }, () => {
+    chrome.runtime.sendMessage({ type: 'exportPrePurchaseBatch' }, () => {
       if (chrome.runtime.lastError) {
         setStatus('⚠️', 'Last bulk export failed', 'error');
         exportLastBulkBtn.disabled = false;
@@ -1405,9 +1424,9 @@ if (exportLastBulkBtn) {
 
 if (clearLastBulkBtn) {
   clearLastBulkBtn.addEventListener('click', () => {
-    chrome.storage.local.remove(['temuLastBulkPurchase_v1'], () => {
+    chrome.storage.local.remove(['temuPrePurchaseBatch_v1'], () => {
       checkLastBulkPurchase();
-      setStatus('✅', 'Last bulk purchase cleared', 'success');
+      setStatus('✅', 'Saved label batch cleared', 'success');
     });
   });
 }
@@ -2077,6 +2096,13 @@ chrome.runtime.onMessage.addListener(msg => {
 // storage record remains the source of truth when the popup is reopened.
 chrome.runtime.onMessage.addListener(msg => {
   if (!msg) return;
+  if (msg.type === 'prePurchaseExportStarted') {
+    setStatus('📦', `Exporting saved label batch (${msg.count || 0} orders)…`, 'info');
+  }
+  if (msg.type === 'prePurchaseExportError') {
+    if (exportLastBulkBtn) { exportLastBulkBtn.disabled = false; exportLastBulkBtn.textContent = '📊 Export Excel'; }
+    setStatus('⚠️', (msg.message || 'Saved selection export failed').slice(0, 90), 'error');
+  }
   if (msg.type === 'lastBulkPurchaseCaptured') {
     checkLastBulkPurchase();
     setStatus('📦', `Saving last bulk purchase (${msg.count || 0} rows)…`, 'info');
