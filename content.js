@@ -161,6 +161,7 @@
     .btn {
       all: unset;
       box-sizing: border-box; /* CRITICAL: all:unset resets box-sizing → padding causes overflow */
+      -webkit-appearance: none; /* restore button click behavior */
       display: flex; align-items: center; justify-content: center; gap: 7px;
       width: 100%; height: 36px; padding: 0 12px;
       border-radius: 10px; cursor: pointer;
@@ -203,6 +204,8 @@
 
     .btn-cancel {
       all: unset;
+      box-sizing: border-box;      /* fix: all:unset resets to content-box → overflow */
+      -webkit-appearance: none;    /* fix: restore proper button click behavior */
       display: flex; align-items: center; justify-content: center; gap: 5px;
       width: 100%; height: 30px; padding: 0 10px;
       border-radius: 8px; cursor: pointer;
