@@ -1873,10 +1873,10 @@ function renderStatusTable(results) {
     const orderShort = (r.orderId || r.url?.split('parent_order_sn=')[1]?.split('&')[0] || '?').slice(-12);
     const trackShort = (r.tracking || '—').slice(-15);
     const dateShort  = (r.lastDate || '—').replace(/ PKT.*/, '').replace(/ UTC.*/, '');
-    return `<tr style="--ri:${i}">
+    return `<tr>
       <td title="${r.orderId || ''}">${orderShort}</td>
       <td>${trackShort}</td>
-      <td><span class="status-badge ${cls} badge-changed">${icon} ${label}</span></td>
+      <td><span class="status-badge ${cls}">${icon} ${label}</span></td>
       <td>${dateShort}</td>
     </tr>`;
   }).join('');
@@ -1886,8 +1886,8 @@ function renderStatusTable(results) {
 async function startStatusCheck() {
   const btn  = document.getElementById('statusCheckBtn');
   const wrap = document.getElementById('statusResultsWrap');
-  if (btn) { btn.disabled = true; btn.classList.add('sc-loading'); }
-  if (wrap) { wrap.style.display = 'none'; wrap.classList.remove('visible'); }
+  if (btn) { btn.disabled = true; btn.textContent = '🔄 Collecting order URLs…'; }
+  if (wrap) wrap.style.display = 'none';
 
   const urls = await collectOrderUrlsFromHistory(STATUS_MAX_ORDERS);
   if (urls.length === 0) {
