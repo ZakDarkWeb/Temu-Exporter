@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.3
+// Temu Order Exporter — Content Script v8.5
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -277,10 +277,20 @@
   const HTML = `
     <div class="card">
       <div class="header" id="hdr">
-        <div class="logo">📦</div>
+        <div class="logo">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L7 8H10V13H14V8H17L12 2Z" fill="#00d4aa"/>
+            <rect x="4" y="15" width="16" height="1.5" rx="0.5" fill="#00d4aa"/>
+            <rect x="4" y="18.5" width="16" height="1.5" rx="0.5" fill="#00d4aa"/>
+            <rect x="4" y="22" width="16" height="1.5" rx="0.5" fill="#00d4aa"/>
+            <rect x="4" y="15" width="1.5" height="8.5" rx="0.5" fill="#00d4aa"/>
+            <rect x="11.25" y="15" width="1.5" height="8.5" rx="0.5" fill="#00d4aa"/>
+            <rect x="18.5" y="15" width="1.5" height="8.5" rx="0.5" fill="#00d4aa"/>
+          </svg>
+        </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.3 · Quick Export</div>
+          <div class="version">v8.5 · Quick Export</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
