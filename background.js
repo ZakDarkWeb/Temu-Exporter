@@ -15,7 +15,7 @@ const BATCH_SIZE      = 3;    // manual mode batching
 const PARALLEL_BATCH  = 1;    // Process tabs one-by-one: more reliable, no retry waste
 const MAX_RETRIES     = 3;
 const RETRY_DELAY_MS  = 1500;
-const TAB_LOAD_TIMEOUT = 30000; // 30s per tab load
+const TAB_LOAD_TIMEOUT = 15000; // 15s per tab load (reduced from 30s)
 
 // ── Cancel flag — set by cancelExport message, checked in every batch loop ────
 let cancelRequested = false;
@@ -34,6 +34,16 @@ const EXPORT_HEADERS = [
 // ── Utility ────────────────────────────────────────────────────────────────────
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Close any stray hidden seller.temu.com tabs (safety cleanup)
+function cleanupStrayTabs() {
+  chrome.tabs.query({ url: 'https://seller.temu.com/*', active: false }, (tabs) => {
+    if (tabs && tabs.length > 0) {
+      tabs.forEach(t => chrome.tabs.remove(t.id).catch(() => {}));
+      console.log('[Temu Exporter] Cleaned up', tabs.length, 'stray tab(s)');
+    }
+  });
 }
 
 function parseDateStr(str) {
@@ -139,6 +149,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     clearState();
     chrome.action.setBadgeText({ text: '' }).catch(() => {}); // clear badge on cancel
     sendMsg({ type: 'cancelled' });
+    // Aggressively close any background tabs left open by export
+    chrome.tabs.query({ url: 'https://seller.temu.com/*', active: false }, (tabs) => {
+      tabs.forEach(t => chrome.tabs.remove(t.id).catch(() => {}));
+    });
   }
   // ── History: re-download a past export ───────────────────────────────────────
   if (msg.type === 'downloadFromHistory') {
@@ -665,6 +679,7 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
       chrome.action.setBadgeText({ text: String(orderRecords.length) }).catch(() => {});
       chrome.action.setBadgeBackgroundColor({ color: '#6366f1' }).catch(() => {});
       setTimeout(() => chrome.action.setBadgeText({ text: '' }).catch(() => {}), 30000);
+  cleanupStrayTabs(); // ensure no background tabs left open
 
       sendMsg({
         type: 'autoDone', ordersFound: orderRecords.length, rowsExported: flatRows.length,

@@ -1247,12 +1247,15 @@ chrome.storage.local.get(['temuSelections_v6'], (data) => {
 function startSelectionPolling() {
   if (selPollInterval) return;
   _doPoll();
-  selPollInterval = setInterval(_doPoll, 600);
+  selPollInterval = setInterval(_doPoll, 1500); // reduced from 600ms — less storage hammering
 }
 function stopSelectionPolling() {
   clearInterval(selPollInterval);
   selPollInterval = null;
 }
+
+// Debounce: track last written value to avoid redundant storage writes
+let _lastPollHash = '';
 
 async function _doPoll() {
   if (activeTab !== 'select' || running) return;
@@ -1264,10 +1267,14 @@ async function _doPoll() {
     // Group selections by page to prevent page-change deletions
     const pageKey = 'page:' + (pageNum || '1');
 
-    // Only update if we have a valid page and rows are loaded
+    // Only write storage if data actually changed (saves CPU + I/O)
     if (visiblePOs && visiblePOs.length > 0) {
-      stored[pageKey] = checkedPOs || {};
-      chrome.storage.local.set({ temuSelections_v6: stored });
+      const newHash = JSON.stringify(checkedPOs) + pageKey;
+      if (newHash !== _lastPollHash) {
+        _lastPollHash = newHash;
+        stored[pageKey] = checkedPOs || {};
+        chrome.storage.local.set({ temuSelections_v6: stored });
+      }
     }
 
     // Sum all pages to get total current selections
@@ -2025,3 +2032,13 @@ document.getElementById('statusCsvBtn').addEventListener('click', function() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => { csvBtn.disabled = false; csvBtn.classList.remove('csv-loading'); }, 1000);
 });
+
+// ── Performance: Pause polling when popup is not visible ─────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopSelectionPolling();
+  } else {
+    if (activeTab === 'select' && !running) startSelectionPolling();
+  }
+});
+
