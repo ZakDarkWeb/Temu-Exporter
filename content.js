@@ -50,146 +50,270 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
       #${PANEL_ID} {
         position: fixed;
-        bottom: 24px; right: 24px;
+        bottom: 28px; right: 28px;
         z-index: 2147483647;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         user-select: none;
-        transition: opacity 0.25s, transform 0.25s;
+        -webkit-font-smoothing: antialiased;
       }
-      #${PANEL_ID} * { box-sizing: border-box; margin: 0; padding: 0; }
+      #${PANEL_ID} *, #${PANEL_ID} *::before, #${PANEL_ID} *::after {
+        box-sizing: border-box; margin: 0; padding: 0;
+      }
 
+      /* ── CARD ─────────────────────────────────────────────── */
       #${PANEL_ID} .tep-card {
-        background: #0a0d14;
-        border: 1px solid rgba(0,212,170,0.3);
-        border-radius: 14px;
-        box-shadow: 0 8px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,212,170,0.1),
-                    0 0 30px rgba(0,212,170,0.08);
-        width: 240px;
+        background: #0d1117;
+        border: 1px solid rgba(0, 212, 170, 0.25);
+        border-radius: 16px;
+        box-shadow:
+          0 0 0 1px rgba(0,212,170,0.08),
+          0 8px 32px rgba(0,0,0,0.8),
+          0 0 40px rgba(0,212,170,0.06);
+        width: 230px;
         overflow: hidden;
-        transition: width 0.25s ease, height 0.25s ease;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
       }
-      #${PANEL_ID}.tep-minimized .tep-card {
-        width: 48px; border-radius: 50%;
-        height: 48px;
-        border-color: rgba(0,212,170,0.5);
-        box-shadow: 0 4px 20px rgba(0,0,0,0.6), 0 0 20px rgba(0,212,170,0.2);
-        cursor: pointer;
-      }
-      #${PANEL_ID}.tep-minimized .tep-body { display: none; }
-      #${PANEL_ID}.tep-minimized .tep-header { padding: 0; border: none; background: transparent; justify-content: center; height: 48px; }
-      #${PANEL_ID}.tep-minimized .tep-title,
-      #${PANEL_ID}.tep-minimized .tep-header-actions { display: none; }
-      #${PANEL_ID}.tep-minimized .tep-logo { font-size: 22px; }
 
+      /* ── MINIMIZED STATE ──────────────────────────────────── */
+      #${PANEL_ID}.tep-minimized .tep-card {
+        width: 44px; height: 44px;
+        border-radius: 50%;
+        border-color: rgba(0,212,170,0.5);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.7), 0 0 24px rgba(0,212,170,0.25);
+        cursor: pointer;
+        overflow: hidden;
+      }
+      #${PANEL_ID}.tep-minimized .tep-body,
+      #${PANEL_ID}.tep-minimized .tep-title,
+      #${PANEL_ID}.tep-minimized .tep-header-actions,
+      #${PANEL_ID}.tep-minimized .tep-divider-h { display: none !important; }
+      #${PANEL_ID}.tep-minimized .tep-header {
+        height: 44px; padding: 0;
+        border: none; background: transparent;
+        justify-content: center; cursor: pointer;
+      }
+      #${PANEL_ID}.tep-minimized .tep-logo { font-size: 20px; }
+
+      /* ── HEADER ───────────────────────────────────────────── */
       .tep-header {
         display: flex; align-items: center; gap: 8px;
-        padding: 10px 12px;
-        background: rgba(255,255,255,0.02);
-        border-bottom: 1px solid rgba(255,255,255,0.06);
+        padding: 11px 13px 10px;
         cursor: grab;
+        position: relative;
       }
       .tep-header:active { cursor: grabbing; }
-      .tep-logo { font-size: 16px; flex-shrink: 0; }
-      .tep-title {
-        flex: 1; font-size: 11px; font-weight: 800;
-        color: #f1f5f9; letter-spacing: -0.2px;
+      .tep-divider-h {
+        position: absolute; bottom: 0; left: 13px; right: 13px;
+        height: 1px;
+        background: linear-gradient(90deg, rgba(0,212,170,0.4), transparent);
       }
-      .tep-header-actions { display: flex; gap: 4px; }
-      .tep-icon-btn {
-        width: 20px; height: 20px; border-radius: 50%;
-        background: rgba(255,255,255,0.06); border: none;
-        color: #64748b; font-size: 11px; cursor: pointer;
+
+      .tep-logo {
+        width: 28px; height: 28px; border-radius: 8px;
+        background: linear-gradient(135deg, #00d4aa22, #00b89411);
+        border: 1px solid rgba(0,212,170,0.3);
         display: flex; align-items: center; justify-content: center;
-        transition: all 0.15s;
+        font-size: 14px; flex-shrink: 0;
       }
-      .tep-icon-btn:hover { background: rgba(255,255,255,0.12); color: #f1f5f9; }
+      .tep-title {
+        flex: 1; font-size: 12px; font-weight: 800;
+        color: #f1f5f9; letter-spacing: -0.3px;
+        line-height: 1;
+      }
+      .tep-subtitle {
+        font-size: 9px; font-weight: 500; color: #4a5568;
+        margin-top: 1px;
+      }
+      .tep-header-actions { display: flex; gap: 3px; }
+      .tep-icon-btn {
+        width: 22px; height: 22px; border-radius: 6px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.06);
+        color: #64748b; font-size: 12px; font-weight: 700;
+        cursor: pointer; font-family: inherit;
+        display: flex; align-items: center; justify-content: center;
+        transition: all 0.15s; line-height: 1;
+      }
+      .tep-icon-btn:hover {
+        background: rgba(255,255,255,0.1);
+        border-color: rgba(255,255,255,0.12);
+        color: #f1f5f9;
+      }
 
-      .tep-body { padding: 10px; display: flex; flex-direction: column; gap: 7px; }
+      /* ── BODY ─────────────────────────────────────────────── */
+      .tep-body {
+        padding: 12px; display: flex; flex-direction: column; gap: 8px;
+      }
 
+      /* ── STATUS CHIP ──────────────────────────────────────── */
       .tep-status {
-        font-size: 9px; font-weight: 600; color: #4a5568;
-        padding: 4px 8px; border-radius: 6px;
-        background: rgba(255,255,255,0.02);
-        border-left: 2px solid #1e2a3a;
-        transition: all 0.3s;
+        display: flex; align-items: center; gap: 6px;
+        font-size: 10px; font-weight: 600;
+        padding: 5px 9px; border-radius: 8px;
+        transition: all 0.25s ease;
+        line-height: 1;
       }
-      .tep-status.ready  { color: #00d4aa; border-color: #00d4aa; background: rgba(0,212,170,0.05); }
-      .tep-status.running{ color: #4f8ef7; border-color: #4f8ef7; background: rgba(79,142,247,0.05); }
-      .tep-status.done   { color: #00d4aa; border-color: #00d4aa; background: rgba(0,212,170,0.08); }
-      .tep-status.error  { color: #f87171; border-color: #ef4444; background: rgba(239,68,68,0.06); }
+      .tep-status-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        flex-shrink: 0; transition: background 0.25s;
+      }
+      .tep-status.idle   { color: #64748b; background: rgba(255,255,255,0.03); }
+      .tep-status.idle   .tep-status-dot { background: #2d3748; }
+      .tep-status.ready  { color: #00d4aa; background: rgba(0,212,170,0.07); }
+      .tep-status.ready  .tep-status-dot { background: #00d4aa; box-shadow: 0 0 6px rgba(0,212,170,0.8); animation: tepPulse 1.5s ease-in-out infinite; }
+      .tep-status.running{ color: #60a5fa; background: rgba(96,165,250,0.07); }
+      .tep-status.running .tep-status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,0.8); animation: tepPulse 0.8s ease-in-out infinite; }
+      .tep-status.done   { color: #00d4aa; background: rgba(0,212,170,0.1); }
+      .tep-status.done   .tep-status-dot { background: #00d4aa; }
+      .tep-status.error  { color: #f87171; background: rgba(248,113,113,0.07); }
+      .tep-status.error  .tep-status-dot { background: #f87171; }
+      @keyframes tepPulse {
+        0%,100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.5; transform: scale(0.8); }
+      }
 
+      /* ── BUTTONS ──────────────────────────────────────────── */
       .tep-btn {
-        width: 100%; padding: 8px 10px;
-        border: none; border-radius: 8px;
-        font-size: 10px; font-weight: 800; font-family: inherit;
-        cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
-        transition: all 0.2s; position: relative; overflow: hidden;
-        letter-spacing: 0.2px;
+        width: 100%; padding: 0 14px;
+        height: 36px;
+        border: none; border-radius: 10px;
+        font-size: 11px; font-weight: 800; font-family: inherit;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center; gap: 7px;
+        transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+        position: relative; overflow: hidden;
+        letter-spacing: 0.1px; white-space: nowrap;
       }
-      .tep-btn::before {
-        content: ''; position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
-        background: linear-gradient(90deg,transparent,rgba(255,255,255,0.15),transparent);
-        animation: tepShimmer 3s ease-in-out infinite;
+      /* Shimmer effect */
+      .tep-btn::after {
+        content: '';
+        position: absolute; top: 0; left: -80%; width: 50%; height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+        transform: skewX(-15deg);
+        animation: tepShimmer 3.5s ease-in-out infinite;
       }
-      @keyframes tepShimmer { 0%{left:-100%} 50%,100%{left:160%} }
-      .tep-btn-primary {
-        background: linear-gradient(135deg, #00d4aa, #00b894);
-        color: #021a13;
-        box-shadow: 0 0 16px rgba(0,212,170,0.3), 0 3px 12px rgba(0,0,0,0.4);
-      }
-      .tep-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 0 24px rgba(0,212,170,0.45), 0 5px 16px rgba(0,0,0,0.4); }
-      .tep-btn-primary:active { transform: scale(0.98); }
-      .tep-btn-secondary {
-        background: rgba(79,142,247,0.1); border: 1px solid rgba(79,142,247,0.25);
-        color: #4f8ef7;
-      }
-      .tep-btn-secondary:hover { background: rgba(79,142,247,0.18); border-color: rgba(79,142,247,0.45); }
-      .tep-btn-cancel {
-        background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25);
-        color: #f87171;
-      }
-      .tep-btn-cancel:hover { background: rgba(239,68,68,0.15); }
-      .tep-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
-      .tep-btn:disabled::before { display: none; }
+      @keyframes tepShimmer { 0%{left:-80%} 40%,100%{left:130%} }
 
-      .tep-progress-wrap { display: flex; flex-direction: column; gap: 4px; }
-      .tep-progress-label {
-        display: flex; justify-content: space-between; align-items: center;
-        font-size: 9px; color: #64748b; font-weight: 600;
+      /* Primary — teal gradient */
+      .tep-btn-primary {
+        background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%);
+        color: #01120d;
+        box-shadow: 0 0 20px rgba(0,212,170,0.28), 0 3px 10px rgba(0,0,0,0.5);
       }
-      .tep-progress-pct { color: #00d4aa; font-weight: 800; }
+      .tep-btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 28px rgba(0,212,170,0.45), 0 6px 18px rgba(0,0,0,0.5);
+      }
+      .tep-btn-primary:active { transform: scale(0.97); }
+
+      /* Secondary — outlined teal */
+      .tep-btn-secondary {
+        background: rgba(0,212,170,0.06);
+        border: 1px solid rgba(0,212,170,0.22);
+        color: #00d4aa;
+      }
+      .tep-btn-secondary:hover {
+        background: rgba(0,212,170,0.12);
+        border-color: rgba(0,212,170,0.4);
+        transform: translateY(-1px);
+      }
+      .tep-btn-secondary:active { transform: scale(0.97); }
+
+      /* Cancel — red outline pill */
+      .tep-btn-cancel {
+        background: rgba(239,68,68,0.06);
+        border: 1px solid rgba(239,68,68,0.25);
+        color: #f87171;
+        border-radius: 10px;
+      }
+      .tep-btn-cancel:hover { background: rgba(239,68,68,0.13); border-color: rgba(239,68,68,0.45); }
+      .tep-btn-cancel:active { transform: scale(0.97); }
+
+      .tep-btn:disabled {
+        opacity: 0.35; cursor: not-allowed;
+        transform: none !important; box-shadow: none !important;
+      }
+      .tep-btn:disabled::after { display: none; }
+
+      /* ── PROGRESS SECTION ─────────────────────────────────── */
+      .tep-progress-section {
+        display: flex; flex-direction: column; gap: 7px;
+        background: rgba(255,255,255,0.02);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 10px; padding: 9px 10px;
+      }
+      .tep-progress-top {
+        display: flex; align-items: center; gap: 7px;
+      }
+      .tep-spinner {
+        width: 12px; height: 12px;
+        border: 2px solid rgba(96,165,250,0.2);
+        border-top-color: #60a5fa;
+        border-radius: 50%;
+        animation: tepSpin 0.7s linear infinite;
+        flex-shrink: 0;
+      }
+      @keyframes tepSpin { to { transform: rotate(360deg); } }
+      .tep-progress-text {
+        flex: 1; font-size: 10px; font-weight: 700; color: #60a5fa;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .tep-progress-pct {
+        font-size: 10px; font-weight: 900; color: #00d4aa;
+        flex-shrink: 0; font-variant-numeric: tabular-nums;
+      }
       .tep-progress-track {
-        height: 4px; background: #1e2a3a; border-radius: 2px; overflow: hidden;
+        height: 3px; background: rgba(255,255,255,0.06);
+        border-radius: 2px; overflow: hidden;
       }
       .tep-progress-fill {
         height: 100%; border-radius: 2px;
-        background: linear-gradient(90deg, #00d4aa, #4f8ef7);
-        box-shadow: 0 0 8px rgba(0,212,170,0.5);
-        transition: width 0.4s ease;
+        background: linear-gradient(90deg, #00d4aa, #60a5fa);
+        box-shadow: 0 0 8px rgba(0,212,170,0.6);
+        transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
         width: 0%;
       }
-
-      .tep-divider {
-        height: 1px; background: rgba(255,255,255,0.05);
-        margin: 2px 0;
+      .tep-progress-sub {
+        font-size: 9px; color: #4a5568; font-weight: 600;
       }
 
+      /* ── RESULT TOAST ─────────────────────────────────────── */
       .tep-result {
         font-size: 10px; font-weight: 700; color: #00d4aa;
-        text-align: center; padding: 4px;
+        text-align: center; padding: 6px 8px;
+        background: rgba(0,212,170,0.07);
+        border: 1px solid rgba(0,212,170,0.18);
+        border-radius: 8px;
         animation: tepFadeIn 0.3s ease;
       }
-      @keyframes tepFadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+      @keyframes tepFadeIn {
+        from { opacity:0; transform: translateY(6px); }
+        to   { opacity:1; transform: none; }
+      }
 
+      /* ── DRAG HINT ────────────────────────────────────────── */
       .tep-drag-hint {
-        font-size: 8px; color: #1e2a3a; text-align: center;
-        letter-spacing: 0.3px; margin-top: 2px;
+        display: flex; align-items: center; justify-content: center; gap: 3px;
+        font-size: 9px; color: #1e2a3a;
+        padding-bottom: 1px;
+      }
+      .tep-drag-dots {
+        display: flex; gap: 3px;
+      }
+      .tep-drag-dots span {
+        width: 3px; height: 3px; border-radius: 50%;
+        background: #1f2d3d;
+        display: block;
       }
     `;
     document.head.appendChild(style);
   }
+
 
   // ── Build HTML panel ──────────────────────────────────────────────────────
   function buildPanel() {
@@ -198,52 +322,64 @@
     panel.innerHTML = `
       <div class="tep-card">
         <div class="tep-header" id="tepHeader">
-          <span class="tep-logo">📦</span>
-          <span class="tep-title">Temu Exporter</span>
+          <div class="tep-logo">📦</div>
+          <div style="flex:1;min-width:0;">
+            <div class="tep-title">Temu Exporter</div>
+          </div>
           <div class="tep-header-actions">
             <button class="tep-icon-btn" id="tepMinBtn" title="Minimize">—</button>
           </div>
+          <div class="tep-divider-h"></div>
         </div>
+
         <div class="tep-body">
-          <div class="tep-status ready" id="tepStatus">✅ Shipped tab ready</div>
+          <div class="tep-status ready" id="tepStatus">
+            <span class="tep-status-dot"></span>
+            <span id="tepStatusText">Ready to export</span>
+          </div>
 
           <button class="tep-btn tep-btn-primary" id="tepExportToday">
-            ⚡ Export Today's Orders
+            ⚡ Export Today
           </button>
           <button class="tep-btn tep-btn-secondary" id="tepSheetsToday">
             📊 Sheets Sync Today
           </button>
 
-          <div id="tepProgressSection" style="display:none;">
-            <div class="tep-divider"></div>
-            <div class="tep-progress-wrap">
-              <div class="tep-progress-label">
-                <span id="tepProgressText">Scanning...</span>
-                <span class="tep-progress-pct" id="tepProgressPct">0%</span>
-              </div>
-              <div class="tep-progress-track">
-                <div class="tep-progress-fill" id="tepProgressFill"></div>
-              </div>
+          <div class="tep-progress-section" id="tepProgressSection" style="display:none;">
+            <div class="tep-progress-top">
+              <div class="tep-spinner"></div>
+              <span class="tep-progress-text" id="tepProgressText">Scanning...</span>
+              <span class="tep-progress-pct" id="tepProgressPct">0%</span>
             </div>
-            <button class="tep-btn tep-btn-cancel" id="tepCancel" style="margin-top:6px;">
-              ✕ Cancel
-            </button>
+            <div class="tep-progress-track">
+              <div class="tep-progress-fill" id="tepProgressFill"></div>
+            </div>
+            <div class="tep-progress-sub" id="tepProgressSub"></div>
+            <button class="tep-btn tep-btn-cancel" id="tepCancel">✕ Cancel Export</button>
           </div>
 
-          <div id="tepResult" style="display:none;" class="tep-result"></div>
-          <div class="tep-drag-hint">⠿ drag to move</div>
+          <div id="tepResult" class="tep-result" style="display:none;"></div>
+
+          <div class="tep-drag-hint">
+            <div class="tep-drag-dots">
+              <span></span><span></span><span></span>
+              <span></span><span></span><span></span>
+            </div>
+          </div>
         </div>
       </div>
     `;
     return panel;
   }
 
+
   // ── Panel state helpers ────────────────────────────────────────────────────
   function setStatus(text, cls) {
-    const el = document.getElementById('tepStatus');
+    const el  = document.getElementById('tepStatus');
+    const txt = document.getElementById('tepStatusText');
     if (!el) return;
-    el.textContent = text;
-    el.className = 'tep-status ' + (cls || '');
+    el.className = 'tep-status ' + (cls || 'idle');
+    if (txt) txt.textContent = text;
   }
 
   function setButtons(disabled) {
@@ -255,19 +391,21 @@
 
   function showProgress(show) {
     const sec = document.getElementById('tepProgressSection');
-    if (sec) sec.style.display = show ? 'block' : 'none';
+    if (sec) sec.style.display = show ? 'flex' : 'none';
     if (!show) {
       updateProgress(0, '');
     }
   }
 
-  function updateProgress(pct, label) {
-    const fill = document.getElementById('tepProgressFill');
-    const txt  = document.getElementById('tepProgressText');
-    const pctEl= document.getElementById('tepProgressPct');
-    if (fill)  fill.style.width = pct + '%';
+  function updateProgress(pct, label, sub) {
+    const fill   = document.getElementById('tepProgressFill');
+    const txt    = document.getElementById('tepProgressText');
+    const pctEl  = document.getElementById('tepProgressPct');
+    const subEl  = document.getElementById('tepProgressSub');
+    if (fill)  fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
     if (txt)   txt.textContent  = label || '';
     if (pctEl) pctEl.textContent= Math.round(pct) + '%';
+    if (subEl && sub !== undefined) subEl.textContent = sub;
   }
 
   function showResult(text) {
@@ -317,10 +455,10 @@
       const { stage, page, totalPages, scraped } = msg;
       const pagePct = totalPages > 0 ? (page / totalPages) * 80 : 0;
       if (stage === 'navigating') {
-        updateProgress(pagePct + 5, `📄 Scanning page ${page} / ${totalPages || '?'}...`);
-        setStatus(`🔄 Page ${page} / ${totalPages || '?'} — ${scraped || 0} orders found`, 'running');
+        updateProgress(pagePct + 5, `Scanning page ${page} / ${totalPages || '?'}...`, `${scraped||0} orders found so far`);
+        setStatus('Scanning pages...', 'running');
       } else {
-        updateProgress(pagePct + 10, `⚡ Extracting orders (${scraped || 0} found)...`);
+        updateProgress(pagePct + 10, `Extracting orders...`, `${scraped||0} orders collected`);
       }
     }
 
