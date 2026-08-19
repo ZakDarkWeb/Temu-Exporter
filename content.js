@@ -1,624 +1,501 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script (content.js) v8.0
-// Injects a floating Quick Export panel on seller.temu.com Shipped orders page
+// Temu Order Exporter — Content Script v8.3
+// Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
 (function () {
   'use strict';
 
-  const PANEL_ID  = '__temu_exporter_panel__';
-  const STYLE_ID  = '__temu_exporter_style__';
+  const PANEL_ID = '__temu_exporter_host__';
 
   // ── Prevent double-injection ───────────────────────────────────────────────
   if (document.getElementById(PANEL_ID)) return;
-
-  // ── Only run on seller pages ───────────────────────────────────────────────
   if (!window.location.hostname.includes('seller.temu.com')) return;
 
   // ── State ──────────────────────────────────────────────────────────────────
   let running     = false;
   let minimized   = false;
-  let dragOffsetX = 0, dragOffsetY = 0, dragging = false;
+  let dragging    = false;
+  let dragOffX    = 0, dragOffY = 0;
 
-  // ── Utility: today's date range ───────────────────────────────────────────
+  // ── Today's date range ────────────────────────────────────────────────────
   function getTodayRange() {
-    const now   = new Date();
-    const from  = new Date(now); from.setHours(0, 0, 0, 0);
-    const to    = new Date(now); to.setHours(23, 59, 59, 999);
+    const now  = new Date();
+    const from = new Date(now); from.setHours(0, 0, 0, 0);
+    const to   = new Date(now); to.setHours(23, 59, 59, 999);
     return { fromDate: from.toISOString(), toDate: to.toISOString() };
   }
 
-  // ── Detect active tab using URL only (NO DOM queries = zero overhead) ───────
-  function isOnShippedTab() {
-    const url = window.location.href;
-    // Must be on seller.temu.com
-    if (!url.includes('seller.temu.com')) return false;
-    // Must be on an orders-related page
-    if (!url.includes('order') && !url.includes('orders')) return false;
-    return true;
-  }
-
+  // ── URL-based page check (zero DOM overhead) ──────────────────────────────
   function isOnOrdersPage() {
     const url = window.location.href;
     return url.includes('seller.temu.com') &&
-           (url.includes('order') || url.includes('manage') || url.includes('shipped'));
+      (url.includes('order') || url.includes('manage') || url.includes('shipped'));
   }
 
-  // ── Inject CSS (into main document, not shadow — panel uses inline styles) ─
-  function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+  // ── CSS (runs inside Shadow DOM — completely isolated) ────────────────────
+  const CSS = `
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap');
 
-      #${PANEL_ID} {
-        position: fixed;
-        bottom: 28px; right: 28px;
-        z-index: 2147483647;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        user-select: none;
-        -webkit-font-smoothing: antialiased;
-      }
-      #${PANEL_ID} *, #${PANEL_ID} *::before, #${PANEL_ID} *::after {
-        box-sizing: border-box; margin: 0; padding: 0;
-      }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-      /* ── CARD ─────────────────────────────────────────────── */
-      #${PANEL_ID} .tep-card {
-        background: #0d1117;
-        border: 1px solid rgba(0, 212, 170, 0.25);
-        border-radius: 16px;
-        box-shadow:
-          0 0 0 1px rgba(0,212,170,0.08),
-          0 8px 32px rgba(0,0,0,0.8),
-          0 0 40px rgba(0,212,170,0.06);
-        width: 230px;
-        overflow: hidden;
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-      }
+    :host {
+      all: initial;
+      position: fixed !important;
+      bottom: 28px !important;
+      right: 28px !important;
+      z-index: 2147483647 !important;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+      -webkit-font-smoothing: antialiased;
+    }
 
-      /* ── MINIMIZED STATE ──────────────────────────────────── */
-      #${PANEL_ID}.tep-minimized .tep-card {
-        width: 44px; height: 44px;
-        border-radius: 50%;
-        border-color: rgba(0,212,170,0.5);
-        box-shadow: 0 4px 20px rgba(0,0,0,0.7), 0 0 24px rgba(0,212,170,0.25);
-        cursor: pointer;
-        overflow: hidden;
-      }
-      #${PANEL_ID}.tep-minimized .tep-body,
-      #${PANEL_ID}.tep-minimized .tep-title,
-      #${PANEL_ID}.tep-minimized .tep-header-actions,
-      #${PANEL_ID}.tep-minimized .tep-divider-h { display: none !important; }
-      #${PANEL_ID}.tep-minimized .tep-header {
-        height: 44px; padding: 0;
-        border: none; background: transparent;
-        justify-content: center; cursor: pointer;
-      }
-      #${PANEL_ID}.tep-minimized .tep-logo { font-size: 20px; }
+    /* ── CARD ───────────────────────────────────────────────── */
+    .card {
+      background: #0d1117;
+      border: 1px solid rgba(0,212,170,0.3);
+      border-radius: 16px;
+      width: 228px;
+      overflow: hidden;
+      box-shadow:
+        0 0 0 1px rgba(0,212,170,0.07),
+        0 12px 40px rgba(0,0,0,0.85),
+        0 0 60px rgba(0,212,170,0.05),
+        inset 0 1px 0 rgba(255,255,255,0.04);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
 
-      /* ── HEADER ───────────────────────────────────────────── */
-      .tep-header {
-        display: flex; align-items: center; gap: 8px;
-        padding: 11px 13px 10px;
-        cursor: grab;
-        position: relative;
-      }
-      .tep-header:active { cursor: grabbing; }
-      .tep-divider-h {
-        position: absolute; bottom: 0; left: 13px; right: 13px;
-        height: 1px;
-        background: linear-gradient(90deg, rgba(0,212,170,0.4), transparent);
-      }
+    /* ── MINIMIZED ──────────────────────────────────────────── */
+    .minimized .card {
+      width: 44px; height: 44px; border-radius: 50%;
+      border-color: rgba(0,212,170,0.55);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.8), 0 0 28px rgba(0,212,170,0.22);
+      cursor: pointer;
+    }
+    .minimized .body,
+    .minimized .title,
+    .minimized .actions,
+    .minimized .header-line { display: none !important; }
+    .minimized .header {
+      height: 44px; padding: 0; justify-content: center; cursor: pointer;
+    }
+    .minimized .logo { width: 22px; height: 22px; font-size: 13px; }
 
-      .tep-logo {
-        width: 28px; height: 28px; border-radius: 8px;
-        background: linear-gradient(135deg, #00d4aa22, #00b89411);
-        border: 1px solid rgba(0,212,170,0.3);
-        display: flex; align-items: center; justify-content: center;
-        font-size: 14px; flex-shrink: 0;
-      }
-      .tep-title {
-        flex: 1; font-size: 12px; font-weight: 800;
-        color: #f1f5f9; letter-spacing: -0.3px;
-        line-height: 1;
-      }
-      .tep-subtitle {
-        font-size: 9px; font-weight: 500; color: #4a5568;
-        margin-top: 1px;
-      }
-      .tep-header-actions { display: flex; gap: 3px; }
-      .tep-icon-btn {
-        width: 22px; height: 22px; border-radius: 6px;
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.06);
-        color: #64748b; font-size: 12px; font-weight: 700;
-        cursor: pointer; font-family: inherit;
-        display: flex; align-items: center; justify-content: center;
-        transition: all 0.15s; line-height: 1;
-      }
-      .tep-icon-btn:hover {
-        background: rgba(255,255,255,0.1);
-        border-color: rgba(255,255,255,0.12);
-        color: #f1f5f9;
-      }
+    /* ── HEADER ─────────────────────────────────────────────── */
+    .header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 12px 10px;
+      cursor: grab; position: relative;
+    }
+    .header:active { cursor: grabbing; }
+    .header-line {
+      position: absolute; bottom: 0; left: 12px; right: 12px;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(0,212,170,0.5) 0%, transparent 80%);
+    }
+    .logo {
+      width: 26px; height: 26px; border-radius: 7px;
+      background: linear-gradient(135deg, rgba(0,212,170,0.15), rgba(0,184,148,0.08));
+      border: 1px solid rgba(0,212,170,0.28);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; flex-shrink: 0; line-height: 1;
+    }
+    .title-wrap { flex: 1; min-width: 0; }
+    .title {
+      font-size: 12px; font-weight: 800; color: #f0f6ff;
+      letter-spacing: -0.3px; line-height: 1;
+      white-space: nowrap;
+    }
+    .version { font-size: 8px; font-weight: 500; color: #2d3f52; margin-top: 2px; }
+    .actions { display: flex; gap: 3px; }
+    .icon-btn {
+      all: unset;
+      width: 20px; height: 20px; border-radius: 5px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+      color: #4a5568; font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: inherit;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s; line-height: 1;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
 
-      /* ── BODY ─────────────────────────────────────────────── */
-      .tep-body {
-        padding: 12px; display: flex; flex-direction: column; gap: 8px;
-      }
+    /* ── BODY ────────────────────────────────────────────────── */
+    .body { padding: 11px 11px 10px; display: flex; flex-direction: column; gap: 7px; }
 
-      /* ── STATUS CHIP ──────────────────────────────────────── */
-      .tep-status {
-        display: flex; align-items: center; gap: 6px;
-        font-size: 10px; font-weight: 600;
-        padding: 5px 9px; border-radius: 8px;
-        transition: all 0.25s ease;
-        line-height: 1;
-      }
-      .tep-status-dot {
-        width: 6px; height: 6px; border-radius: 50%;
-        flex-shrink: 0; transition: background 0.25s;
-      }
-      .tep-status.idle   { color: #64748b; background: rgba(255,255,255,0.03); }
-      .tep-status.idle   .tep-status-dot { background: #2d3748; }
-      .tep-status.ready  { color: #00d4aa; background: rgba(0,212,170,0.07); }
-      .tep-status.ready  .tep-status-dot { background: #00d4aa; box-shadow: 0 0 6px rgba(0,212,170,0.8); animation: tepPulse 1.5s ease-in-out infinite; }
-      .tep-status.running{ color: #60a5fa; background: rgba(96,165,250,0.07); }
-      .tep-status.running .tep-status-dot { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,0.8); animation: tepPulse 0.8s ease-in-out infinite; }
-      .tep-status.done   { color: #00d4aa; background: rgba(0,212,170,0.1); }
-      .tep-status.done   .tep-status-dot { background: #00d4aa; }
-      .tep-status.error  { color: #f87171; background: rgba(248,113,113,0.07); }
-      .tep-status.error  .tep-status-dot { background: #f87171; }
-      @keyframes tepPulse {
-        0%,100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.5; transform: scale(0.8); }
-      }
+    /* ── STATUS PILL ────────────────────────────────────────── */
+    .status-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; border-radius: 8px;
+      font-size: 10px; font-weight: 600; font-family: inherit;
+      transition: all 0.25s;
+    }
+    .status-dot {
+      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    }
+    .s-idle   { background: rgba(255,255,255,0.03); color: #4a5568; }
+    .s-idle   .status-dot { background: #2d3748; }
+    .s-ready  { background: rgba(0,212,170,0.08); color: #00d4aa; }
+    .s-ready  .status-dot { background: #00d4aa; box-shadow: 0 0 8px rgba(0,212,170,0.9); animation: dot-pulse 2s ease-in-out infinite; }
+    .s-running{ background: rgba(96,165,250,0.08); color: #93c5fd; }
+    .s-running .status-dot { background: #60a5fa; box-shadow: 0 0 8px rgba(96,165,250,0.9); animation: dot-pulse 0.9s ease-in-out infinite; }
+    .s-done   { background: rgba(0,212,170,0.1);  color: #00d4aa; }
+    .s-done   .status-dot { background: #00d4aa; }
+    .s-error  { background: rgba(248,113,113,0.08); color: #fca5a5; }
+    .s-error  .status-dot { background: #f87171; }
+    @keyframes dot-pulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%     { opacity:0.4; transform:scale(0.75); }
+    }
 
-      /* ── BUTTONS ──────────────────────────────────────────── */
-      .tep-btn {
-        width: 100%; padding: 0 14px;
-        height: 36px;
-        border: none; border-radius: 10px;
-        font-size: 11px; font-weight: 800; font-family: inherit;
-        cursor: pointer;
-        display: flex; align-items: center; justify-content: center; gap: 7px;
-        transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
-        position: relative; overflow: hidden;
-        letter-spacing: 0.1px; white-space: nowrap;
-      }
-      /* Shimmer effect */
-      .tep-btn::after {
-        content: '';
-        position: absolute; top: 0; left: -80%; width: 50%; height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
-        transform: skewX(-15deg);
-        animation: tepShimmer 3.5s ease-in-out infinite;
-      }
-      @keyframes tepShimmer { 0%{left:-80%} 40%,100%{left:130%} }
+    /* ── BUTTONS ─────────────────────────────────────────────── */
+    .btn {
+      all: unset;
+      display: flex; align-items: center; justify-content: center; gap: 7px;
+      width: 100%; height: 36px; padding: 0 12px;
+      border-radius: 10px; cursor: pointer;
+      font-size: 11px; font-weight: 800; font-family: inherit;
+      letter-spacing: 0.05px; white-space: nowrap;
+      position: relative; overflow: hidden;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    /* Shimmer sweep */
+    .btn::after {
+      content: '';
+      position: absolute; top: 0; left: -70%; width: 45%; height: 100%;
+      background: linear-gradient(105deg, transparent 0%, rgba(255,255,255,0.18) 50%, transparent 100%);
+      animation: sweep 3.5s ease-in-out infinite;
+    }
+    @keyframes sweep { 0%{left:-70%} 45%,100%{left:120%} }
 
-      /* Primary — teal gradient */
-      .tep-btn-primary {
-        background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%);
-        color: #01120d;
-        box-shadow: 0 0 20px rgba(0,212,170,0.28), 0 3px 10px rgba(0,0,0,0.5);
-      }
-      .tep-btn-primary:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 0 28px rgba(0,212,170,0.45), 0 6px 18px rgba(0,0,0,0.5);
-      }
-      .tep-btn-primary:active { transform: scale(0.97); }
+    .btn-primary {
+      background: linear-gradient(130deg, #00d4aa 0%, #00ba96 55%, #00a882 100%);
+      color: #00170f;
+      box-shadow: 0 0 22px rgba(0,212,170,0.3), 0 3px 12px rgba(0,0,0,0.5);
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 32px rgba(0,212,170,0.5), 0 6px 20px rgba(0,0,0,0.55);
+    }
+    .btn-primary:active { transform: scale(0.97); }
 
-      /* Secondary — outlined teal */
-      .tep-btn-secondary {
-        background: rgba(0,212,170,0.06);
-        border: 1px solid rgba(0,212,170,0.22);
-        color: #00d4aa;
-      }
-      .tep-btn-secondary:hover {
-        background: rgba(0,212,170,0.12);
-        border-color: rgba(0,212,170,0.4);
-        transform: translateY(-1px);
-      }
-      .tep-btn-secondary:active { transform: scale(0.97); }
+    .btn-outline {
+      background: rgba(0,212,170,0.06);
+      border: 1px solid rgba(0,212,170,0.24);
+      color: #00d4aa;
+    }
+    .btn-outline:hover {
+      background: rgba(0,212,170,0.12);
+      border-color: rgba(0,212,170,0.45);
+      transform: translateY(-1px);
+    }
+    .btn-outline:active { transform: scale(0.97); }
 
-      /* Cancel — red outline pill */
-      .tep-btn-cancel {
-        background: rgba(239,68,68,0.06);
-        border: 1px solid rgba(239,68,68,0.25);
-        color: #f87171;
-        border-radius: 10px;
-      }
-      .tep-btn-cancel:hover { background: rgba(239,68,68,0.13); border-color: rgba(239,68,68,0.45); }
-      .tep-btn-cancel:active { transform: scale(0.97); }
+    .btn-cancel {
+      all: unset;
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+      width: 100%; height: 30px; padding: 0 10px;
+      border-radius: 8px; cursor: pointer;
+      font-size: 10px; font-weight: 700; font-family: inherit;
+      background: rgba(239,68,68,0.07);
+      border: 1px solid rgba(239,68,68,0.22);
+      color: #fca5a5;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-cancel:hover { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.4); }
 
-      .tep-btn:disabled {
-        opacity: 0.35; cursor: not-allowed;
-        transform: none !important; box-shadow: none !important;
-      }
-      .tep-btn:disabled::after { display: none; }
+    .btn:disabled, .btn[disabled] {
+      opacity: 0.35; cursor: not-allowed;
+      transform: none !important; box-shadow: none !important;
+    }
+    .btn[disabled]::after { display: none; }
 
-      /* ── PROGRESS SECTION ─────────────────────────────────── */
-      .tep-progress-section {
-        display: flex; flex-direction: column; gap: 7px;
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.05);
-        border-radius: 10px; padding: 9px 10px;
-      }
-      .tep-progress-top {
-        display: flex; align-items: center; gap: 7px;
-      }
-      .tep-spinner {
-        width: 12px; height: 12px;
-        border: 2px solid rgba(96,165,250,0.2);
-        border-top-color: #60a5fa;
-        border-radius: 50%;
-        animation: tepSpin 0.7s linear infinite;
-        flex-shrink: 0;
-      }
-      @keyframes tepSpin { to { transform: rotate(360deg); } }
-      .tep-progress-text {
-        flex: 1; font-size: 10px; font-weight: 700; color: #60a5fa;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-      .tep-progress-pct {
-        font-size: 10px; font-weight: 900; color: #00d4aa;
-        flex-shrink: 0; font-variant-numeric: tabular-nums;
-      }
-      .tep-progress-track {
-        height: 3px; background: rgba(255,255,255,0.06);
-        border-radius: 2px; overflow: hidden;
-      }
-      .tep-progress-fill {
-        height: 100%; border-radius: 2px;
-        background: linear-gradient(90deg, #00d4aa, #60a5fa);
-        box-shadow: 0 0 8px rgba(0,212,170,0.6);
-        transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
-        width: 0%;
-      }
-      .tep-progress-sub {
-        font-size: 9px; color: #4a5568; font-weight: 600;
-      }
+    /* ── PROGRESS CARD ───────────────────────────────────────── */
+    .progress-card {
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px; padding: 9px 10px 8px;
+      display: flex; flex-direction: column; gap: 7px;
+    }
+    .progress-row {
+      display: flex; align-items: center; gap: 7px;
+    }
+    .spinner {
+      width: 11px; height: 11px; flex-shrink: 0;
+      border: 2px solid rgba(96,165,250,0.18);
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-label {
+      flex: 1; font-size: 10px; font-weight: 700; font-family: inherit;
+      color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .progress-pct {
+      font-size: 10px; font-weight: 900; font-family: inherit;
+      color: #00d4aa; font-variant-numeric: tabular-nums; flex-shrink: 0;
+    }
+    .progress-track {
+      height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, #00d4aa, #60a5fa);
+      box-shadow: 0 0 10px rgba(0,212,170,0.65);
+      transition: width 0.45s cubic-bezier(0.4,0,0.2,1);
+      width: 0%;
+    }
+    .progress-sub {
+      font-size: 9px; font-weight: 600; font-family: inherit; color: #374151;
+    }
 
-      /* ── RESULT TOAST ─────────────────────────────────────── */
-      .tep-result {
-        font-size: 10px; font-weight: 700; color: #00d4aa;
-        text-align: center; padding: 6px 8px;
-        background: rgba(0,212,170,0.07);
-        border: 1px solid rgba(0,212,170,0.18);
-        border-radius: 8px;
-        animation: tepFadeIn 0.3s ease;
-      }
-      @keyframes tepFadeIn {
-        from { opacity:0; transform: translateY(6px); }
-        to   { opacity:1; transform: none; }
-      }
+    /* ── RESULT TOAST ───────────────────────────────────────── */
+    .result-toast {
+      background: rgba(0,212,170,0.08);
+      border: 1px solid rgba(0,212,170,0.2);
+      border-radius: 8px; padding: 7px 9px;
+      font-size: 10px; font-weight: 700; font-family: inherit;
+      color: #00d4aa; text-align: center;
+      animation: toast-in 0.3s ease;
+    }
+    @keyframes toast-in {
+      from { opacity:0; transform:translateY(5px); }
+      to   { opacity:1; transform:none; }
+    }
 
-      /* ── DRAG HINT ────────────────────────────────────────── */
-      .tep-drag-hint {
-        display: flex; align-items: center; justify-content: center; gap: 3px;
-        font-size: 9px; color: #1e2a3a;
-        padding-bottom: 1px;
-      }
-      .tep-drag-dots {
-        display: flex; gap: 3px;
-      }
-      .tep-drag-dots span {
-        width: 3px; height: 3px; border-radius: 50%;
-        background: #1f2d3d;
-        display: block;
-      }
-    `;
-    document.head.appendChild(style);
-  }
+    /* ── DRAG DOTS ───────────────────────────────────────────── */
+    .drag-dots {
+      display: flex; justify-content: center; gap: 4px; padding-top: 1px;
+    }
+    .drag-dot {
+      width: 3px; height: 3px; border-radius: 50%; background: #1a2537;
+    }
+  `;
 
-
-  // ── Build HTML panel ──────────────────────────────────────────────────────
-  function buildPanel() {
-    const panel = document.createElement('div');
-    panel.id = PANEL_ID;
-    panel.innerHTML = `
-      <div class="tep-card">
-        <div class="tep-header" id="tepHeader">
-          <div class="tep-logo">📦</div>
-          <div style="flex:1;min-width:0;">
-            <div class="tep-title">Temu Exporter</div>
-          </div>
-          <div class="tep-header-actions">
-            <button class="tep-icon-btn" id="tepMinBtn" title="Minimize">—</button>
-          </div>
-          <div class="tep-divider-h"></div>
+  // ── HTML Template ─────────────────────────────────────────────────────────
+  const HTML = `
+    <div class="card">
+      <div class="header" id="hdr">
+        <div class="logo">📦</div>
+        <div class="title-wrap">
+          <div class="title">Temu Exporter</div>
+          <div class="version">v8.3 · Quick Export</div>
+        </div>
+        <div class="actions">
+          <button class="icon-btn" id="minBtn">—</button>
+        </div>
+        <div class="header-line"></div>
+      </div>
+      <div class="body">
+        <div class="status-pill s-ready" id="statusPill">
+          <span class="status-dot"></span>
+          <span id="statusTxt">Ready to export</span>
         </div>
 
-        <div class="tep-body">
-          <div class="tep-status ready" id="tepStatus">
-            <span class="tep-status-dot"></span>
-            <span id="tepStatusText">Ready to export</span>
+        <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
+        <button class="btn btn-outline" id="btnSheets">📊 Sheets Sync Today</button>
+
+        <div class="progress-card" id="progressCard" style="display:none;">
+          <div class="progress-row">
+            <div class="spinner"></div>
+            <span class="progress-label" id="progLabel">Scanning...</span>
+            <span class="progress-pct" id="progPct">0%</span>
           </div>
+          <div class="progress-track"><div class="progress-bar" id="progBar"></div></div>
+          <div class="progress-sub" id="progSub"></div>
+          <button class="btn-cancel" id="btnCancel">✕ Cancel Export</button>
+        </div>
 
-          <button class="tep-btn tep-btn-primary" id="tepExportToday">
-            ⚡ Export Today
-          </button>
-          <button class="tep-btn tep-btn-secondary" id="tepSheetsToday">
-            📊 Sheets Sync Today
-          </button>
-
-          <div class="tep-progress-section" id="tepProgressSection" style="display:none;">
-            <div class="tep-progress-top">
-              <div class="tep-spinner"></div>
-              <span class="tep-progress-text" id="tepProgressText">Scanning...</span>
-              <span class="tep-progress-pct" id="tepProgressPct">0%</span>
-            </div>
-            <div class="tep-progress-track">
-              <div class="tep-progress-fill" id="tepProgressFill"></div>
-            </div>
-            <div class="tep-progress-sub" id="tepProgressSub"></div>
-            <button class="tep-btn tep-btn-cancel" id="tepCancel">✕ Cancel Export</button>
-          </div>
-
-          <div id="tepResult" class="tep-result" style="display:none;"></div>
-
-          <div class="tep-drag-hint">
-            <div class="tep-drag-dots">
-              <span></span><span></span><span></span>
-              <span></span><span></span><span></span>
-            </div>
-          </div>
+        <div class="result-toast" id="resultToast" style="display:none;"></div>
+        <div class="drag-dots">
+          <span class="drag-dot"></span><span class="drag-dot"></span><span class="drag-dot"></span>
+          <span class="drag-dot"></span><span class="drag-dot"></span><span class="drag-dot"></span>
         </div>
       </div>
-    `;
-    return panel;
-  }
+    </div>
+  `;
 
+  // ── Build host + shadow root ───────────────────────────────────────────────
+  const host = document.createElement('div');
+  host.id = PANEL_ID;
+  // Host element needs fixed positioning set inline (before shadow attaches)
+  Object.assign(host.style, {
+    position: 'fixed', bottom: '28px', right: '28px',
+    zIndex: '2147483647', userSelect: 'none', lineHeight: 'normal'
+  });
 
-  // ── Panel state helpers ────────────────────────────────────────────────────
+  const shadow = host.attachShadow({ mode: 'open' });
+
+  const styleEl = document.createElement('style');
+  styleEl.textContent = CSS;
+  shadow.appendChild(styleEl);
+
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = HTML;
+  shadow.appendChild(wrapper);
+
+  document.body.appendChild(host);
+
+  // ── Shadow DOM element helpers ────────────────────────────────────────────
+  const $ = (id) => shadow.getElementById(id);
+
+  // ── UI state functions ────────────────────────────────────────────────────
   function setStatus(text, cls) {
-    const el  = document.getElementById('tepStatus');
-    const txt = document.getElementById('tepStatusText');
-    if (!el) return;
-    el.className = 'tep-status ' + (cls || 'idle');
+    const pill = $('statusPill');
+    const txt  = $('statusTxt');
+    if (!pill) return;
+    pill.className = 'status-pill ' + (cls || 's-idle');
     if (txt) txt.textContent = text;
   }
 
   function setButtons(disabled) {
-    ['tepExportToday', 'tepSheetsToday'].forEach(id => {
-      const btn = document.getElementById(id);
-      if (btn) btn.disabled = disabled;
+    [$('btnExport'), $('btnSheets')].forEach(b => {
+      if (b) { b.disabled = disabled; if (disabled) b.setAttribute('disabled',''); else b.removeAttribute('disabled'); }
     });
   }
 
   function showProgress(show) {
-    const sec = document.getElementById('tepProgressSection');
-    if (sec) sec.style.display = show ? 'flex' : 'none';
-    if (!show) {
-      updateProgress(0, '');
-    }
+    const card = $('progressCard');
+    if (card) card.style.display = show ? 'flex' : 'none';
+    if (!show) updateProgress(0, '', '');
   }
 
   function updateProgress(pct, label, sub) {
-    const fill   = document.getElementById('tepProgressFill');
-    const txt    = document.getElementById('tepProgressText');
-    const pctEl  = document.getElementById('tepProgressPct');
-    const subEl  = document.getElementById('tepProgressSub');
-    if (fill)  fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
-    if (txt)   txt.textContent  = label || '';
-    if (pctEl) pctEl.textContent= Math.round(pct) + '%';
-    if (subEl && sub !== undefined) subEl.textContent = sub;
+    const bar   = $('progBar');
+    const lbl   = $('progLabel');
+    const pctEl = $('progPct');
+    const subEl = $('progSub');
+    if (bar)   bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (lbl)   lbl.textContent = label || '';
+    if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+    if (subEl) subEl.textContent = sub || '';
   }
 
   function showResult(text) {
-    const el = document.getElementById('tepResult');
+    const el = $('resultToast');
     if (!el) return;
     el.textContent = text;
     el.style.display = 'block';
-    setTimeout(() => { if (el) el.style.display = 'none'; }, 5000);
+    setTimeout(() => { el.style.display = 'none'; }, 6000);
   }
 
-  // ── Start export via background.js ─────────────────────────────────────────
-  function startQuickExport(sheetsMode) {
+  // ── Start export ──────────────────────────────────────────────────────────
+  function startExport(sheetsMode) {
     if (running) return;
     running = true;
     setButtons(true);
     showProgress(true);
-    showResult(''); // hide previous result
     const { fromDate, toDate } = getTodayRange();
-    const label = sheetsMode ? 'Sheets Sync' : 'Export';
-
-    setStatus('🔄 Running ' + label + '...', 'running');
-    updateProgress(5, 'Initializing...');
-
-    // Find the current tab ID via active tab detection
+    setStatus('Scanning pages...', 's-running');
+    updateProgress(5, 'Initializing...', '');
     chrome.runtime.sendMessage({
       type: sheetsMode ? 'quickSheetsSync' : 'quickExport',
-      fromDate,
-      toDate
+      fromDate, toDate
     });
   }
 
   function cancelExport() {
     chrome.runtime.sendMessage({ type: 'cancelExport' });
-    running = false;
-    setButtons(false);
-    showProgress(false);
-    setStatus('⚡ Export cancelled', 'error');
-    setTimeout(() => setStatus('✅ Shipped tab ready', 'ready'), 3000);
+    running = false; setButtons(false); showProgress(false);
+    setStatus('Export cancelled', 's-error');
+    setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
   }
 
-  // ── Listen to messages from background.js ─────────────────────────────────
+  // ── Message listener ──────────────────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg) return;
-
-    // Progress updates (autoProgress from runDateExport)
     if (msg.type === 'autoProgress') {
       const { stage, page, totalPages, scraped } = msg;
-      const pagePct = totalPages > 0 ? (page / totalPages) * 80 : 0;
+      const pct = totalPages > 0 ? (page / totalPages) * 85 : 0;
       if (stage === 'navigating') {
-        updateProgress(pagePct + 5, `Scanning page ${page} / ${totalPages || '?'}...`, `${scraped||0} orders found so far`);
-        setStatus('Scanning pages...', 'running');
+        updateProgress(pct + 5, `Scanning page ${page} / ${totalPages || '?'}`, `${scraped || 0} orders found so far`);
       } else {
-        updateProgress(pagePct + 10, `Extracting orders...`, `${scraped||0} orders collected`);
+        updateProgress(pct + 10, `Extracting orders...`, `${scraped || 0} orders collected`);
       }
     }
-
-    // Export done
     if (msg.type === 'autoDone' || msg.type === 'done') {
-      running = false;
-      setButtons(false);
-      showProgress(false);
-      const count = msg.ordersFound || msg.rowsSynced || 0;
-      setStatus(`✅ Done! ${count} orders exported`, 'done');
-      showResult(`✅ ${count} orders exported successfully!`);
-      updateProgress(100, 'Complete!');
-      setTimeout(() => setStatus('✅ Shipped tab ready', 'ready'), 6000);
+      running = false; setButtons(false); showProgress(false);
+      const count = msg.ordersFound || 0;
+      updateProgress(100, 'Complete!', '');
+      setStatus(`Done! ${count} orders exported`, 's-done');
+      showResult(`✅ ${count} orders exported!`);
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 7000);
     }
-
-    // Sheets sync done (autoDone with sheetsMode)
-    if (msg.type === 'sheetsDone') {
-      running = false;
-      setButtons(false);
-      showProgress(false);
-      const count = msg.rowsSynced || 0;
-      setStatus(`✅ ${count} rows copied to clipboard!`, 'done');
-      showResult(`📊 ${count} rows ready — Ctrl+V in Google Sheets!`);
-      setTimeout(() => setStatus('✅ Shipped tab ready', 'ready'), 8000);
-    }
-
-    // No data
     if (msg.type === 'noData') {
-      running = false;
-      setButtons(false);
-      showProgress(false);
-      setStatus('⚠️ No orders found in range', 'error');
-      setTimeout(() => setStatus('✅ Shipped tab ready', 'ready'), 4000);
+      running = false; setButtons(false); showProgress(false);
+      setStatus('No orders found in range', 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 4000);
     }
-
-    // Error
     if (msg.type === 'error') {
-      running = false;
-      setButtons(false);
-      showProgress(false);
-      setStatus('❌ ' + (msg.message || 'Error').slice(0, 50), 'error');
-      setTimeout(() => setStatus('✅ Shipped tab ready', 'ready'), 5000);
+      running = false; setButtons(false); showProgress(false);
+      setStatus((msg.message || 'Error').slice(0, 48), 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 5000);
     }
-
-    // Cancelled
     if (msg.type === 'cancelled') {
-      running = false;
-      setButtons(false);
-      showProgress(false);
-      setStatus('⚡ Cancelled', 'error');
-      setTimeout(() => setStatus('✅ Shipped tab ready', 'ready'), 3000);
+      running = false; setButtons(false); showProgress(false);
+      setStatus('Cancelled', 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
     }
   });
 
-  // ── Draggable logic ────────────────────────────────────────────────────────
-  function initDrag(panel) {
-    const header = document.getElementById('tepHeader');
-    if (!header) return;
-
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.tep-icon-btn')) return;
+  // ── Dragging (on host element directly) ──────────────────────────────────
+  const hdr = $('hdr');
+  if (hdr) {
+    hdr.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.icon-btn')) return;
       dragging = true;
-      const rect = panel.getBoundingClientRect();
-      dragOffsetX = e.clientX - rect.left;
-      dragOffsetY = e.clientY - rect.top;
-      panel.style.transition = 'none';
-      document.body.style.userSelect = 'none';
-    });
-
-    document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      let x = e.clientX - dragOffsetX;
-      let y = e.clientY - dragOffsetY;
-      // Clamp to viewport
-      x = Math.max(0, Math.min(window.innerWidth  - panel.offsetWidth,  x));
-      y = Math.max(0, Math.min(window.innerHeight - panel.offsetHeight, y));
-      panel.style.left   = x + 'px';
-      panel.style.top    = y + 'px';
-      panel.style.right  = 'auto';
-      panel.style.bottom = 'auto';
-    });
-
-    document.addEventListener('mouseup', () => {
-      dragging = false;
-      panel.style.transition = '';
-      document.body.style.userSelect = '';
+      const rect = host.getBoundingClientRect();
+      dragOffX = e.clientX - rect.left;
+      dragOffY = e.clientY - rect.top;
+      host.style.transition = 'none';
     });
   }
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    let x = Math.max(0, Math.min(window.innerWidth  - host.offsetWidth,  e.clientX - dragOffX));
+    let y = Math.max(0, Math.min(window.innerHeight - host.offsetHeight, e.clientY - dragOffY));
+    host.style.right = 'auto'; host.style.bottom = 'auto';
+    host.style.left  = x + 'px'; host.style.top = y + 'px';
+  });
+  document.addEventListener('mouseup', () => { dragging = false; host.style.transition = ''; });
 
-  // ── Minimize toggle ────────────────────────────────────────────────────────
-  function initMinimize(panel) {
-    const minBtn = document.getElementById('tepMinBtn');
-    if (minBtn) {
-      minBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        minimized = !minimized;
-        panel.classList.toggle('tep-minimized', minimized);
-        minBtn.textContent = minimized ? '□' : '—';
-      });
+  // ── Minimize ──────────────────────────────────────────────────────────────
+  const minBtn = $('minBtn');
+  if (minBtn) {
+    minBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      minimized = !minimized;
+      wrapper.firstElementChild.classList.toggle('minimized', minimized);
+      minBtn.textContent = minimized ? '+' : '—';
+    });
+  }
+  // Click minimized to expand
+  host.addEventListener('click', () => {
+    if (minimized) {
+      minimized = false;
+      wrapper.firstElementChild.classList.remove('minimized');
+      if (minBtn) minBtn.textContent = '—';
     }
-    // Click on minimized panel to expand
-    panel.addEventListener('click', (e) => {
-      if (minimized && !e.target.closest('.tep-icon-btn')) {
-        minimized = false;
-        panel.classList.remove('tep-minimized');
-        const minBtn2 = document.getElementById('tepMinBtn');
-        if (minBtn2) minBtn2.textContent = '—';
-      }
-    });
-  }
+  });
 
-  // ── Wire buttons ──────────────────────────────────────────────────────────
-  function wireButtons() {
-    const btnExport = document.getElementById('tepExportToday');
-    const btnSheets = document.getElementById('tepSheetsToday');
-    const btnCancel = document.getElementById('tepCancel');
+  // ── Wire action buttons ───────────────────────────────────────────────────
+  const btnE = $('btnExport'), btnS = $('btnSheets'), btnC = $('btnCancel');
+  if (btnE) btnE.addEventListener('click', () => startExport(false));
+  if (btnS) btnS.addEventListener('click', () => startExport(true));
+  if (btnC) btnC.addEventListener('click', cancelExport);
 
-    if (btnExport) btnExport.addEventListener('click', () => startQuickExport(false));
-    if (btnSheets) btnSheets.addEventListener('click', () => startQuickExport(true));
-    if (btnCancel) btnCancel.addEventListener('click', cancelExport);
-  }
+  // ── SPA navigation watcher (URL-based, 3s poll) ───────────────────────────
+  let _lastUrl = window.location.href;
+  setInterval(() => {
+    const cur = window.location.href;
+    if (cur === _lastUrl) return;
+    _lastUrl = cur;
+    host.style.display = isOnOrdersPage() ? '' : 'none';
+    if (isOnOrdersPage() && !running) setStatus('Ready to export', 's-ready');
+  }, 3000);
 
-  // ── Main init ─────────────────────────────────────────────────────────────
-  function init() {
-    injectStyles();
-    const panel = buildPanel();
-    document.body.appendChild(panel);
-    initDrag(panel);
-    initMinimize(panel);
-    wireButtons();
-
-    // Initial status based on page
-    if (!isOnOrdersPage()) {
-      setStatus('ℹ️ Go to Orders tab to export', '');
-      panel.style.display = 'none';
-    }
-
-    // ── Watch for SPA navigation using URL polling (lightweight — no DOM scanning) ──
-    let _lastUrl = window.location.href;
-    setInterval(() => {
-      const currentUrl = window.location.href;
-      if (currentUrl === _lastUrl) return; // URL hasn't changed — do nothing
-      _lastUrl = currentUrl;
-      // URL changed: update panel visibility and status
-      if (isOnOrdersPage()) {
-        panel.style.display = '';
-        if (!running) setStatus('✅ Orders page ready', 'ready');
-      } else {
-        // Hide panel on non-order pages (e.g. product listings, settings)
-        panel.style.display = 'none';
-      }
-    }, 3000); // Check every 3 seconds — negligible CPU cost
-  }
-
-  // ── Wait for DOM ready ────────────────────────────────────────────────────
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    // Small delay so page layout is stable
-    setTimeout(init, 1500);
-  }
+  // Initial visibility
+  if (!isOnOrdersPage()) host.style.display = 'none';
 
 })();
