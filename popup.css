@@ -111,28 +111,28 @@
 /* ══════════════════════════════════════════════════════════════════════════════
    3. TAB CONTENT — smooth fade+slide transition (replaces instant display:none)
    ══════════════════════════════════════════════════════════════════════════════ */
-.tab-content {
-  opacity: 0;
-  transform: translateY(4px);
-  pointer-events: none;
-  position: absolute;
-  visibility: hidden;
-  width: 100%;
+
+/* FIX: contain the active tab's scale(1.02) inside the pill border */
+.mode-tabs {
+  overflow: hidden;
 }
-/* active state must be relative to flow normally */
+
+/* FIX: don't use position:absolute on inactive tabs — it breaks parent height.
+   Simply animate the .active state appearance. Inactive tabs stay display:none. */
+.tab-content {
+  display: none;          /* same as original */
+}
+
 .tab-content.active {
-  display: block;
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-  position: relative;
-  visibility: visible;
+  display: block;         /* same as original */
   animation: tabReveal 0.28s cubic-bezier(0.16,1,0.3,1) both;
 }
+
 @keyframes tabReveal {
   from { opacity: 0; transform: translateY(5px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
 
 /* ══════════════════════════════════════════════════════════════════════════════
    4. STATUS TRACKER SECTION — consistent with sheet buttons
