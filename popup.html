@@ -820,7 +820,232 @@
     0%,100% { box-shadow: 0 0 0 3px rgba(0,212,170,0.12), var(--accent-glow); }
     50%      { box-shadow: 0 0 0 6px rgba(0,212,170,0.06), 0 0 22px rgba(0,212,170,0.5); }
   }
+
+  /* ── TAB SECTION LABEL ───────────────────────────────────── */
+  .tab-section-label {
+    font-size: 10px; color: var(--muted2); font-weight: 600;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.02);
+    border-left: 3px solid var(--border2);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    line-height: 1.4;
+  }
+  .tab-section-label strong { color: var(--text2); }
+
+  /* ── DATE TAB — two-column date card ────────────────────── */
+  /* Override page-range inside date tab to vertical two-row layout */
+  #tabContentDate .page-range {
+    flex-direction: column; gap: 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 12px;
+  }
+  #tabContentDate .date-field {
+    display: flex; flex-direction: column; gap: 5px; width: 100%;
+  }
+  #tabContentDate .date-field label {
+    font-size: 9px; font-weight: 700;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  #tabContentDate .date-input {
+    width: 100%; padding: 7px 10px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-radius: var(--r-sm); color: var(--text);
+    font-size: 11px; font-family: inherit;
+    transition: border-color 0.2s;
+  }
+  #tabContentDate .date-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,212,170,0.15); }
+  #tabContentDate .date-input::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor: pointer; }
+  #tabContentDate .page-arrow { display: none; } /* hide arrow — vertical layout */
+
+  /* Quick date buttons row in date tab */
+  #tabContentDate > div[style] {
+    display: flex; gap: 6px; margin: 0 0 4px 0 !important;
+  }
+
+  /* Max pages row in date tab */
+  .date-max-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .date-max-row span { font-size: 10px; color: var(--muted2); font-weight: 600; white-space: nowrap; }
+
+  /* Date mode note */
+  .date-mode-note {
+    font-size: 10px; color: var(--muted2); line-height: 1.6;
+    padding: 8px 10px;
+    background: rgba(79,142,247,0.04);
+    border: 1px solid rgba(79,142,247,0.1);
+    border-radius: var(--r-md);
+  }
+  .date-mode-note strong { color: var(--text2); }
+  .date-mode-note em { color: var(--blue); font-style: normal; font-weight: 700; }
+
+  /* ── PAGES TAB — estimate chip & date-filter ────────────── */
+  .estimate-chip {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 6px 10px;
+    background: rgba(0,212,170,0.05); border: 1px solid rgba(0,212,170,0.15);
+    border-radius: var(--r-sm);
+    font-size: 10px; font-weight: 600;
+  }
+  .estimate-orders { color: var(--accent); }
+  .estimate-time   { color: var(--muted2); }
+
+  .date-filter-section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .date-filter-toggle-row {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .date-filter-toggle-row input[type="checkbox"] {
+    width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer;
+  }
+  .date-filter-toggle-label {
+    font-size: 10px; font-weight: 700; color: var(--text2); flex: 1;
+  }
+  .date-filter-badge {
+    font-size: 8px; font-weight: 700; padding: 2px 6px;
+    border-radius: var(--r-full);
+    background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.25);
+    color: #fbbf24;
+  }
+  .date-filter-inputs { display: flex; flex-direction: column; gap: 8px; }
+  .date-filter-inputs .page-range {
+    flex-direction: column; gap: 8px; background: transparent; border: none; padding: 0;
+  }
+  .date-filter-inputs .date-field { display: flex; flex-direction: column; gap: 4px; }
+  .date-filter-inputs .date-field label { font-size: 9px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+  .date-filter-inputs .date-input { width: 100%; }
+  .date-filter-inputs .page-arrow { display: none; }
+
+  /* ── SELECT TAB styles ───────────────────────────────────── */
+  .sel-detect-bar {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; color: var(--muted2); font-weight: 600;
+    padding: 5px 0;
+  }
+  .sel-pulse {
+    color: var(--accent); font-size: 8px;
+    animation: liveFlash 1s ease-in-out infinite;
+  }
+  .sel-controls {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .sel-status-big { display: flex; align-items: baseline; gap: 5px; }
+  .sel-count-big {
+    font-size: 22px; font-weight: 900; color: var(--accent);
+    font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .sel-count-label { font-size: 10px; color: var(--muted2); font-weight: 600; }
+  .btn-clear-sel {
+    font-size: 9px; font-weight: 700; padding: 4px 8px;
+    border-radius: var(--r-sm); cursor: pointer; font-family: inherit;
+    background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25);
+    color: #f87171; transition: all 0.15s;
+  }
+  .btn-clear-sel:hover:not(:disabled) { background: rgba(239,68,68,0.15); }
+  .btn-clear-sel:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .btn-save-run {
+    width: 100%; padding: 9px 12px;
+    background: rgba(79,142,247,0.08); border: 1px solid rgba(79,142,247,0.25);
+    border-radius: var(--r-md); color: var(--blue);
+    font-size: 11px; font-weight: 800; cursor: pointer; font-family: inherit;
+    transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn-save-run:hover:not(:disabled) { background: rgba(79,142,247,0.14); border-color: rgba(79,142,247,0.4); }
+  .btn-save-run:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .save-run-status {
+    font-size: 9px; color: var(--accent); font-weight: 600; text-align: center; min-height: 14px;
+  }
+
+  .restore-banner {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px;
+    background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2);
+    border-radius: var(--r-md);
+  }
+  .restore-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .restore-count { font-size: 16px; font-weight: 900; color: #fbbf24; }
+  .restore-label { font-size: 9px; color: var(--muted2); }
+  .restore-saved-at { font-size: 8px; color: var(--muted); }
+  .btn-restore {
+    font-size: 9px; font-weight: 700; padding: 5px 9px;
+    border-radius: var(--r-sm); cursor: pointer; font-family: inherit;
+    background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.3);
+    color: #fbbf24; transition: all 0.15s; white-space: nowrap;
+  }
+  .btn-restore:hover { background: rgba(245,158,11,0.2); }
+  .btn-clear-run {
+    background: transparent; border: none; color: var(--muted); cursor: pointer;
+    font-size: 16px; padding: 2px 4px; line-height: 1;
+    transition: color 0.15s;
+  }
+  .btn-clear-run:hover { color: #f87171; }
+  .restore-result {
+    font-size: 10px; color: var(--muted2); min-height: 14px; text-align: center; font-weight: 600;
+  }
+
+  .sel-instructions {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: 10px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .sel-step { font-size: 10px; color: var(--muted2); line-height: 1.4; }
+  .sel-step strong { color: var(--text2); }
+  .sel-note { font-size: 10px; color: var(--accent); font-style: italic; margin-top: 2px; }
+
+  .sel-debug-btn {
+    font-size: 9px; font-weight: 700; padding: 4px 8px;
+    border-radius: var(--r-sm); cursor: pointer; font-family: inherit;
+    background: var(--surface2); border: 1px solid var(--border2);
+    color: var(--muted2); transition: all 0.15s; margin-top: 4px; align-self: flex-start;
+    display: inline-block;
+  }
+  .sel-debug-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .sel-debug-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: 8px;
+  }
+  .sel-debug-title { font-size: 10px; font-weight: 700; color: var(--text2); margin-bottom: 6px; }
+  .sel-debug-pre {
+    font-size: 9px; color: var(--muted2); white-space: pre-wrap;
+    word-break: break-all; line-height: 1.5; font-family: monospace;
+    max-height: 100px; overflow-y: auto;
+  }
+
+  /* label-run-note */
+  .label-run-note {
+    font-size: 10px; color: var(--muted2); padding: 6px 10px;
+    background: rgba(0,212,170,0.04); border: 1px solid rgba(0,212,170,0.12);
+    border-radius: var(--r-sm);
+  }
+
+  /* ── Max pages row inside date tab fix ─────────────────────── */
+  /* Target the inline-styled div in date tab for max pages */
+  #tabContentDate > div:not([class]) {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+  }
+  #tabContentDate > div:not([class]) > span {
+    font-size: 10px !important; color: var(--muted2) !important; font-weight: 600 !important;
+  }
+
 </style>
+
 </head>
 
 <body>
