@@ -420,6 +420,12 @@
   function refreshLastBulkButton() {
     const btn = $('btnLastBulk');
     if (!btn) return;
+    if (hasBulkRecordsModal()) {
+      btn.textContent = '📦 Capture Newest Successful Task';
+      btn.title = 'Open the newest task’s View details page and capture its successful rows';
+      btn.disabled = false;
+      return;
+    }
     chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
       const record = data.temuLastBulkPurchase_v1;
       const count = record?.rows?.length || record?.successCount || 0;
@@ -432,8 +438,8 @@
         btn.title = `Task ${record.taskId || ''} is still being prepared`;
         btn.disabled = true;
       } else {
-        btn.textContent = '📦 Open task details to capture labels';
-        btn.title = 'Open the newest successful task details in Temu first';
+        btn.textContent = '📦 Open shipping records to capture labels';
+        btn.title = 'Open Manage shipping labels and show the newest successful task';
         btn.disabled = false;
       }
     });
@@ -442,6 +448,11 @@
   function handleLastBulkClick() {
     const btn = $('btnLastBulk');
     if (!btn) return;
+    if (hasBulkRecordsModal() && typeof window.__temuOpenNewestLabelTask === 'function') {
+      setStatus('Opening newest successful label task...', 's-running');
+      window.__temuOpenNewestLabelTask();
+      return;
+    }
     chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
       const record = data.temuLastBulkPurchase_v1;
       if ((record?.status === 'ready' || record?.status === 'partial') && record.rows?.length) {
@@ -452,7 +463,7 @@
         showResult('Please wait while order details are collected.');
       } else {
         setStatus('No bulk task captured yet', 's-error');
-        showResult('Open the newest successful task and click View details.');
+        showResult('Open Manage shipping labels and show the newest successful task.');
         setTimeout(() => setStatus('Ready to export', 's-ready'), 4500);
       }
     });
@@ -717,18 +728,68 @@
 
   const MODAL_ID = '__temu_label_batch_modal__';
 
+  function hasSuccessfulLabelTable(body = document.body?.innerText || '') {
+    const successText = /(?:\d+\s+)?successfully\s+purchase\s+label|number\s+of\s+successful\s+records/i.test(body);
+    const orderRows = /PO-\d+-\d{8,}/i.test(body);
+    return successText && orderRows;
+  }
+
   function isOnTaskDetailPage() {
     if (!window.location.href.includes('seller.temu.com')) return false;
     const body = document.body?.innerText || '';
-    // The records modal can contain Task IDs and tracking text from the
+    // The summary modal can contain Task IDs and tracking text from the
     // underlying orders page, so it must always win over URL heuristics.
     if (/Buy\s+shipping\s+records/i.test(body)) return false;
     const url = window.location.href;
     const urlLooksLikeTask = /task[-_]?detail|taskDetail|task_detail|shipping[-_]?label|label[-_]?task|shipping[-_]?record/i.test(url);
     const hasTaskId = /TK-[\w\d-]+/i.test(url) || /Task\s*ID\s*:?\s*TK-[\w\d-]+/i.test(body);
+    if (hasSuccessfulLabelTable(body)) return true;
     if (!hasTaskId) return false;
     return urlLooksLikeTask || /Order\s*(?:No|number|ID)|Tracking\s*number/i.test(body);
   }
+
+  let _lbOpeningTask = false;
+  let _lbOpeningUntil = 0;
+
+  function visibleLabelElements(text, scope = document) {
+    return [...scope.querySelectorAll('button,[role="button"],a,div,span')].filter(el => {
+      if ((el.textContent || '').replace(/\s+/g, ' ').trim() !== text) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    });
+  }
+
+  function findRecordsModalRoot() {
+    const heading = [...document.querySelectorAll('h1,h2,h3,div,span')]
+      .find(el => el.children.length === 0 && /Buy\s+shipping\s+records/i.test((el.textContent || '').trim()));
+    let root = heading;
+    for (let i = 0; i < 10 && root; i += 1, root = root.parentElement) {
+      if (visibleLabelElements('View details', root).length > 0) return root;
+    }
+    return null;
+  }
+
+  function isBulkRecordsModalOpen() {
+    const body = document.body?.innerText || '';
+    return /Buy\s+shipping\s+records/i.test(body) && !!findRecordsModalRoot();
+  }
+
+  function openNewestSuccessfulTask() {
+    if (_lbOpeningTask && Date.now() < _lbOpeningUntil) return false;
+    const root = findRecordsModalRoot();
+    if (!root) return false;
+    const viewButtons = visibleLabelElements('View details', root);
+    const first = viewButtons[0];
+    if (!first) return false;
+    _lbOpeningTask = true;
+    _lbOpeningUntil = Date.now() + 6000;
+    const target = first.closest('button,[role="button"],a') || first;
+    target.click();
+    setTimeout(() => { _lbOpeningTask = false; }, 6500);
+    return true;
+  }
+
+  window.__temuOpenNewestLabelTask = openNewestSuccessfulTask;
 
   function extractTaskId() {
     // Try URL path: /task-detail/TK-xxxxxx or ?taskId=TK-xxx
@@ -736,23 +797,35 @@
     if (direct) return direct[0].toUpperCase();
     const keyed = window.location.href.match(/task[-_]?id[=\/]([\w\d-]+)/i);
     if (keyed) return keyed[1].match(/TK-[\w\d]+/i)?.[0] || keyed[1];
-    const bodyMatch = (document.body?.innerText || '').match(/Task\s*ID\s*:?\s*(TK-[\w\d-]+)/i);
-    return bodyMatch ? bodyMatch[1].toUpperCase() : '';
+    const bodyText = document.body?.innerText || '';
+    const bodyMatch = bodyText.match(/Task\s*ID\s*:?\s*(TK-[\w\d-]+)/i);
+    if (bodyMatch) return bodyMatch[1].toUpperCase();
+    if (/successfully\s+purchase\s+label/i.test(bodyText)) {
+      const source = `${window.location.href}|${document.title}|${bodyText.match(/(\d+)\s+successfully\s+purchase\s+label/i)?.[1] || '0'}`;
+      let hash = 0;
+      for (let i = 0; i < source.length; i += 1) hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0;
+      return `TK-VIEW-${Math.abs(hash).toString(36).toUpperCase()}`;
+    }
+    return '';
   }
 
   function extractSubmittedAt() {
     const text = document.body?.innerText || '';
-    const m = text.match(/(?:Submission\s*time|Submitted\s*at|Purchase\s*time)\s*:?\s*([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:am|pm)\s*(?:[A-Z]{2,5}(?:\(UTC[+\-]?\d+\))?)?)/i);
-    return m ? m[1].replace(/\s+/g, ' ').trim() : new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const explicit = text.match(/(?:Submission\s*time|Submitted\s*at|Purchase\s*time)\s*:?\s*([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:am|pm)\s*(?:[A-Z]{2,5}(?:\(UTC[+\-]?\d+\))?)?)/i);
+    if (explicit) return explicit[1].replace(/\s+/g, ' ').trim();
+    const visibleDate = text.match(/\b([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:am|pm)\s*(?:[A-Z]{2,5}(?:\(UTC[+\-]?\d+\))?)?)\b/i);
+    return visibleDate ? visibleDate[1].replace(/\s+/g, ' ').trim() : new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
   function extractTaskCounts() {
     const text = document.body?.innerText || '';
     const read = pattern => Number((text.match(pattern) || [])[1] || 0);
     const processedCount = read(/Number\s+of\s+records\s+processed[^\d]*(\d+)/i);
-    const successCount = read(/Number\s+of\s+successful\s+records[^\d]*(\d+)/i);
+    const summarySuccess = read(/Number\s+of\s+successful\s+records[^\d]*(\d+)/i);
+    const labelSuccess = read(/(\d+)\s+successfully\s+purchase\s+label/i);
+    const successCount = summarySuccess || labelSuccess;
     const errorCount = read(/Number\s+of\s+records\s+with\s+errors[^\d]*(\d+)/i);
-    return { processedCount, successCount, errorCount };
+    return { processedCount: processedCount || successCount, successCount, errorCount };
   }
 
   // ── Scrape orders from the "View details" table ───────────────────────────
@@ -1024,19 +1097,25 @@
   // ── Run on page load ──────────────────────────────────────────────────────
   if (isOnTaskDetailPage()) {
     initLabelBatchExport();
+  } else if (isBulkRecordsModalOpen()) {
+    setTimeout(openNewestSuccessfulTask, 300);
   }
 
-  // ── Listen for URL changes (SPA navigation) — separate from main watcher ──
+  // ── Listen for URL and records-modal changes — separate from main watcher ──
   let _lbLastUrl = window.location.href;
   setInterval(() => {
     const cur = window.location.href;
+    if (isBulkRecordsModalOpen()) {
+      openNewestSuccessfulTask();
+      return;
+    }
     if (cur === _lbLastUrl) return;
     _lbLastUrl = cur;
     if (isOnTaskDetailPage()) {
       // Small delay for React to render new page content
       setTimeout(initLabelBatchExport, 1500);
     } else {
-      // Clean up modal if navigated away
+      // Clean up any deprecated modal if navigated away
       document.getElementById(MODAL_ID)?.remove();
     }
   }, 1500);
