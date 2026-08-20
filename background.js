@@ -1,4 +1,4 @@
-// background.js — Temu Order Tab Exporter v5.0
+// background.js — Temu Order Tab Exporter v8.9.0
 
 // ── SheetJS (Style supported version) ─────────────────────────────────────────
 let XLSX_LOADED = false;
@@ -124,68 +124,9 @@ function clearState() {
 
 // ── Message router ─────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (msg.type === 'startExport')     runExport(msg.format || 'csv');
-  if (msg.type === 'startAutoExport') runAutoExport(
-    msg.listTabId, msg.fromPage, msg.toPage, msg.format || 'csv',
-    msg.tabDelay  ?? 1000,
-    msg.randExtra ?? 1000,
-    msg.filterEnabled  || false,
-    msg.filterFromDate || '',
-    msg.filterToDate   || ''
-  );
-  // ── Mode 2: Date Range export ─────────────────────────────────────────────────
-  if (msg.type === 'startDateExport') runDateExport(
-    msg.listTabId, msg.fromDate, msg.toDate, msg.format || 'csv',
-    msg.tabDelay  ?? 1000,
-    msg.randExtra ?? 1000,
-    msg.maxPages  || 999,
-    false /* sheetsMode */
-  );
-  // ── Mode 4: Sheets Sync — scan by date, store rows in session, popup copies to clipboard ──
-  if (msg.type === 'startSheetsSync') runDateExport(
-    msg.listTabId, msg.fromDate, msg.toDate, 'csv',
-    msg.tabDelay  ?? 1200,
-    msg.randExtra ?? 800,
-    msg.maxPages  || 999,
-    true /* sheetsMode */
-  );
-  // ── Mode 3: Selection export ──────────────────────────────────────────────────
-  if (msg.type === 'startSelectionExport') runSelectionExport(
-    msg.selectedUrls, msg.format || 'csv',
-    msg.tabDelay  ?? 1000,
-    msg.randExtra ?? 1000,
-    false
-  );
-  // ── Mode 3b: Selected orders → Google Sheets clipboard ───────────────────────
-  if (msg.type === 'startSelectionSheetsSync') runSelectionExport(
-    msg.selectedUrls, 'csv',
-    msg.tabDelay  ?? 1000,
-    msg.randExtra ?? 1000,
-    true
-  );
   // ── Primary workflow: refresh selected orders against the current Shipped tab ──
   if (msg.type === 'refreshSelectedShipped') runSelectedShippedRefresh(msg.listTabId || sender.tab?.id);
   if (msg.type === 'exportSelectedLabelSheets') runSelectedLabelSheetsExport(msg.listTabId || sender.tab?.id, msg.rows || []);
-  // ── Cancel running export ────────────────────────────────────────────────────
-  if (msg.type === 'cancelExport') {
-    cancelRequested = true;
-    clearState();
-    chrome.action.setBadgeText({ text: '' }).catch(() => {}); // clear badge on cancel
-    sendMsg({ type: 'cancelled' });
-    // Aggressively close any background tabs left open by export
-    chrome.tabs.query({ url: 'https://seller.temu.com/*', active: false }, (tabs) => {
-      tabs.forEach(t => chrome.tabs.remove(t.id).catch(() => {}));
-    });
-  }
-  // ── History: re-download a past export ───────────────────────────────────────
-  if (msg.type === 'downloadFromHistory') {
-    try {
-      const { dataUrl, filename } = generateExport(msg.rows, msg.rows.length, msg.format || 'xlsx');
-      chrome.downloads.download({ url: dataUrl, filename });
-    } catch (e) {
-      sendMsg({ type: 'error', message: 'History download failed: ' + e.message });
-    }
-  }
   // ── Label Batch Export: export orders from a shipping label task ──────────────
   if (msg.type === 'exportLabelBatch') {
     try {
@@ -243,47 +184,6 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     }
   }
 
-  // Popup asking for current state on open
-  if (msg.type === 'getState') {
-    chrome.storage.session.get(['running', 'lastMsg'], (data) => {
-      chrome.runtime.sendMessage({ type: 'stateSnapshot', ...data }).catch(() => {});
-    });
-  }
-  // ── Status Tracker: check delivery status for a list of order URLs ──────────
-  if (msg.type === 'startStatusCheck') {
-    runStatusCheck(msg.orderUrls || []).catch(e => {
-      sendMsg({ type: 'error', message: 'Status check failed: ' + e.message });
-    });
-  }
-  // ── Content Script: Quick Export Today (from in-page floating panel) ─────────
-  if (msg.type === 'quickExport' || msg.type === 'quickSheetsSync') {
-    const sheetsMode = msg.type === 'quickSheetsSync';
-    // Find the active seller.temu.com tab to use as listTabId
-    chrome.tabs.query({ url: 'https://seller.temu.com/*', active: true }, async (tabs) => {
-      let listTab = tabs[0];
-      if (!listTab) {
-        // Fall back to any seller tab
-        const allTabs = await chrome.tabs.query({ url: 'https://seller.temu.com/*' });
-        listTab = allTabs[0];
-      }
-      if (!listTab) {
-        sendMsg({ type: 'error', message: 'No Temu seller tab found. Please navigate to seller.temu.com first.' });
-        return;
-      }
-      const fromDate = msg.fromDate || (() => { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString(); })();
-      const toDate   = msg.toDate   || new Date().toISOString();
-      runDateExport(
-        listTab.id,
-        fromDate,
-        toDate,
-        'xlsx',
-        1200,  // tabDelay
-        800,   // randExtra
-        999,   // maxPages
-        sheetsMode
-      ).catch(e => sendMsg({ type: 'error', message: 'Quick export failed: ' + e.message }));
-    });
-  }
 });
 
 

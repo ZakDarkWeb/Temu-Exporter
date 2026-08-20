@@ -12,6 +12,8 @@ assert(contentSource.includes('btnExportSelected'), 'direct Shipped selection ex
 assert(contentSource.includes('width: 44px; height: 44px; min-height: 44px; max-height: 44px'), 'minimized card dimensions are not locked');
 assert(contentSource.includes('overflow: hidden; overflow-y: hidden'), 'minimized card overflow fix missing');
 assert(contentSource.includes("showProgress(false);\n    if ($('tsvText'))"), 'selected-label completion does not close progress');
+assert(contentSource.includes("if (msg.type === 'progress')"), 'compact extraction progress handler missing');
+assert(contentSource.includes('Extracting order'), 'compact extraction progress label missing');
 
 assert(source.includes("const SELECTED_ORDERS_KEY = 'temuSelectedOrders_v2'"), 'durable selected-order storage key missing');
 assert(source.includes("const SELECTED_SHIPPED_KEY = 'temuSelectedShipped_v1'"), 'matched shipped storage key missing');
