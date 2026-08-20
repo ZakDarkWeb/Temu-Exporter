@@ -1,4 +1,4 @@
-// background.js — Temu Order Tab Exporter v8.8.4
+// background.js — Temu Order Tab Exporter v8.8.5
 
 // ── SheetJS (Style supported version) ─────────────────────────────────────────
 let XLSX_LOADED = false;

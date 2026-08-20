@@ -362,7 +362,7 @@
   /* The HTML uses #progressSection > .progress-bar-wrap > .progress-meta + .bar-bg.
      Keep the wrapper open; the old 4px height clipped the meta row and bar. */
   #progressSection, .progress-section {
-    display: flex; flex-direction: column; gap: 4px;
+    display: none; flex-direction: column; gap: 4px;
     padding: 8px 10px;
     background: var(--surface); border-radius: var(--r-md);
     border: 1px solid var(--border);
@@ -1621,7 +1621,7 @@
         <div class="settings-section">
           <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
           <div class="settings-about-card">
-            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.8.4</span></div>
+            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.8.5</span></div>
             <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
             <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
           </div>
@@ -1662,7 +1662,7 @@
     </div>
 
     <!-- PROGRESS -->
-    <div id="progressSection">
+    <div id="progressSection" style="display:none;">
       <div class="steps" id="stepsRow" style="display:none;">
         <div class="step" id="stepNav">
           <div class="step-num" id="stepNavNum"><span class="step-num-txt">1</span></div>
@@ -1714,7 +1714,7 @@
 
   </div>
 
-  <div class="footer"><strong>Temu Exporter</strong><span>v8.8.4</span></div>
+  <div class="footer"><strong>Temu Exporter</strong><span>v8.8.5</span></div>
 
   <script src="popup.js"></script>
 </body>

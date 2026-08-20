@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.4
+// Temu Order Exporter — Content Script v8.8.5
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -333,7 +333,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.4 · Bulk Label Workflow</div>
+          <div class="version">v8.8.5 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
