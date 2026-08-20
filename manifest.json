@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Tab Exporter",
-  "version": "8.9.0",
+  "version": "8.8.1",
 
-  "description": "Persistent Temu bulk-label selection and nine-column Google Sheets export workflow.",
+  "description": "Export Temu seller orders to CSV/JSON/Excel/Sheets. 4 modes: By Pages, By Date Range, By Selection, Sheets Sync.",
   "permissions": [
     "tabs",
     "scripting",
