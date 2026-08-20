@@ -564,6 +564,8 @@ const tabContentMap = {
   history:  $('tabContentHistory'),
   settings: $('tabContentSettings')
 };
+const sharedExportControls = $('sharedExportControls');
+const sharedExportTabs = new Set(['pages', 'date', 'select']);
 
 function getAutoBtnLabel() {
   if (activeTab === 'pages')  return '🚀 Start Auto-Export';
@@ -585,6 +587,11 @@ function switchTab(tab) {
   Object.entries(tabContentMap).forEach(([key, el]) => {
     if (el) el.classList.toggle('active', key === tab);
   });
+  // Keep mode-specific controls together; Sheets, History, and Settings have
+  // their own content and should not inherit the export controls below them.
+  if (sharedExportControls) {
+    sharedExportControls.style.display = sharedExportTabs.has(tab) ? 'flex' : 'none';
+  }
   // Sheets tab has its own action buttons — hide/show main autoBtn
   const label = getAutoBtnLabel();
   if (label === null) {
@@ -821,6 +828,7 @@ $('histClearAll').addEventListener('click', async () => {
 const SHEETS_ALL_COLS = [
   { key: 'labelPurchasedDate', label: 'Label Date' },
   { key: 'trackingNumber',     label: 'Tracking No' },
+  { key: 'packageId',          label: 'Package ID' },
   { key: 'orderNumber',        label: 'Order No' },
   { key: 'customerName',       label: 'Customer Name' },
   { key: 'productDetails',     label: 'Product Details' },
@@ -858,23 +866,36 @@ function buildTSV(rows, columns, includeHeaders) {
 // ── Clipboard write ────────────────────────────────────────────────────────────────
 
 async function copyTextToClipboard(text) {
+  if (!text) return false;
   try {
-    // MV3 preferred method
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch (_) {
-    // Fallback: execCommand (works when popup has focus + clipboardWrite permission)
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      return ok;
-    } catch (e2) { return false; }
-  }
+    // Clipboard API is reliable only when the popup is open and this call
+    // originates from a direct user gesture.
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {}
+
+  // Synchronous MV3 fallback. Keep the textarea focusable long enough for
+  // Chromium's execCommand path to succeed, then remove it.
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-10000px';
+    ta.style.top = '0';
+    ta.style.width = '1px';
+    ta.style.height = '1px';
+    ta.style.opacity = '0.01';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (_) { return false; }
 }
 
 // ── Get selected columns from checkboxes ─────────────────────────────────────────
@@ -904,11 +925,22 @@ async function loadSheetsRegistry() {
   } catch (_) { return {}; }
 }
 
-async function updateSheetsRegistry(orderNumbers) {
+function getSheetRegistryKey(row) {
+  if (!row) return '';
+  const order = row.orderNumber || '';
+  const pkg = row.packageId || '';
+  const tracking = row.trackingNumber || '';
+  return [order, pkg, tracking].filter(Boolean).join('|') || order;
+}
+
+async function updateSheetsRegistry(rows) {
   try {
     const registry = await loadSheetsRegistry();
     const now = Date.now();
-    orderNumbers.forEach(on => { registry[on] = now; });
+    (rows || []).forEach(row => {
+      const key = typeof row === 'string' ? row : getSheetRegistryKey(row);
+      if (key) registry[key] = now;
+    });
     await chrome.storage.local.set({ [REGISTRY_KEY]: registry });
   } catch (_) {}
 }
@@ -943,7 +975,17 @@ async function saveLastSync(count) {
 
 // ── Core: copy rows to clipboard after syncing ─────────────────────────────────────
 
-async function processSheetsSyncResult(rows, ordersFound, failedCount) {
+function setSheetsFallbackText(tsv, visible) {
+  const el = $('sheetsFallbackText');
+  const note = $('sheetsManualNote');
+  if (el) {
+    el.value = tsv || '';
+    el.style.display = visible ? 'block' : 'none';
+  }
+  if (note) note.style.display = visible ? 'block' : 'none';
+}
+
+async function processSheetsSyncResult(rows, ordersFound, failedCount, source = 'date', autoCopy = false) {
   if (!rows || rows.length === 0) {
     setStatus('⚠️', 'No orders found in selected date range.', 'error');
     return;
@@ -958,7 +1000,12 @@ async function processSheetsSyncResult(rows, ordersFound, failedCount) {
   let rowsToExport = rows;
   let dupCount = 0;
   if (newOnly) {
-    rowsToExport = rows.filter(r => !registry[r.orderNumber]);
+    rowsToExport = rows.filter(r => {
+      const key = getSheetRegistryKey(r);
+      // Respect legacy order-only registry entries, while allowing new
+      // package/tracking-level keys to distinguish multiple packages.
+      return !registry[key] && !registry[r.orderNumber];
+    });
     dupCount = rows.length - rowsToExport.length;
   }
 
@@ -968,11 +1015,14 @@ async function processSheetsSyncResult(rows, ordersFound, failedCount) {
   }
 
   const tsv = buildTSV(rowsToExport, columns, includeHeaders);
-  const copied = await copyTextToClipboard(tsv);
+  // Do not copy from a background completion callback: Chromium may reject it
+  // because it is not a fresh user gesture. The visible Copy button below is
+  // always a direct user action and therefore gets the reliable clipboard path.
+  const copied = autoCopy ? await copyTextToClipboard(tsv) : null;
+  setSheetsFallbackText(tsv, copied !== true);
 
   // Update registry
-  const orderNums = rowsToExport.map(r => r.orderNumber).filter(Boolean);
-  await updateSheetsRegistry(orderNums);
+  await updateSheetsRegistry(rowsToExport);
   await saveLastSync(rowsToExport.length);
 
   // Store for "Copy Again"
@@ -985,18 +1035,22 @@ async function processSheetsSyncResult(rows, ordersFound, failedCount) {
   const failNoteEl  = $('sheetsFailNote');
   if (resultEl) {
     resultEl.style.display = 'block';
-    countEl.innerHTML = copied
+    countEl.innerHTML = copied === true
       ? `✅ ${rowsToExport.length} order${rowsToExport.length !== 1 ? 's' : ''} copied to clipboard!`
-      : `⚠️ ${rowsToExport.length} rows ready (clipboard write failed — see below)`;
+      : copied === false
+        ? `⚠️ ${rowsToExport.length} rows ready — clipboard was blocked`
+        : `📋 ${rowsToExport.length} rows ready — click Copy to Clipboard`;
     subEl.textContent = dupCount > 0 ? `(${dupCount} duplicate${dupCount !== 1 ? 's' : ''} skipped)` : `${rows.length} total orders found`;
     failNoteEl.textContent = failedCount > 0 ? `⚠️ ${failedCount} order${failedCount !== 1 ? 's' : ''} failed to extract` : '';
   }
 
-  if (copied) {
-    setStatus('📋', `${rowsToExport.length} rows copied! Open Sheets → Ctrl+V to paste.`, 'success');
+  if (copied === true) {
+    const prefix = source === 'selection' ? 'Selected orders: ' : '';
+    setStatus('📋', `${prefix}${rowsToExport.length} rows copied! Open Sheets → Ctrl+V to paste.`, 'success');
+  } else if (copied === false) {
+    setStatus('⚠️', 'Clipboard blocked. Select the text below and press Ctrl+C.', 'info');
   } else {
-    // Fallback: show manual copy textarea
-    setStatus('⚠️', 'Clipboard blocked. Data is ready — try clicking "Copy Again" button.', 'info');
+    setStatus('📋', 'Rows are ready. Click Copy to Clipboard, then paste in Sheets.', 'info');
   }
 
   // Update last sync display
@@ -1020,16 +1074,23 @@ chrome.runtime.onMessage.addListener(msg => {
     const el = $(id); if (el) el.disabled = false;
   });
 
+  // Selected-order Sheets mode reuses the same clipboard pipeline.
+  if (msg.source === 'selection') {
+    switchTab('sheets');
+    if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${msg.ordersFound || 0} selected orders are ready for Sheets.`;
+  }
+
   // Read rows from session storage and process
   chrome.storage.session.get('sheetsSyncRows', async data => {
     try {
       const rows = data.sheetsSyncRows ? JSON.parse(data.sheetsSyncRows) : [];
-      await processSheetsSyncResult(rows, msg.ordersFound, msg.failedCount);
+      await processSheetsSyncResult(rows, msg.ordersFound, msg.failedCount, msg.source || 'date', false);
     } catch (e) {
       setStatus('❌', 'Failed to process synced data: ' + e.message, 'error');
+    } finally {
+      if (copySelectedSheetsBtn) copySelectedSheetsBtn.disabled = false;
     }
-    // Clear session data
-    chrome.storage.session.remove('sheetsSyncRows').catch(() => {});
+    // Keep session data until a direct user copy succeeds.
   });
 });
 
@@ -1110,15 +1171,24 @@ $('sheetsSyncCustomBtn').addEventListener('click', () => {
   startSheetsSync(from, to, 999);
 });
 
-// Copy Again
+// Copy Again — this is intentionally a direct user action for clipboard permission.
 $('sheetsCopyAgain').addEventListener('click', async () => {
   if (!_lastSheetRows.length) { setStatus('⚠️', 'No data to copy. Run a sync first.', 'info'); return; }
   const columns = getSelectedColumns();
   const includeHeaders = $('sheetsIncludeHeaders')?.checked !== false;
   const tsv = buildTSV(_lastSheetRows, columns, includeHeaders);
   const ok = await copyTextToClipboard(tsv);
-  if (ok) setStatus('📋', `${_lastSheetRows.length} rows copied again! Ctrl+V in Sheets.`, 'success');
-  else setStatus('⚠️', 'Clipboard write failed.', 'error');
+  setSheetsFallbackText(tsv, !ok);
+  const resultCount = $('sheetsResultCount');
+  if (resultCount) resultCount.textContent = ok
+    ? `✅ ${_lastSheetRows.length} rows copied to clipboard!`
+    : `⚠️ ${_lastSheetRows.length} rows ready — clipboard was blocked`;
+  if (ok) {
+    chrome.storage.session.remove('sheetsSyncRows').catch(() => {});
+    setStatus('📋', `${_lastSheetRows.length} rows copied! Open Sheets → Ctrl+V to paste.`, 'success');
+  } else {
+    setStatus('⚠️', 'Clipboard blocked. Select the text below and press Ctrl+C.', 'error');
+  }
 });
 
 // Save column settings when changed
@@ -1149,8 +1219,9 @@ chrome.storage.session.get(['sheetsSyncRows', 'sheetsSyncOrderCount'], async dat
         // Switch to sheets tab and show result
         switchTab('sheets');
         setStatus('📋', `${rows.length} synced orders ready to copy! Click below.`, 'info');
-        await processSheetsSyncResult(rows, rows.length, 0);
-        chrome.storage.session.remove('sheetsSyncRows').catch(() => {});
+        await processSheetsSyncResult(rows, rows.length, 0, 'date', false);
+        // Keep session rows until the user successfully copies them. This makes
+        // the result recoverable if the popup is closed or clipboard is blocked.
       }
     } catch (_) {}
   }
@@ -1178,7 +1249,9 @@ async function readPageSelections() {
         }
 
         function isChecked(el) {
-          var inp = el.querySelector('input[type="checkbox"]');
+          var wrapper = el.querySelector('[data-testid="beast-core-checkbox"]');
+          if (wrapper && wrapper.getAttribute('data-checked') === 'true') return true;
+          var inp = wrapper ? wrapper.querySelector('input[type="checkbox"]') : el.querySelector('input[type="checkbox"]');
           if (inp && inp.checked) return true;
           if (el.querySelector('label[data-checked="true"], [data-checked="true"]')) return true;
           if (el.querySelector('.CBX_active_123, .CBX_hasCheckSquare_123.CBX_active_123')) return true;
@@ -1187,7 +1260,9 @@ async function readPageSelections() {
           return false;
         }
 
-        document.querySelectorAll('tr').forEach(function(tr) {
+        var orderRows = document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]');
+        if (!orderRows.length) orderRows = document.querySelectorAll('tr');
+        Array.prototype.forEach.call(orderRows, function(tr) {
           if (tr.querySelector('th')) return; // skip header
           var sn = extractPO(tr.textContent || '');
           if (!sn) return;
@@ -1200,7 +1275,7 @@ async function readPageSelections() {
         // Fallback for checked labels
         if (Object.keys(checkedPOs).length === 0) {
           var checkedLabels = [].slice.call(document.querySelectorAll(
-            'label[data-checked="true"], .CBX_active_123, input[type="checkbox"]:checked'
+            '[data-testid="beast-core-checkbox"][data-checked="true"], label[data-checked="true"], .CBX_active_123, input[type="checkbox"]:checked'
           ));
           checkedLabels.forEach(function(label) {
             if (label.getAttribute && label.getAttribute('data-indeterminate') === 'true') return;
@@ -1290,17 +1365,21 @@ async function _doPoll() {
     const selCountEl  = $('selCount');
     const clearSelBtn = $('clearSelBtn');
     const saveBtn     = $('saveForLabelBtn');
+    const sheetsBtn   = $('copySelectedSheetsBtn');
     if (selCountEl)  selCountEl.textContent = count;
     if (clearSelBtn) clearSelBtn.disabled = (count === 0);
     if (saveBtn)     saveBtn.disabled = (count === 0);
+    if (sheetsBtn)   sheetsBtn.disabled = (count === 0);
     autoBtn.disabled = (count === 0);
   });
 }
 
 // ── Label Sync — Save for Label Run ─────────────────────────────────────────
 
-const saveForLabelBtn = $('saveForLabelBtn');
-const saveRunStatus   = $('saveRunStatus');
+const saveForLabelBtn       = $('saveForLabelBtn');
+const saveRunStatus         = $('saveRunStatus');
+const copySelectedSheetsBtn = $('copySelectedSheetsBtn');
+const selectedSheetsStatus  = $('selectedSheetsStatus');
 
 if (saveForLabelBtn) {
   saveForLabelBtn.addEventListener('click', () => {
@@ -1396,7 +1475,9 @@ if (restoreSelBtn) {
 
           // Build fingerprint from first 5 visible POs (same logic as readPageSelections)
           var visiblePOs = [];
-          document.querySelectorAll('tr').forEach(function(tr) {
+          var orderRows = document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]');
+          if (!orderRows.length) orderRows = document.querySelectorAll('tr');
+          Array.prototype.forEach.call(orderRows, function(tr) {
             if (tr.querySelector('th')) return;
             var sn = extractPO(tr.textContent || '');
             if (sn) visiblePOs.push(sn);
@@ -1406,13 +1487,14 @@ if (restoreSelBtn) {
             : '1';
 
           // Find rows that match saved POs and attempt DOM click (visual only)
-          document.querySelectorAll('tr').forEach(function(tr) {
+          Array.prototype.forEach.call(orderRows, function(tr) {
             if (tr.querySelector('th')) return;
             var sn = extractPO(tr.textContent || '');
             if (!sn || savedPOs.indexOf(sn) === -1) return;
             matched.push(sn);
             // Try React-compatible click simulation
-            var cb = tr.querySelector('input[type="checkbox"]');
+            var cb = tr.querySelector('[data-testid="beast-core-checkbox"]');
+            if (!cb) cb = tr.querySelector('input[type="checkbox"]');
             if (!cb) cb = tr.querySelector('label[data-indeterminate!="true"]');
             if (cb) {
               ['mousedown','mouseup','click'].forEach(function(ev) {
@@ -1491,7 +1573,7 @@ if (clearSelBtn) {
         await chrome.scripting.executeScript({
           target: { tabId: currentListTabId },
           func: function() {
-            var checkedLabels = document.querySelectorAll('label[data-checked="true"], input[type="checkbox"]:checked');
+            var checkedLabels = document.querySelectorAll('[data-testid="beast-core-checkbox"][data-checked="true"], label[data-checked="true"], input[type="checkbox"]:checked');
             checkedLabels.forEach(function(label) {
               if (label.getAttribute && label.getAttribute('data-indeterminate') !== 'true') {
                 label.click();
@@ -1507,6 +1589,8 @@ if (clearSelBtn) {
     const selCountEl = $('selCount');
     if (selCountEl) selCountEl.textContent = '0';
     clearSelBtn.disabled = true;
+    if (saveForLabelBtn) saveForLabelBtn.disabled = true;
+    if (copySelectedSheetsBtn) copySelectedSheetsBtn.disabled = true;
     autoBtn.disabled = true;
   });
 }
@@ -1641,7 +1725,49 @@ if (debugDetectBtn) {
 
 // ── Button handlers ───────────────────────────────────────────────────────────
 
-autoBtn.addEventListener('click', async () => {
+async function getAllSelectedOrderUrls() {
+  const storedData = await new Promise(r => chrome.storage.local.get(['temuSelections_v6'], r));
+  const stored = storedData.temuSelections_v6 || {};
+  const allChecked = {};
+  const merge = source => {
+    Object.keys(source || {}).forEach(key => {
+      if (key.startsWith('page:')) Object.assign(allChecked, source[key] || {});
+      else if (typeof source[key] === 'string') allChecked[key] = source[key];
+    });
+  };
+  merge(stored);
+  merge(accumulatedSelections);
+  merge(currentSelections);
+  return [...new Set(Object.values(allChecked).filter(url => typeof url === 'string' && url.startsWith('http')))];
+}
+
+if (copySelectedSheetsBtn) {
+  copySelectedSheetsBtn.addEventListener('click', async () => {
+    if (running) return;
+    const selectedUrls = await getAllSelectedOrderUrls();
+    if (!selectedUrls.length) {
+      if (selectedSheetsStatus) selectedSheetsStatus.textContent = '⚠️ No orders selected yet.';
+      return;
+    }
+    running = true;
+    stopSelectionPolling();
+    progressSec.style.display = 'block';
+    stepsRow.style.display = 'none';
+    cancelBtn.style.display = 'flex';
+    setProgress(0, 'Preparing selected orders for Sheets…');
+    setStatus('📋', `Extracting ${selectedUrls.length} selected orders for Sheets…`, 'info');
+    copySelectedSheetsBtn.disabled = true;
+    const speed = SPEED_PRESETS[parseInt(speedSlider.value) || 2];
+    chrome.runtime.sendMessage({
+      type: 'startSelectionSheetsSync',
+      selectedUrls,
+      tabDelay: speed.tabDelay,
+      randExtra: speed.randExtra
+    });
+  });
+}
+
+ autoBtn.addEventListener('click', async () => {
   if (running) return;
   const speed = SPEED_PRESETS[parseInt(speedSlider.value) || 2];
 
@@ -1728,41 +1854,7 @@ autoBtn.addEventListener('click', async () => {
 
   // ── MODE: By Selection ──────────────────────────────────────────────────────
   else if (activeTab === 'select') {
-    // Read all accumulated selections across all pages from storage
-    const storedData = await new Promise(r => chrome.storage.local.get(['temuSelections_v6'], r));
-    const stored = storedData.temuSelections_v6 || {};
-    
-    // Flatten the page-grouped structure into a single unique set of URLs
-    let allChecked = {};
-    Object.keys(stored).forEach(key => {
-      if (key.startsWith('page:')) {
-        Object.assign(allChecked, stored[key] || {});
-      } else if (typeof stored[key] === 'string') {
-        allChecked[key] = stored[key];
-      }
-    });
-    
-    // Merge memory states
-    if (accumulatedSelections) {
-      Object.keys(accumulatedSelections).forEach(key => {
-        if (key.startsWith('page:')) {
-          Object.assign(allChecked, accumulatedSelections[key] || {});
-        } else if (typeof accumulatedSelections[key] === 'string') {
-          allChecked[key] = accumulatedSelections[key];
-        }
-      });
-    }
-    if (currentSelections) {
-      Object.keys(currentSelections).forEach(key => {
-        if (key.startsWith('page:')) {
-          Object.assign(allChecked, currentSelections[key] || {});
-        } else if (typeof currentSelections[key] === 'string') {
-          allChecked[key] = currentSelections[key];
-        }
-      });
-    }
-
-    const selectedUrls = Object.values(allChecked).filter(url => typeof url === 'string' && url.startsWith('http'));
+    const selectedUrls = await getAllSelectedOrderUrls();
 
     if (selectedUrls.length === 0) {
       setStatus('❌', 'No orders selected. Tick orders on the Temu page first.', 'error');

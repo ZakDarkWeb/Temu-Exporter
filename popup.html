@@ -359,17 +359,30 @@
   .date-input::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor: pointer; }
 
   /* ── PROGRESS ────────────────────────────────────────────── */
-  .progress-section {
+  /* The HTML uses #progressSection > .progress-bar-wrap > .progress-meta + .bar-bg.
+     Keep the wrapper open; the old 4px height clipped the meta row and bar. */
+  #progressSection, .progress-section {
     display: flex; flex-direction: column; gap: 4px;
     padding: 8px 10px;
     background: var(--surface); border-radius: var(--r-md);
     border: 1px solid var(--border);
   }
   .progress-bar-wrap {
-    height: 4px; background: var(--surface2);
+    height: auto; min-height: 22px;
+    display: flex; flex-direction: column; gap: 4px;
+    background: transparent; border-radius: 0; overflow: visible;
+  }
+  .progress-meta {
+    display: flex; align-items: center; justify-content: space-between;
+    min-height: 12px; font-size: 9px; color: var(--muted2); font-weight: 600;
+  }
+  .progress-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-pct { flex: 0 0 auto; margin-left: 8px; color: var(--accent); }
+  .bar-bg {
+    width: 100%; height: 4px; background: var(--surface2);
     border-radius: 2px; overflow: hidden;
   }
-  .progress-bar {
+  .bar-fill, .progress-bar {
     height: 100%; border-radius: 2px;
     background: linear-gradient(90deg, var(--accent), var(--blue));
     box-shadow: 0 0 8px rgba(0,212,170,0.5);
@@ -488,9 +501,9 @@
   }
   #autoBtn:active, #manualBtn:active { transform: scale(0.98); }
   #autoBtn:disabled, #manualBtn:disabled {
-    opacity: 0.55; cursor: not-allowed;
-    transform: none; box-shadow: none;
-    animation: none;
+    opacity: 1; cursor: not-allowed;
+    transform: none; box-shadow: none; animation: none;
+    background: #1f2937; border: 1px solid #33445f; color: #8da2bd;
   }
   #autoBtn:disabled::before, #manualBtn:disabled::before { display: none; }
 
@@ -636,13 +649,23 @@
   .sheets-result-sub   { font-size: 10px; color: var(--muted2); }
   .sheets-paste-hint   { font-size: 10px; color: var(--text2); }
   .sheets-copy-btn {
-    width: 100%; padding: 7px; border-radius: var(--r-sm);
-    background: var(--accent); color: #021a13; font-weight: 800;
+    width: 100%; padding: 8px; border-radius: var(--r-sm);
+    background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #021a13; font-weight: 900;
     font-size: 11px; border: none; cursor: pointer; font-family: inherit;
-    transition: opacity 0.15s;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+    box-shadow: 0 3px 12px rgba(0,212,170,0.18);
   }
-  .sheets-copy-btn:hover { opacity: 0.85; }
+  .sheets-copy-btn:hover { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 5px 16px rgba(0,212,170,0.28); }
+  .sheets-copy-btn:active { transform: scale(0.98); }
   .sheets-fail-note { font-size: 10px; color: #f87171; }
+  .sheets-manual-copy {
+    width: 100%; min-height: 86px; max-height: 150px; resize: vertical;
+    padding: 8px; border-radius: var(--r-sm); border: 1px solid var(--border2);
+    background: #0b1220; color: var(--text2); font: 10px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+    outline: none;
+  }
+  .sheets-manual-copy:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,212,170,0.14); }
+  .sheets-manual-note { font-size: 9px; color: var(--orange); line-height: 1.35; }
 
   .sheets-section { display: flex; flex-direction: column; gap: 6px; }
   .sheets-section-title {
@@ -966,14 +989,27 @@
   .btn-clear-sel:disabled { opacity: 0.35; cursor: not-allowed; }
 
   .btn-save-run {
-    width: 100%; padding: 9px 12px;
-    background: rgba(79,142,247,0.08); border: 1px solid rgba(79,142,247,0.25);
-    border-radius: var(--r-md); color: var(--blue);
+    width: 100%; min-height: 38px; padding: 9px 12px;
+    background: rgba(79,142,247,0.12); border: 1px solid rgba(79,142,247,0.34);
+    border-radius: var(--r-md); color: #9fc0ff;
     font-size: 11px; font-weight: 800; cursor: pointer; font-family: inherit;
     transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;
   }
-  .btn-save-run:hover:not(:disabled) { background: rgba(79,142,247,0.14); border-color: rgba(79,142,247,0.4); }
-  .btn-save-run:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-save-run:hover:not(:disabled) { background: rgba(79,142,247,0.2); border-color: rgba(79,142,247,0.62); color: #c5d8ff; transform: translateY(-1px); }
+  .btn-save-run:disabled { opacity: 0.72; background: rgba(31,41,55,0.72); border-color: #33445f; color: #8da2bd; cursor: not-allowed; transform: none; }
+  .btn-save-run:disabled::after { content: ' — select orders first'; font-size: 9px; font-weight: 600; color: #64748b; }
+
+  .sel-controls { gap: 10px; }
+  .sel-count-label { color: #94a3b8; }
+  .btn-clear-sel:disabled { opacity: 0.72; background: rgba(31,41,55,0.72); border-color: #33445f; color: #8da2bd; }
+
+  #autoBtn { margin-top: 4px; min-height: 46px; }
+  .footer {
+    min-height: 30px; padding: 8px 10px 10px; text-align: center;
+    color: #8da2bd; font-size: 9px; line-height: 1.35;
+    border-top: 1px solid var(--border); background: #0d1420;
+    white-space: normal; overflow-wrap: anywhere;
+  }
 
   .save-run-status {
     font-size: 9px; color: var(--accent); font-weight: 600; text-align: center; min-height: 14px;
@@ -1127,6 +1163,25 @@
   }
   .settings-reset-btn:hover { background: rgba(239,68,68,0.12); }
 
+  /* ── Continuous popup scrolling / no clipped tab sections ─────────────── */
+  html { min-height: 100%; background: var(--bg); }
+  body {
+    min-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border2) transparent;
+  }
+  body::-webkit-scrollbar { width: 8px; }
+  body::-webkit-scrollbar-track { background: transparent; }
+  body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 8px; }
+  body::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  .body, #autoPanel, .tab-content, .tab-content.active { overflow: visible; }
+  .shared-export-controls { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+  /* Let the popup’s outer document scroll instead of creating mid-page traps. */
+  .sel-list, .hist-list, .status-results-wrap { max-height: none; overflow: visible; }
+  .hist-list { padding-right: 2px; }
+  .status-results-wrap { width: 100%; }
 </style>
 
 </head>
@@ -1350,7 +1405,11 @@
         <button class="btn-save-run" id="saveForLabelBtn" disabled title="Select orders first, then save for label run">
           &#x1F4CB; Save Selection for Label Run
         </button>
+        <button class="btn-save-run" id="copySelectedSheetsBtn" disabled title="Select orders first, then copy them to Google Sheets">
+          &#x1F4CB; Copy Selected to Sheets
+        </button>
         <div class="save-run-status" id="saveRunStatus"></div>
+        <div class="save-run-status" id="selectedSheetsStatus"></div>
 
         <!-- Debug output (hidden by default) -->
         <div class="sel-debug-box" id="selDebugBox" style="display:none;">
@@ -1368,8 +1427,6 @@
           <div class="sel-note">&#x1F4A1; Or just tick orders directly here and export</div>
           <button class="sel-debug-btn" id="debugDetectBtn">&#x1F50D; Debug Detection</button>
         </div>
-      </div>
-
       </div>
 
       <!-- TAB: Sheets Sync (Mode 4) -->
@@ -1435,7 +1492,9 @@
           <div class="sheets-result-count" id="sheetsResultCount"></div>
           <div class="sheets-result-sub" id="sheetsResultSub"></div>
           <div class="sheets-paste-hint">&#x1F4CB; Open Google Sheets &rarr; Click cell A1 &rarr; <kbd style="background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:3px;">Ctrl+V</kbd></div>
-          <button class="sheets-copy-btn" id="sheetsCopyAgain">&#x1F4CB; Copy to Clipboard Again</button>
+          <button class="sheets-copy-btn" id="sheetsCopyAgain">&#x1F4CB; Copy to Clipboard</button>
+          <textarea class="sheets-manual-copy" id="sheetsFallbackText" aria-label="Rows ready for manual copy" spellcheck="false" style="display:none;"></textarea>
+          <div class="sheets-manual-note" id="sheetsManualNote" style="display:none;">Clipboard permission was blocked. Click inside the text box, press Ctrl+A, Ctrl+C, then paste into Google Sheets.</div>
           <div class="sheets-fail-note" id="sheetsFailNote"></div>
         </div>
 
@@ -1445,12 +1504,13 @@
           <div class="sheets-col-grid" id="sheetsColGrid">
             <label class="sheets-col-toggle"><input type="checkbox" data-col="labelPurchasedDate" checked> Label Date</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="trackingNumber" checked> Tracking No</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="packageId" checked> Package ID</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="orderNumber" checked> Order No</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="customerName" checked> Customer</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="productDetails" checked> Product</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="qty" checked> Qty</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="estimatedRevenue" checked> Revenue</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingCost"> Shipping Cost</label>
+            <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingCost" checked> Shipping Cost</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingDate"> Ship Date</label>
             <label class="sheets-col-toggle"><input type="checkbox" data-col="orderDate"> Order Date</label>
           </div>
@@ -1512,21 +1572,72 @@
         </div>
       </div>
 
-      <!-- Shared: Speed + Format -->
-      <div class="speed-row">
-        <span class="speed-label">&#x1F422; Safe</span>
-        <input type="range" class="speed-slider" id="speedSlider" min="1" max="3" value="2">
-        <span class="speed-label">&#x26A1; Fast</span>
-        <span class="speed-value" id="speedVal">Balanced</span>
+      <!-- TAB: Settings -->
+      <div class="tab-content" id="tabContentSettings">
+        <div class="settings-section">
+          <div class="settings-section-title">&#x1F441; Visible Tabs</div>
+          <div class="settings-desc">Toggle which tabs appear in the tab bar. Disabled tabs are hidden but not removed.</div>
+          <div class="settings-toggle-list">
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F4C4;</span>
+              <span class="settings-toggle-label">Pages Tab<span class="settings-toggle-sub">Export by page range</span></span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="pages" id="visPages" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F4C5;</span>
+              <span class="settings-toggle-label">Date Tab<span class="settings-toggle-sub">Export by date range</span></span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="date" id="visDate" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x2611;</span>
+              <span class="settings-toggle-label">Select Tab<span class="settings-toggle-sub">Label run workflow</span></span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="select" id="visSelect" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F4CA;</span>
+              <span class="settings-toggle-label">Sheets Tab<span class="settings-toggle-sub">Google Sheets sync</span></span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="sheets" id="visSheets" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-icon">&#x1F552;</span>
+              <span class="settings-toggle-label">History Tab<span class="settings-toggle-sub">Past exports &amp; re-download</span></span>
+              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="history" id="visHistory" checked>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
+          <div class="settings-about-card">
+            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.7.3</span></div>
+            <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
+            <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
+          </div>
+          <button class="settings-reset-btn" id="resetSettingsBtn">&#x21BA; Reset All Settings to Default</button>
+        </div>
       </div>
 
-      <div class="format-row">
-        <label>Export as</label>
-        <select id="autoFormat">
-          <option value="xlsx">&#x1F4CA; Excel (.xlsx)</option>
-          <option value="csv">&#x1F4C4; CSV</option>
-          <option value="json">&#x1F4CB; JSON</option>
-        </select>
+      <!-- Shared: Speed + Format (Pages, Date, Select only) -->
+      <div id="sharedExportControls" class="shared-export-controls">
+        <div class="speed-row">
+          <span class="speed-label">&#x1F422; Safe</span>
+          <input type="range" class="speed-slider" id="speedSlider" min="1" max="3" value="2">
+          <span class="speed-label">&#x26A1; Fast</span>
+          <span class="speed-value" id="speedVal">Balanced</span>
+        </div>
+
+        <div class="format-row">
+          <label>Export as</label>
+          <select id="autoFormat">
+            <option value="xlsx">&#x1F4CA; Excel (.xlsx)</option>
+            <option value="csv">&#x1F4C4; CSV</option>
+            <option value="json">&#x1F4CB; JSON</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -1573,65 +1684,6 @@
       </div>
     </div>
 
-      <!-- TAB: Settings -->
-      <div class="tab-content" id="tabContentSettings">
-        <div class="settings-section">
-          <div class="settings-section-title">&#x1F441; Visible Tabs</div>
-          <div class="settings-desc">Toggle which tabs appear in the tab bar. Disabled tabs are hidden but not removed.</div>
-          <div class="settings-toggle-list">
-            <label class="settings-toggle-row">
-              <span class="settings-toggle-icon">&#x1F4C4;</span>
-              <span class="settings-toggle-label">Pages Tab
-                <span class="settings-toggle-sub">Export by page range</span>
-              </span>
-              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="pages" id="visPages" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-            <label class="settings-toggle-row">
-              <span class="settings-toggle-icon">&#x1F4C5;</span>
-              <span class="settings-toggle-label">Date Tab
-                <span class="settings-toggle-sub">Export by date range</span>
-              </span>
-              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="date" id="visDate" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-            <label class="settings-toggle-row">
-              <span class="settings-toggle-icon">&#x2611;</span>
-              <span class="settings-toggle-label">Select Tab
-                <span class="settings-toggle-sub">Label run workflow</span>
-              </span>
-              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="select" id="visSelect" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-            <label class="settings-toggle-row">
-              <span class="settings-toggle-icon">&#x1F4CA;</span>
-              <span class="settings-toggle-label">Sheets Tab
-                <span class="settings-toggle-sub">Google Sheets sync</span>
-              </span>
-              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="sheets" id="visSheets" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-            <label class="settings-toggle-row">
-              <span class="settings-toggle-icon">&#x1F552;</span>
-              <span class="settings-toggle-label">History Tab
-                <span class="settings-toggle-sub">Past exports &amp; re-download</span>
-              </span>
-              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="history" id="visHistory" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
-          <div class="settings-about-card">
-            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.3</span></div>
-            <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
-            <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
-          </div>
-          <button class="settings-reset-btn" id="resetSettingsBtn">&#x21BA; Reset All Settings to Default</button>
-        </div>
-      </div>
-
     <!-- Live extraction counter (IMP 5) -->
     <div id="liveCounter" style="display:none; font-size:11px; color:var(--muted); text-align:center; margin-top:4px; letter-spacing:0.3px;"></div>
 
@@ -1654,7 +1706,7 @@
 
   </div>
 
-  <div class="footer">v5.1 &middot; Label Date Filter &middot; Cancel &middot; Auto-Retry</div>
+  <div class="footer"><strong>Temu Exporter</strong><span>v8.7.3</span></div>
 
   <script src="popup.js"></script>
 </body>

@@ -21,12 +21,12 @@ const TAB_LOAD_TIMEOUT = 15000; // 15s per tab load (reduced from 30s)
 let cancelRequested = false;
 
 const EXPORT_COLS = [
-  'labelPurchasedDate', 'shippingDate', 'orderDate', 'trackingNumber',
+  'labelPurchasedDate', 'shippingDate', 'orderDate', 'trackingNumber', 'packageId',
   'orderNumber',  'customerName', 'productDetails', 'qty',
   'estimatedRevenue', 'shippingCost'
 ];
 const EXPORT_HEADERS = [
-  'Label Date', 'Shipping Date', 'Order Date', 'Tracking Number',
+  'Label Date', 'Shipping Date', 'Order Date', 'Tracking Number', 'Package ID',
   'Order No',   'Customer Name', 'Product Details', 'Qty (No)',
   'Est. Revenue', 'Shipping Cost'
 ];
@@ -141,7 +141,15 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'startSelectionExport') runSelectionExport(
     msg.selectedUrls, msg.format || 'csv',
     msg.tabDelay  ?? 1000,
-    msg.randExtra ?? 1000
+    msg.randExtra ?? 1000,
+    false
+  );
+  // ── Mode 3b: Selected orders → Google Sheets clipboard ───────────────────────
+  if (msg.type === 'startSelectionSheetsSync') runSelectionExport(
+    msg.selectedUrls, 'csv',
+    msg.tabDelay  ?? 1000,
+    msg.randExtra ?? 1000,
+    true
   );
   // ── Cancel running export ────────────────────────────────────────────────────
   if (msg.type === 'cancelExport') {
@@ -588,13 +596,16 @@ async function runDateExport(listTabId, fromDate, toDate, format, tabDelay = 100
 // MODE 3 — Selection Export: process only user-selected orders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExtra = 1000) {
+async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExtra = 1000, sheetsMode = false) {
   cancelRequested = false;
   if (!selectedUrls || selectedUrls.length === 0) {
     sendMsg({ type: 'noData', failedCount: 0 });
     return;
   }
-  await _processBatchAndExport(selectedUrls, format, tabDelay, randExtra, false, '', '', selectedUrls.length, null);
+  await _processBatchAndExport(
+    selectedUrls, format, tabDelay, randExtra,
+    false, '', '', selectedUrls.length, null, sheetsMode, sheetsMode ? 'selection' : 'selection-export'
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -603,7 +614,8 @@ async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExt
 
 async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
                                        filterEnabled, filterFromDate, filterToDate,
-                                       totalPagesLabel, labelDateMap, sheetsMode = false) {
+                                       totalPagesLabel, labelDateMap, sheetsMode = false,
+                                       sheetsSource = 'date') {
   const orderRecords = [], retryQueue = [], seenIds = new Set();
   const total = allOrderUrls.length;
   let failedCount = 0;
@@ -721,6 +733,7 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
 
       sendMsg({
         type: 'sheetsSyncReady',
+        source:      sheetsSource,
         ordersFound:  orderRecords.length,
         rowsExported: flatRows.length,
         failedCount:  permanentFails.length,
@@ -1069,6 +1082,7 @@ function flattenToRows(orderRecords) {
         shippingDate:     pkg.shipmentDate,
         orderDate:        order.purchaseDate,
         trackingNumber:   pkg.trackingNumber,
+        packageId:        pkg.packageId || '',
         orderNumber:      order.orderNumber,
         customerName:     order.recipientName,
         productDetails:   prod.title,
@@ -1089,6 +1103,7 @@ function flattenToRows(orderRecords) {
           shippingDate:     pkg.shipmentDate,
           orderDate:        order.purchaseDate,
           trackingNumber:   pkg.trackingNumber,
+          packageId:        pkg.packageId || '',
           orderNumber:      order.orderNumber,
           customerName:     order.recipientName,
           productDetails:   prod.title,
@@ -1299,7 +1314,20 @@ function extractPageData() {
     }
   }
 
-  // 5. All Shipment Confirmed Dates (one per package)
+  // 5. Package IDs and Shipment Confirmed Dates (one per package)
+  var allPackageIds = [];
+  var packageEls = findAllByOwnTextRx(/^PK-\d{8,}$/i, ['span', 'div']);
+  packageEls.forEach(function(el) {
+    var packageId = ownText(el) || (el.textContent || '').trim();
+    if (packageId && allPackageIds.indexOf(packageId) === -1) allPackageIds.push(packageId);
+  });
+  if (allPackageIds.length === 0) {
+    var packageMatches = bodyText.match(/\b(PK-\d{8,})\b/gi) || [];
+    packageMatches.forEach(function(packageId) {
+      if (allPackageIds.indexOf(packageId) === -1) allPackageIds.push(packageId);
+    });
+  }
+
   var allShipmentDates = [];
   var sdLabels = findAllByOwnTextRx(/^Shipment\s*confirmed\s*at$/i, ['div']);
   sdLabels.forEach(function(label) {
@@ -1312,10 +1340,14 @@ function extractPageData() {
   }
 
   // Build packages array
-  var numPkgs = Math.max(allTrackingNumbers.length, allShipmentDates.length, 1);
+  var numPkgs = Math.max(allPackageIds.length, allTrackingNumbers.length, allShipmentDates.length, 1);
   var packages = [];
   for (var pi = 0; pi < numPkgs; pi++) {
-    packages.push({ trackingNumber: allTrackingNumbers[pi] || '', shipmentDate: allShipmentDates[pi] || '' });
+    packages.push({
+      packageId: allPackageIds[pi] || '',
+      trackingNumber: allTrackingNumbers[pi] || '',
+      shipmentDate: allShipmentDates[pi] || ''
+    });
   }
 
   // 6. Products from Order Contents table
@@ -1482,12 +1514,28 @@ function extractPageData() {
   }
 
   // 8. Est. Total Shipping Cost
+  // IMPORTANT: Temu also renders a different lower-case `shipping cost` value
+  // in the sales-proceeds panel. The sheet must use only the package-section
+  // field labelled exactly `Est. total shipping cost` (for example, $5.74).
   var shippingCost = '';
-  var scLabel = findByOwnText('Est. total shipping cost', ['div']);
-  if (scLabel) { var scV = adjacentValue(scLabel); shippingCost = scV ? scV.textContent.trim().replace(/[^0-9.,]/g, '').trim() : ''; }
+  var scLabels = findAllByOwnTextRx(/^Est\.\s*total\s*shipping\s*cost$/i, ['div', 'span', 'p']);
+  for (var sci = scLabels.length - 1; sci >= 0 && !shippingCost; sci--) {
+    var scLabel = scLabels[sci];
+    try {
+      var scStyle = window.getComputedStyle ? window.getComputedStyle(scLabel) : null;
+      if (scStyle && (scStyle.display === 'none' || scStyle.visibility === 'hidden' || scStyle.opacity === '0')) continue;
+    } catch (visibilityErr) {}
+    var scV = adjacentValue(scLabel, 4);
+    var scRaw = scV ? (scV.textContent || '').trim() : '';
+    var scMatch = scRaw.match(/(?:[$€£]\s*)?([0-9][0-9,]*(?:\.[0-9]{1,2})?)/);
+    if (scMatch) shippingCost = scMatch[1];
+  }
   if (!shippingCost) {
-    var scM = bodyText.match(/Est\.?\s*total\s*shipping\s*cost[^\n]*\n?[^\n$]*\$([\d.,]+)/i);
-    if (scM) shippingCost = scM[1];
+    // Text fallback remains anchored to the exact label. It cannot match the
+    // earlier lower-case `shipping cost` field.
+    var scRx = /Est\.\s*total\s*shipping\s*cost[\s\S]{0,240}?\$([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi;
+    var scM;
+    while ((scM = scRx.exec(bodyText)) !== null) shippingCost = scM[1];
   }
 
   // 9. Courier — from "Courier" label in Package section
