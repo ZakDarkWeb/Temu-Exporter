@@ -1,4 +1,4 @@
-# Temu Order Tab Exporter v8.8.3
+# Temu Order Tab Exporter v8.8.2
 
 Temu Order Tab Exporter helps Temu sellers export order data to CSV, JSON, Excel, and Google Sheets. The primary workflow is: select orders, purchase labels through Temu’s own controls, move to Shipped, refresh the in-page card, and export complete order details.
 
@@ -16,7 +16,7 @@ Click **Export to Sheets** after matching. The extension opens each matched orde
 
 ## Copy and download options
 
-The in-page card now exposes one primary export action: **Export to Sheets**. Clicking it starts extraction for the selected/matched orders. After extraction, the result provides all of the following actions:
+After extraction, the result provides all of the following actions:
 
 | Action | Purpose |
 |---|---|

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.3
+// Temu Order Exporter — Content Script v8.8.2
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -333,7 +333,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.3 · Bulk Label Workflow</div>
+          <div class="version">v8.8.2 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -374,6 +374,9 @@
           </div>
         </div>
 
+        <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
+        <button class="btn btn-outline" id="btnSheets">📊 Sheets Sync Today</button>
+
         <div class="progress-card" id="progressCard" style="display:none;">
           <div class="progress-row">
             <div class="spinner"></div>
@@ -382,6 +385,7 @@
           </div>
           <div class="progress-track"><div class="progress-bar" id="progBar"></div></div>
           <div class="progress-sub" id="progSub"></div>
+          <button class="btn-cancel" id="btnCancel">✕ Cancel Export</button>
         </div>
 
         <div class="result-toast" id="resultToast" style="display:none;"></div>
@@ -424,6 +428,12 @@
     if (!pill) return;
     pill.className = 'status-pill ' + (cls || 's-idle');
     if (txt) txt.textContent = text;
+  }
+
+  function setButtons(disabled) {
+    [$('btnExport'), $('btnSheets')].forEach(b => {
+      if (b) { b.disabled = disabled; if (disabled) b.setAttribute('disabled',''); else b.removeAttribute('disabled'); }
+    });
   }
 
   function showProgress(show) {
@@ -636,19 +646,86 @@
     chrome.runtime.sendMessage({ type: 'exportSelectedLabelSheets', rows });
   }
 
+  // ── Start export ──────────────────────────────────────────────────────────
+  function startExport(sheetsMode) {
+    if (running) return;
+    running = true;
+    setButtons(true);
+    showProgress(true);
+    const { fromDate, toDate } = getTodayRange();
+    setStatus('Scanning pages...', 's-running');
+    updateProgress(5, 'Initializing...', '');
+    chrome.runtime.sendMessage({
+      type: sheetsMode ? 'quickSheetsSync' : 'quickExport',
+      fromDate, toDate
+    });
+  }
 
-  // ── Primary workflow message listener ─────────────────────────────────────
+  function cancelExport() {
+    // Reset UI immediately — don't wait for background response
+    running = false;
+    setButtons(false);
+    showProgress(false);
+    setStatus('Cancelling...', 's-running');
+
+    // Send cancel to background — try-catch in case service worker is sleeping
+    try {
+      chrome.runtime.sendMessage({ type: 'cancelExport' }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn('[Temu Exporter] Cancel message error:', chrome.runtime.lastError.message);
+        }
+        setStatus('Export cancelled', 's-error');
+        setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+      });
+    } catch (err) {
+      console.warn('[Temu Exporter] cancelExport failed:', err);
+      setStatus('Export cancelled', 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+    }
+  }
+
+  // ── Message listener ──────────────────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg) return;
+    if (msg.type === 'autoProgress') {
+      const { stage, page, totalPages, scraped } = msg;
+      const pct = totalPages > 0 ? (page / totalPages) * 85 : 0;
+      if (stage === 'navigating') {
+        updateProgress(pct + 5, `Scanning page ${page} / ${totalPages || '?'}`, `${scraped || 0} orders found so far`);
+      } else {
+        updateProgress(pct + 10, `Extracting orders...`, `${scraped || 0} orders collected`);
+      }
+    }
+    if (msg.type === 'autoDone' || msg.type === 'done') {
+      running = false; setButtons(false); showProgress(false);
+      const count = msg.ordersFound || 0;
+      updateProgress(100, 'Complete!', '');
+      setStatus(`Done! ${count} orders exported`, 's-done');
+      showResult(`✅ ${count} orders exported!`);
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 7000);
+    }
+    if (msg.type === 'noData') {
+      running = false; setButtons(false); showProgress(false);
+      setStatus('No orders found in range', 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 4000);
+    }
+    if (msg.type === 'error') {
+      running = false; setButtons(false); showProgress(false);
+      setStatus((msg.message || 'Error').slice(0, 48), 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 5000);
+    }
+    if (msg.type === 'cancelled') {
+      running = false; workflowBusy = false; setButtons(false); showProgress(false);
+      setStatus('Cancelled', 's-error');
+      setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+    }
     if (msg.type === 'selectedShippedProgress') {
       const total = Number(msg.total || 0);
       const current = Number(msg.current || 0);
-      workflowBusy = true;
-      showProgress(true);
       updateProgress(total ? Math.min(92, 10 + (current / total) * 75) : 20, msg.message || 'Scanning Shipped pages...', `${current} matched / ${total} selected`);
     }
     if (msg.type === 'selectedShippedReady') {
-      workflowBusy = false; running = false; showProgress(false);
+      workflowBusy = false; running = false; showProgress(false); setButtons(false);
       if ($('selectedCount')) $('selectedCount').textContent = msg.selectedCount || 0;
       if ($('matchedCount')) $('matchedCount').textContent = msg.matchedCount || 0;
       if ($('pendingCount')) $('pendingCount').textContent = msg.pendingCount || 0;
@@ -657,21 +734,18 @@
       showResult(`${msg.matchedCount || 0} matched · ${msg.pendingCount || 0} pending`);
       refreshWorkflowSummary();
     }
-    if (msg.type === 'progress') {
-      const total = Number(msg.total || 0);
-      const current = Number(msg.current || 0);
-      workflowBusy = true;
-      showProgress(true);
-      updateProgress(total ? 10 + (current / total) * 84 : 20, `Extracting order ${Math.min(current + 1, total)}...`, `${current} / ${total} orders`);
-    }
     if (msg.type === 'selectedLabelRowsReady') showSelectedLabelRows(msg);
     if (msg.type === 'selectedLabelFileDownloaded') {
       workflowBusy = false;
       setStatus(`${String(msg.format || 'file').toUpperCase()} downloaded`, 's-done');
     }
-    if (msg.type === 'selectedLabelDownloadError' || msg.type === 'selectedShippedError' || msg.type === 'selectedLabelExportError' || msg.type === 'noData' || msg.type === 'error') {
-      workflowBusy = false; running = false; showProgress(false);
-      setStatus((msg.message || 'Workflow failed').slice(0, 64), 's-error');
+    if (msg.type === 'selectedLabelDownloadError') {
+      workflowBusy = false;
+      setStatus((msg.message || 'Download failed').slice(0, 64), 's-error');
+    }
+    if (msg.type === 'selectedShippedError' || msg.type === 'selectedLabelExportError') {
+      workflowBusy = false; running = false; showProgress(false); setButtons(false);
+      setStatus((msg.message || 'Workflow failed').slice(0, 48), 's-error');
     }
   });
 
@@ -723,6 +797,12 @@
 
     if (id === 'minBtn') {
       setMinimized(!minimized);
+    } else if (id === 'btnExport') {
+      if (!minimized && !running) startExport(false);
+      else if (minimized) setMinimized(false);
+    } else if (id === 'btnSheets') {
+      if (!minimized && !running) startExport(true);
+      else if (minimized) setMinimized(false);
     } else if (id === 'btnRefreshShipped') {
       if (!minimized) refreshSelectedShipped();
     } else if (id === 'btnExportSelected') {
@@ -739,6 +819,11 @@
         setStatus('TSV copied — paste into Sheets', 's-done');
         showResult('TSV copied to clipboard');
       }).catch(() => setStatus('Copy blocked — use the text box', 's-error'));
+    } else if (id === 'btnCancel') {
+      // Visual flash to confirm click registered
+      btn.style.background = 'rgba(239,68,68,0.25)';
+      setTimeout(() => { btn.style.background = ''; }, 200);
+      cancelExport();
     }
   }, true); // useCapture:true — fires before any other handler
 

@@ -63,8 +63,4 @@ assert(popup.includes('sheetsDownloadXlsx') && popup.includes('sheetsDownloadCsv
 assert(popup.includes('showSelectedLabelResult') && popup.includes('saveToHistory'), 'popup selected-label history renderer missing');
 assert(html.includes('id="sheetsDownloadXlsx"') && html.includes('id="sheetsDownloadCsv"'), 'Sheets download markup missing');
 assert(content.includes('btnDownloadSelectedXlsx') && content.includes('btnDownloadSelectedCsv'), 'in-page download controls missing');
-assert(content.includes('id="btnExportSelected">Export to Sheets</button>'), 'primary Export to Sheets button missing');
-for (const legacy of ['Export Today', 'Sheets Sync Today', 'btnCancel', 'quickExport', 'quickSheetsSync']) {
-  assert(!content.includes(legacy), `legacy in-page card feature still present: ${legacy}`);
-}
 console.log('selected-label completeness, download, exact schema, and history regression tests passed');
