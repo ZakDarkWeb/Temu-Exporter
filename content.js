@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.0
+// Temu Order Exporter — Content Script v8.8.1
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -72,7 +72,8 @@
     /* ── MINIMIZED ─────────────────────────────────────────── */
     /* 'minimized' class is on .card itself, so use .card.minimized selectors */
     .card.minimized {
-      width: 44px; max-height: 44px; border-radius: 50%;
+      width: 44px; height: 44px; min-height: 44px; max-height: 44px;
+      border-radius: 50%; overflow: hidden; overflow-y: hidden;
       border-color: rgba(0,212,170,0.55);
       box-shadow: 0 4px 24px rgba(0,0,0,0.8), 0 0 28px rgba(0,212,170,0.22);
       cursor: pointer;
@@ -82,7 +83,8 @@
     .card.minimized .actions,
     .card.minimized .header-line { display: none !important; }
     .card.minimized .header {
-      height: 44px; padding: 0; justify-content: center; cursor: pointer;
+      width: 44px; height: 44px; min-height: 44px; padding: 0;
+      justify-content: center; cursor: pointer;
     }
     .card.minimized .logo {
       width: 26px; height: 26px; border-radius: 50%;
@@ -329,7 +331,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.0 · Bulk Label Workflow</div>
+          <div class="version">v8.8.1 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -484,6 +486,18 @@
   }
 
   function identityOf(row) { return [row.orderNumber || '', row.packageId || '', row.trackingNumber || ''].filter(Boolean).join('|'); }
+  function orderKey(row) { return row.orderNumber || identityOf(row); }
+  function sourceSet(item) {
+    const values = item?.selectionSources || (item?.selectionSource ? [item.selectionSource] : []);
+    return new Set(values.filter(Boolean));
+  }
+  function isSelectedMatch(row, selectedOrders) {
+    const selected = selectedOrders.find(item => item.orderNumber === row.orderNumber);
+    if (!selected) return false;
+    const packageMatches = !selected.packageId || !row.packageId || selected.packageId === row.packageId;
+    const trackingMatches = !selected.trackingNumber || !row.trackingNumber || selected.trackingNumber === row.trackingNumber;
+    return packageMatches && trackingMatches;
+  }
 
   async function readWorkflowState() {
     const data = await chrome.storage.local.get([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
@@ -496,7 +510,8 @@
   async function refreshWorkflowSummary() {
     const state = await readWorkflowState();
     const selected = Object.values(state.selected.orders || {});
-    const matched = Number(state.shipped.matchedCount || (state.shipped.rows || []).length || 0);
+    const matchedRows = (state.shipped.rows || []).filter(row => isSelectedMatch(row, selected));
+    const matched = matchedRows.length;
     const pending = selected.length ? Math.max(0, selected.length - matched) : 0;
     if ($('selectedCount')) $('selectedCount').textContent = selected.length;
     if ($('matchedCount')) $('matchedCount').textContent = matched;
@@ -505,26 +520,58 @@
     if ($('selectionTab')) $('selectionTab').textContent = mode === 'shipped' ? 'Shipped' : mode === 'unshipped' ? 'Unshipped' : 'Orders';
     if ($('selectionHint')) $('selectionHint').textContent = mode === 'unshipped'
       ? 'Selections are saved automatically while you buy labels.'
-      : mode === 'shipped' ? 'Click Refresh Shipped after labels move these orders here.' : 'Open Unshipped or Shipped to use this workflow.';
+      : mode === 'shipped' ? 'Selected Shipped rows are added and ready for Sheets export.' : 'Open Unshipped or Shipped to use this workflow.';
     if ($('btnRefreshShipped')) $('btnRefreshShipped').disabled = workflowBusy;
     if ($('btnExportSelected')) $('btnExportSelected').disabled = workflowBusy || matched === 0;
-    lastWorkflowRows = state.shipped.rows || [];
+    lastWorkflowRows = matchedRows;
   }
 
   async function persistVisibleSelection() {
-    if (workflowMode() !== 'unshipped') return;
+    const mode = workflowMode();
+    if (mode !== 'unshipped' && mode !== 'shipped') return;
     const visible = parseVisibleSelection();
     if (!visible.length) return;
-    const data = await chrome.storage.local.get(SELECTED_ORDERS_KEY);
+    const data = await chrome.storage.local.get([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
     const current = data[SELECTED_ORDERS_KEY] || { updatedAt: 0, orders: {} };
     const orders = { ...(current.orders || {}) };
+    const shippedState = data[SELECTED_SHIPPED_KEY] || { updatedAt: 0, rows: [] };
+    const shippedRows = new Map((shippedState.rows || []).map(row => [orderKey(row), row]));
+    const source = mode === 'shipped' ? 'shipped' : 'unshipped';
+
     visible.forEach(row => {
-      const key = identityOf(row);
-      if (!key) return;
-      if (row.selected) orders[key] = { orderNumber: row.orderNumber, packageId: row.packageId, trackingNumber: row.trackingNumber, selectedAt: orders[key]?.selectedAt || Date.now() };
-      else delete orders[key];
+      const identity = identityOf(row);
+      if (!identity) return;
+      const key = Object.keys(orders).find(existingKey => orders[existingKey]?.orderNumber === row.orderNumber) || identity;
+      const existing = orders[key] || { orderNumber: row.orderNumber, packageId: row.packageId, trackingNumber: row.trackingNumber, selectedAt: Date.now() };
+      const sources = sourceSet(existing);
+      if (row.selected) {
+        sources.add(source);
+        orders[key] = { ...existing, orderNumber: row.orderNumber, packageId: row.packageId, trackingNumber: row.trackingNumber, selectionSources: [...sources] };
+        if (mode === 'shipped') shippedRows.set(orderKey(row), { ...row, selectedAt: existing.selectedAt });
+      } else if (orders[key]) {
+        sources.delete(source);
+        if (sources.size) orders[key] = { ...existing, selectionSources: [...sources] };
+        else {
+          delete orders[key];
+          shippedRows.delete(orderKey(row));
+        }
+        if (mode === 'shipped') shippedRows.delete(orderKey(row));
+      }
     });
-    await chrome.storage.local.set({ [SELECTED_ORDERS_KEY]: { updatedAt: Date.now(), orders } });
+
+    const selected = Object.values(orders);
+    const matchedRows = [...shippedRows.values()].filter(row => isSelectedMatch(row, selected));
+    await chrome.storage.local.set({
+      [SELECTED_ORDERS_KEY]: { updatedAt: Date.now(), orders },
+      [SELECTED_SHIPPED_KEY]: {
+        ...shippedState,
+        updatedAt: Date.now(),
+        selectedCount: selected.length,
+        matchedCount: matchedRows.length,
+        pendingCount: Math.max(0, selected.length - matchedRows.length),
+        rows: matchedRows
+      }
+    });
     await refreshWorkflowSummary();
   }
 
@@ -551,6 +598,8 @@
 
   function showSelectedLabelRows(msg) {
     lastWorkflowRows = msg.rows || [];
+    running = false;
+    showProgress(false);
     if ($('tsvText')) $('tsvText').value = msg.tsv || '';
     if ($('tsvCount')) $('tsvCount').textContent = `${lastWorkflowRows.length} rows`;
     if ($('tsvCard')) $('tsvCard').style.display = 'block';
@@ -570,8 +619,9 @@
   async function exportSelectedLabelSheets() {
     if (workflowBusy) return;
     const state = await readWorkflowState();
-    const rows = state.shipped.rows || lastWorkflowRows;
-    if (!rows.length) { setStatus('Refresh Shipped first', 's-error'); return; }
+    const selected = Object.values(state.selected.orders || {});
+    const rows = (state.shipped.rows || lastWorkflowRows).filter(row => isSelectedMatch(row, selected));
+    if (!rows.length) { setStatus('Select Shipped orders or click Refresh Shipped first', 's-error'); return; }
     workflowBusy = true;
     showProgress(true); setStatus('Extracting selected orders...', 's-running'); updateProgress(10, 'Opening order details...', `${rows.length} matched orders`);
     chrome.runtime.sendMessage({ type: 'exportSelectedLabelSheets', rows });

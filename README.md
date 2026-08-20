@@ -1,4 +1,4 @@
-# Temu Order Tab Exporter v8.8.0
+# Temu Order Tab Exporter v8.8.1
 
 Temu Order Tab Exporter helps Temu sellers export order data to CSV, JSON, Excel, and Google Sheets. This release adds the primary **persistent bulk-label workflow**: select orders on the Unshipped tab, purchase labels using Temu’s own controls, move to Shipped, refresh the in-page card, and export the matched orders to Google Sheets.
 
@@ -8,13 +8,13 @@ Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
 
 ## Primary workflow: Unshipped selection to Sheets
 
-On Temu Seller Center → Manage Orders → **Unshipped**, select the orders that will be included in the bulk-label operation. The in-page Temu Exporter card observes the selected order rows and saves their Order No, Package ID, and Tracking Number to `chrome.storage.local`. The selection therefore survives pagination and browser restarts.
+On Temu Seller Center → Manage Orders → **Unshipped**, select the orders that will be included in the bulk-label operation. You may also open **Shipped** and select additional rows directly; those rows are merged into the same durable selection rather than replacing the Unshipped selection. The in-page Temu Exporter card observes the selected order rows and saves their Order No, Package ID, and Tracking Number to `chrome.storage.local`. The selection therefore survives pagination and browser restarts.
 
-Use Temu’s own interface to buy labels in bulk. The extension does not purchase labels or submit any account action. After the orders appear under **Shipped**, open that tab and click **Refresh Shipped** on the in-page card. The extension scans the visible Shipped pagination, matches the durable selection using Order No and, when available, Package ID and Tracking Number, and reports the matched and pending counts.
+Use Temu’s own interface to buy labels in bulk. The extension does not purchase labels or submit any account action. After the orders appear under **Shipped**, open that tab and click **Refresh Shipped** on the in-page card. Orders selected directly on Shipped are recognized immediately and can be exported without waiting for another refresh. The extension scans the visible Shipped pagination, matches the durable selection using Order No and, when available, Package ID and Tracking Number, and reports the matched and pending counts.
 
 Click **Export to Sheets** after matching is complete. The extension opens each matched order-detail URL in a background tab, extracts the detail fields, closes the detail tabs, and returns a tab-separated result to the in-page card. Click **Copy TSV to clipboard** and paste into Google Sheets. A manual text-area fallback remains available if the browser blocks clipboard access.
 
-The selection is not cleared automatically after export. Use **Clear Selection** when the workflow is complete or when a new batch should start.
+The selection is not cleared automatically after export. Use **Clear Selection** when the workflow is complete or when a new batch should start. The minimized card is locked to a clipped 44×44-pixel icon state so the expanded card’s scrollbar cannot remain visible after minimizing.
 
 ## Exact selected-label Sheets columns
 

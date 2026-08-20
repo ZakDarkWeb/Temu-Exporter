@@ -3,6 +3,15 @@ const assert = require('assert');
 const vm = require('vm');
 
 const source = fs.readFileSync('/home/ubuntu/Temu-Exporter/background.js', 'utf8');
+const contentSource = fs.readFileSync('/home/ubuntu/Temu-Exporter/content.js', 'utf8');
+
+assert(contentSource.includes("if (active === '3') return 'shipped'"), 'Shipped tab detection missing');
+assert(contentSource.includes("const source = mode === 'shipped' ? 'shipped' : 'unshipped'"), 'selection source tracking missing');
+assert(contentSource.includes('selectionSources'), 'cross-tab selection merge missing');
+assert(contentSource.includes('btnExportSelected'), 'direct Shipped selection export control missing');
+assert(contentSource.includes('width: 44px; height: 44px; min-height: 44px; max-height: 44px'), 'minimized card dimensions are not locked');
+assert(contentSource.includes('overflow: hidden; overflow-y: hidden'), 'minimized card overflow fix missing');
+assert(contentSource.includes("showProgress(false);\n    if ($('tsvText'))"), 'selected-label completion does not close progress');
 
 assert(source.includes("const SELECTED_ORDERS_KEY = 'temuSelectedOrders_v2'"), 'durable selected-order storage key missing');
 assert(source.includes("const SELECTED_SHIPPED_KEY = 'temuSelectedShipped_v1'"), 'matched shipped storage key missing');

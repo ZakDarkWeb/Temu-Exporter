@@ -675,7 +675,7 @@ async function runSelectedShippedRefresh(listTabId) {
           }).filter(function(x) { return x.orderNumber; });
           var fingerprint = items.map(function(x) { return x.orderNumber + '|' + x.packageId + '|' + x.trackingNumber; }).join('||');
           var next = document.querySelector('[data-testid="beast-core-pagination-next"]');
-          var disabled = !!(next && (next.getAttribute('aria-disabled') === 'true' || next.classList.contains('PGT_disabled_123')));
+          var disabled = !!(next && (next.getAttribute('aria-disabled') === 'true' || next.hasAttribute('disabled') || Array.from(next.classList).some(function(cls) { return /PGT_disabled|disabled/i.test(cls); })));
           return { items: items, fingerprint: fingerprint, hasNext: !!next && !disabled };
         }
       });
