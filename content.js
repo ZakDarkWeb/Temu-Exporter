@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.2
+// Temu Order Exporter — Content Script v8.8.4
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -333,7 +333,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.2 · Bulk Label Workflow</div>
+          <div class="version">v8.8.4 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -374,8 +374,6 @@
           </div>
         </div>
 
-        <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
-        <button class="btn btn-outline" id="btnSheets">📊 Sheets Sync Today</button>
 
         <div class="progress-card" id="progressCard" style="display:none;">
           <div class="progress-row">
@@ -797,12 +795,6 @@
 
     if (id === 'minBtn') {
       setMinimized(!minimized);
-    } else if (id === 'btnExport') {
-      if (!minimized && !running) startExport(false);
-      else if (minimized) setMinimized(false);
-    } else if (id === 'btnSheets') {
-      if (!minimized && !running) startExport(true);
-      else if (minimized) setMinimized(false);
     } else if (id === 'btnRefreshShipped') {
       if (!minimized) refreshSelectedShipped();
     } else if (id === 'btnExportSelected') {
