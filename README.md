@@ -1,19 +1,56 @@
-# Temu Order Tab Exporter v8.7.3
+# Temu Order Tab Exporter v8.8.0
 
-This release adds a direct **Select Orders → Copy Selected to Sheets** workflow, package-aware spreadsheet output, and fixes the collapsed progress/options area below the Export as selector.
+Temu Order Tab Exporter helps Temu sellers export order data to CSV, JSON, Excel, and Google Sheets. This release adds the primary **persistent bulk-label workflow**: select orders on the Unshipped tab, purchase labels using Temu’s own controls, move to Shipped, refresh the in-page card, and export the matched orders to Google Sheets.
 
 ## Installation
 
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted extension folder. After replacing an existing version, click **Reload** on the extension card.
 
-## Select Orders → Sheets
+## Primary workflow: Unshipped selection to Sheets
 
-Open Temu Seller Center → Manage Orders. Select order checkboxes on the Temu page; the extension detects the current `beast-core` order rows and preserves selections while you move between pages. Open the extension’s **By Selection** tab and click **Copy Selected to Sheets**. The extension extracts the selected order-detail pages, switches to the Sheets result view, and copies tab-separated rows to the clipboard for pasting into Google Sheets.
+On Temu Seller Center → Manage Orders → **Unshipped**, select the orders that will be included in the bulk-label operation. The in-page Temu Exporter card observes the selected order rows and saves their Order No, Package ID, and Tracking Number to `chrome.storage.local`. The selection therefore survives pagination and browser restarts.
 
-The default Sheets columns include Label Date, Tracking No, Package ID, Order No, Customer, Product, Quantity, Estimated Revenue, and **Shipping Cost**. Shipping Cost is taken from the exact order-detail field **Est. total shipping cost**, not the earlier sales-proceeds `shipping cost` value. Package-aware duplicate detection uses order number, package ID, and tracking number.
+Use Temu’s own interface to buy labels in bulk. The extension does not purchase labels or submit any account action. After the orders appear under **Shipped**, open that tab and click **Refresh Shipped** on the in-page card. The extension scans the visible Shipped pagination, matches the durable selection using Order No and, when available, Package ID and Tracking Number, and reports the matched and pending counts.
 
-The workflow is read-only. It does not purchase labels, confirm shipments, print documents, cancel orders, schedule pickups, edit orders, or submit payments.
+Click **Export to Sheets** after matching is complete. The extension opens each matched order-detail URL in a background tab, extracts the detail fields, closes the detail tabs, and returns a tab-separated result to the in-page card. Click **Copy TSV to clipboard** and paste into Google Sheets. A manual text-area fallback remains available if the browser blocks clipboard access.
 
-## Included export modes
+The selection is not cleared automatically after export. Use **Clear Selection** when the workflow is complete or when a new batch should start.
 
-The extension supports page-range export, date-range export, selected-order file export, selected-order clipboard export to Sheets, date-based Sheets Sync, history, and the in-page Quick Export panel.
+## Exact selected-label Sheets columns
+
+The primary workflow always produces these nine columns in this exact order:
+
+| Column | Source |
+|---|---|
+| Shipping Date | Order-detail shipment date |
+| Order Date | Order-detail purchase/order date |
+| Tracking Number | Package tracking number |
+| Order No | Temu parent order number |
+| Customer Name | Recipient/customer name |
+| Product Details | Product title and variant details |
+| Qty (No) | Product quantity |
+| Est. Revenue | Estimated order revenue |
+| Shipping Cost | Exact **Est. total shipping cost** field |
+
+The Shipping Cost value is taken from the exact order-detail label **Est. total shipping cost**. It does not use the lower-case sales-proceeds `shipping cost` value that can appear elsewhere on the detail page.
+
+## Other export modes
+
+The extension also supports page-range export, date-range export, selected-order file export, the general date-based Sheets Sync workflow, export history, and the in-page Quick Export panel. Existing export modes retain their own configurable column selections where applicable; the primary selected-label workflow uses the fixed nine-column contract above.
+
+## Read-only safety
+
+The extension is read-only with respect to Temu account operations. It only observes order rows, opens order-detail pages for extraction, reads data, stores export state locally, and closes tabs opened for extraction. It does not purchase labels, confirm shipments, print documents, cancel orders, schedule pickups, edit orders, submit orders, or make payments.
+
+## Development checks
+
+From the repository directory, run:
+
+```bash
+node --check background.js
+node --check content.js
+node --check popup.js
+node test_shipping_cost_fix.js
+node test_selected_workflow.js
+python3 test_popup_structure.py
+```

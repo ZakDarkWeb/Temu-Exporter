@@ -550,6 +550,31 @@ chrome.runtime.onMessage.addListener(msg => {
     autoBtn.disabled = false;
     autoBtnTxt.textContent = getAutoBtnLabel();
   }
+
+  else if (msg.type === 'selectedShippedProgress') {
+    progressSec.style.display = 'block';
+    const pct = msg.total ? Math.min(92, 10 + (msg.current / msg.total) * 75) : 20;
+    setProgress(pct, msg.message || 'Scanning Shipped pages…');
+    setStatus('🔎', `${msg.current || 0} matched / ${msg.total || 0} selected`, 'info');
+  }
+
+  else if (msg.type === 'selectedShippedReady') {
+    progressSec.style.display = 'none';
+    running = false;
+    setStatus('✅', `${msg.matchedCount || 0} Shipped matched · ${msg.pendingCount || 0} pending`, 'success');
+  }
+
+  else if (msg.type === 'selectedLabelRowsReady') {
+    progressSec.style.display = 'none';
+    running = false;
+    setStatus('📋', `${msg.rows?.length || 0} selected rows ready for Sheets`, 'success');
+  }
+
+  else if (msg.type === 'selectedShippedError' || msg.type === 'selectedLabelExportError') {
+    progressSec.style.display = 'none';
+    running = false;
+    setStatus('❌', msg.message || 'Selected workflow failed.', 'error');
+  }
 });
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -841,6 +866,8 @@ const SHEETS_ALL_COLS = [
 
 // Pending rows for "Copy Again" button
 let _lastSheetRows = [];
+const SELECTED_LABEL_KEYS = ['shippingDate','orderDate','trackingNumber','orderNumber','customerName','productDetails','qty','estimatedRevenue','shippingCost'];
+const SELECTED_LABEL_HEADERS = ['Shipping Date','Order Date','Tracking Number','Order No','Customer Name','Product Details','Qty (No)','Est. Revenue','Shipping Cost'];
 
 // ── TSV Builder ──────────────────────────────────────────────────────────────────
 
@@ -1078,6 +1105,24 @@ chrome.runtime.onMessage.addListener(msg => {
   if (msg.source === 'selection') {
     switchTab('sheets');
     if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${msg.ordersFound || 0} selected orders are ready for Sheets.`;
+  }
+
+  // Selected-label mode has a fixed nine-column contract and bypasses general column preferences.
+  if (msg.source === 'selected-label') {
+    chrome.storage.session.get('sheetsSyncRows', async data => {
+      try {
+        const rows = data.sheetsSyncRows ? JSON.parse(data.sheetsSyncRows) : [];
+        const esc = value => String(value == null ? '' : value).replace(/[\t\r\n]+/g, ' ').trim();
+        const tsv = [SELECTED_LABEL_HEADERS, ...rows.map(row => SELECTED_LABEL_KEYS.map(key => esc(row[key])))].map(row => row.join('\t')).join('\n');
+        setSheetsFallbackText(tsv, true);
+        _lastSheetRows = rows;
+        if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${rows.length} selected orders are ready with 9 columns.`;
+        setStatus('📋', `${rows.length} selected rows ready — click Copy to Clipboard.`, 'success');
+      } catch (e) {
+        setStatus('❌', 'Failed to prepare selected-label TSV: ' + e.message, 'error');
+      }
+    });
+    return;
   }
 
   // Read rows from session storage and process

@@ -31,6 +31,18 @@ const EXPORT_HEADERS = [
   'Est. Revenue', 'Shipping Cost'
 ];
 
+// ── Persistent bulk-label selection workflow ───────────────────────────────────
+const SELECTED_ORDERS_KEY = 'temuSelectedOrders_v2';
+const SELECTED_SHIPPED_KEY = 'temuSelectedShipped_v1';
+const SELECTED_LABEL_KEYS = [
+  'shippingDate', 'orderDate', 'trackingNumber', 'orderNumber',
+  'customerName', 'productDetails', 'qty', 'estimatedRevenue', 'shippingCost'
+];
+const SELECTED_LABEL_HEADERS = [
+  'Shipping Date', 'Order Date', 'Tracking Number', 'Order No',
+  'Customer Name', 'Product Details', 'Qty (No)', 'Est. Revenue', 'Shipping Cost'
+];
+
 // ── Utility ────────────────────────────────────────────────────────────────────
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -111,7 +123,7 @@ function clearState() {
 }
 
 // ── Message router ─────────────────────────────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === 'startExport')     runExport(msg.format || 'csv');
   if (msg.type === 'startAutoExport') runAutoExport(
     msg.listTabId, msg.fromPage, msg.toPage, msg.format || 'csv',
@@ -151,6 +163,9 @@ chrome.runtime.onMessage.addListener((msg) => {
     msg.randExtra ?? 1000,
     true
   );
+  // ── Primary workflow: refresh selected orders against the current Shipped tab ──
+  if (msg.type === 'refreshSelectedShipped') runSelectedShippedRefresh(msg.listTabId || sender.tab?.id);
+  if (msg.type === 'exportSelectedLabelSheets') runSelectedLabelSheetsExport(msg.listTabId || sender.tab?.id, msg.rows || []);
   // ── Cancel running export ────────────────────────────────────────────────────
   if (msg.type === 'cancelExport') {
     cancelRequested = true;
@@ -609,13 +624,110 @@ async function runSelectionExport(selectedUrls, format, tabDelay = 1000, randExt
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PRIMARY WORKFLOW — persistent Unshipped selection → Shipped → Sheets
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function selectedIdentity(row) {
+  return [row.orderNumber || '', row.packageId || '', row.trackingNumber || ''].filter(Boolean).join('|');
+}
+
+async function loadSelectedOrders() {
+  const data = await chrome.storage.local.get(SELECTED_ORDERS_KEY);
+  return data[SELECTED_ORDERS_KEY] || { updatedAt: 0, orders: {} };
+}
+
+async function runSelectedShippedRefresh(listTabId) {
+  cancelRequested = false;
+  if (!listTabId) {
+    sendMsg({ type: 'selectedShippedError', message: 'Open the Temu Shipped orders tab first.' });
+    return;
+  }
+  const saved = await loadSelectedOrders();
+  const selected = Object.values(saved.orders || {});
+  if (!selected.length) {
+    sendMsg({ type: 'selectedShippedReady', selectedCount: 0, matchedCount: 0, pendingCount: 0, rows: [] });
+    return;
+  }
+
+  sendMsg({ type: 'selectedShippedProgress', current: 0, total: selected.length, message: 'Scanning Shipped pages…' });
+  const selectedByOrder = new Map(selected.map(item => [item.orderNumber, item]));
+  const matched = new Map();
+  let page = 1;
+  let previousFingerprint = '';
+
+  try {
+    while (!cancelRequested && page <= 999) {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId: listTabId },
+        func: function() {
+          function text(el) { return (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim(); }
+          function first(rx, value) { var m = value.match(rx); return m ? m[1] : ''; }
+          var rows = Array.from(document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]'));
+          if (!rows.length) rows = Array.from(document.querySelectorAll('tr')).filter(function(tr) { return !tr.querySelector('th'); });
+          var items = rows.map(function(tr) {
+            var t = text(tr);
+            return {
+              orderNumber: first(/(PO-\d+-\d{8,})/, t),
+              packageId: first(/(PK-[A-Za-z0-9-]+)/, t),
+              trackingNumber: first(/Tracking number:?\s*([A-Z0-9-]{6,})/i, t),
+              rowText: t
+            };
+          }).filter(function(x) { return x.orderNumber; });
+          var fingerprint = items.map(function(x) { return x.orderNumber + '|' + x.packageId + '|' + x.trackingNumber; }).join('||');
+          var next = document.querySelector('[data-testid="beast-core-pagination-next"]');
+          var disabled = !!(next && (next.getAttribute('aria-disabled') === 'true' || next.classList.contains('PGT_disabled_123')));
+          return { items: items, fingerprint: fingerprint, hasNext: !!next && !disabled };
+        }
+      });
+      const pageData = result && result[0] && result[0].result;
+      if (!pageData) break;
+      (pageData.items || []).forEach(item => {
+        const selectedItem = selectedByOrder.get(item.orderNumber);
+        if (!selectedItem) return;
+        const packageMatches = !selectedItem.packageId || !item.packageId || selectedItem.packageId === item.packageId;
+        const trackingMatches = !selectedItem.trackingNumber || !item.trackingNumber || selectedItem.trackingNumber === item.trackingNumber;
+        if (packageMatches && trackingMatches) matched.set(selectedIdentity({ ...selectedItem, ...item }), { ...selectedItem, ...item });
+      });
+      sendMsg({ type: 'selectedShippedProgress', current: matched.size, total: selected.length, page, message: `Scanned Shipped page ${page}` });
+      if (!pageData.hasNext || pageData.fingerprint === previousFingerprint) break;
+      previousFingerprint = pageData.fingerprint;
+      const clicked = await navigateNextOnList(listTabId);
+      if (!clicked) break;
+      await sleep(1200);
+      await waitForListPageChange(listTabId, pageData.items[0]?.orderNumber || '');
+      page++;
+    }
+  } catch (error) {
+    sendMsg({ type: 'selectedShippedError', message: `Shipped scan failed: ${error.message}` });
+    return;
+  }
+
+  const matchedRows = Array.from(matched.values());
+  const state = { updatedAt: Date.now(), selectedCount: selected.length, matchedCount: matchedRows.length, pendingCount: Math.max(0, selected.length - matchedRows.length), rows: matchedRows };
+  await chrome.storage.local.set({ [SELECTED_SHIPPED_KEY]: state });
+  sendMsg({ type: 'selectedShippedReady', selectedCount: selected.length, matchedCount: matchedRows.length, pendingCount: state.pendingCount, rows: matchedRows });
+}
+
+async function runSelectedLabelSheetsExport(listTabId, shippedRows) {
+  const saved = await chrome.storage.local.get(SELECTED_SHIPPED_KEY);
+  const rows = shippedRows && shippedRows.length ? shippedRows : (saved[SELECTED_SHIPPED_KEY]?.rows || []);
+  const uniqueUrls = Array.from(new Set(rows.map(row => row.orderNumber).filter(Boolean).map(po => `https://seller.temu.com/order-detail.html?parent_order_sn=${encodeURIComponent(po)}`)));
+  if (!uniqueUrls.length) {
+    sendMsg({ type: 'selectedLabelExportError', message: 'No matched Shipped orders. Click Refresh Shipped first.' });
+    return;
+  }
+  cancelRequested = false;
+  await _processBatchAndExport(uniqueUrls, 'csv', 900, 700, false, '', '', uniqueUrls.length, null, true, 'selected-label', listTabId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SHARED: Parallel batch processing + retry queue + export (used by all modes)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
                                        filterEnabled, filterFromDate, filterToDate,
                                        totalPagesLabel, labelDateMap, sheetsMode = false,
-                                       sheetsSource = 'date') {
+                                       sheetsSource = 'date', notifyTabId = null) {
   const orderRecords = [], retryQueue = [], seenIds = new Set();
   const total = allOrderUrls.length;
   let failedCount = 0;
@@ -715,9 +827,32 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
   sortRows(flatRows);
   try {
     if (sheetsMode) {
-      // ── SHEETS MODE: store rows in session — popup reads + copies to clipboard ──────
-      const rowsJson = JSON.stringify(flatRows);
-      await chrome.storage.session.set({ sheetsSyncRows: rowsJson, sheetsSyncOrderCount: orderRecords.length });
+      // ── SHEETS MODE: store rows in session — popup/card copies to clipboard ──────
+      const selectedLabelMode = sheetsSource === 'selected-label';
+      const outputRows = selectedLabelMode
+        ? flatRows.map(row => Object.fromEntries(SELECTED_LABEL_KEYS.map(key => [key, row[key] ?? ''])))
+        : flatRows;
+      const outputHeaders = selectedLabelMode ? SELECTED_LABEL_HEADERS : EXPORT_HEADERS;
+      const rowsJson = JSON.stringify(outputRows);
+      const escTsv = value => String(value == null ? '' : value).replace(/[\t\r\n]+/g, ' ').trim();
+      const outputTsv = [outputHeaders, ...outputRows.map(row => SELECTED_LABEL_KEYS.map(key => escTsv(row[key])))].map(row => row.join('\t')).join('\n');
+      await chrome.storage.session.set({
+        sheetsSyncRows: rowsJson,
+        sheetsSyncHeaders: outputHeaders,
+        sheetsSyncOrderCount: orderRecords.length
+      });
+      if (selectedLabelMode && notifyTabId) {
+        const selectedState = await loadSelectedOrders();
+        chrome.tabs.sendMessage(notifyTabId, {
+          type: 'selectedLabelRowsReady',
+          rows: outputRows,
+          headers: outputHeaders,
+          tsv: outputTsv,
+          selectedCount: Object.keys(selectedState.orders || {}).length,
+          matchedCount: outputRows.length,
+          failedCount: permanentFails.length
+        }).catch(() => {});
+      }
 
       // Chrome badge: show order count in green
       chrome.action.setBadgeText({ text: String(orderRecords.length) }).catch(() => {});
@@ -735,7 +870,7 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
         type: 'sheetsSyncReady',
         source:      sheetsSource,
         ordersFound:  orderRecords.length,
-        rowsExported: flatRows.length,
+        rowsExported: outputRows.length,
         failedCount:  permanentFails.length,
         failedOrders: permanentFails.slice(0, 20),
         pagesScraped: totalPagesLabel

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.7.3
+// Temu Order Exporter — Content Script v8.8.0
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -54,9 +54,10 @@
       background: #0d1117;
       border: 1px solid rgba(0, 212, 170, 0.25);
       border-radius: 16px;
-      width: 228px;
-      max-height: 400px;
-      overflow: hidden;
+      width: 300px;
+      max-height: 620px;
+      overflow-y: auto;
+      overflow-x: hidden;
       contain: paint;  /* clips ALL child visual overflow — glows, shadows, animations */
       box-shadow:
         0 0 0 1px rgba(0,212,170,0.07),
@@ -277,6 +278,31 @@
       to   { opacity:1; transform:none; }
     }
 
+    /* ── PRIMARY WORKFLOW ─────────────────────────────────────── */
+    .selection-card {
+      background: rgba(96,165,250,0.055);
+      border: 1px solid rgba(96,165,250,0.18);
+      border-radius: 10px; padding: 9px 10px;
+      display: flex; flex-direction: column; gap: 7px;
+    }
+    .selection-title { display:flex; align-items:center; justify-content:space-between; gap:6px; }
+    .selection-title strong { color:#dbeafe; font-size:10px; font-weight:800; }
+    .selection-tab { color:#64748b; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.35px; }
+    .selection-count { color:#60a5fa; font-size:18px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
+    .selection-label { color:#94a3b8; font-size:9px; font-weight:600; }
+    .selection-stats { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+    .selection-stat { background:rgba(255,255,255,.025); border-radius:7px; padding:6px 7px; min-width:0; }
+    .selection-stat b { display:block; color:#f1f5f9; font-size:12px; line-height:1; font-variant-numeric:tabular-nums; }
+    .selection-stat span { display:block; color:#64748b; font-size:8px; font-weight:700; margin-top:3px; }
+    .selection-actions { display:flex; gap:5px; }
+    .selection-actions .btn { height:29px; padding:0 6px; font-size:9px; border-radius:7px; }
+    .selection-actions .btn-clear { flex:0 0 29px; padding:0; color:#fca5a5; border-color:rgba(248,113,113,.25); background:rgba(248,113,113,.06); }
+    .selection-actions .btn-clear:hover { background:rgba(248,113,113,.14); }
+    .selection-hint { color:#64748b; font-size:8px; line-height:1.35; }
+    .tsv-card { background:rgba(0,212,170,.055); border:1px solid rgba(0,212,170,.18); border-radius:9px; padding:8px; }
+    .tsv-card textarea { width:100%; height:48px; resize:none; border:1px solid rgba(255,255,255,.08); border-radius:6px; background:#080c12; color:#94a3b8; padding:5px; font:8px/1.3 monospace; outline:none; }
+    .tsv-copy { margin-top:5px; height:27px; font-size:9px; }
+
     /* ── DRAG DOTS ───────────────────────────────────────────── */
     .drag-dots {
       display: flex; justify-content: center; gap: 4px; padding-top: 1px;
@@ -288,7 +314,7 @@
 
   // ── HTML Template ─────────────────────────────────────────────────────────
   const HTML = `
-    <div class="card">
+      <div class="card">
       <div class="header" id="hdr">
         <div class="logo">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -303,7 +329,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.7.3 · Quick Export</div>
+          <div class="version">v8.8.0 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -314,6 +340,30 @@
         <div class="status-pill s-ready" id="statusPill">
           <span class="status-dot"></span>
           <span id="statusTxt">Ready to export</span>
+        </div>
+
+        <div class="selection-card" id="selectionCard">
+          <div class="selection-title">
+            <strong>Bulk Label Workflow</strong>
+            <span class="selection-tab" id="selectionTab">Unshipped</span>
+          </div>
+          <div><span class="selection-count" id="selectedCount">0</span> <span class="selection-label">orders selected</span></div>
+          <div class="selection-stats">
+            <div class="selection-stat"><b id="matchedCount">0</b><span>Shipped / matched</span></div>
+            <div class="selection-stat"><b id="pendingCount">0</b><span>Pending</span></div>
+          </div>
+          <div class="selection-actions">
+            <button class="btn btn-outline" id="btnRefreshShipped">Refresh Shipped</button>
+            <button class="btn btn-primary" id="btnExportSelected">Export to Sheets</button>
+            <button class="btn btn-clear" id="btnClearSelection" title="Clear saved selection">×</button>
+          </div>
+          <div class="selection-hint" id="selectionHint">Select orders on Unshipped. The selection persists while you buy labels.</div>
+        </div>
+
+        <div class="tsv-card" id="tsvCard" style="display:none;">
+          <div class="selection-title"><strong>Sheets TSV ready</strong><span class="selection-tab" id="tsvCount">0 rows</span></div>
+          <textarea id="tsvText" readonly></textarea>
+          <button class="btn btn-outline tsv-copy" id="btnCopySelected">Copy TSV to clipboard</button>
         </div>
 
         <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
@@ -403,6 +453,130 @@
     setTimeout(() => { el.style.display = 'none'; }, 6000);
   }
 
+  // ── Persistent bulk-label selection workflow ──────────────────────────────
+  const SELECTED_ORDERS_KEY = 'temuSelectedOrders_v2';
+  const SELECTED_SHIPPED_KEY = 'temuSelectedShipped_v1';
+  let workflowBusy = false;
+  let lastWorkflowRows = [];
+
+  function workflowMode() {
+    const params = new URLSearchParams(window.location.search);
+    const active = params.get('activeTab');
+    if (active === '2') return 'unshipped';
+    if (active === '3') return 'shipped';
+    const url = window.location.href.toLowerCase();
+    if (url.includes('shipped')) return 'shipped';
+    if (url.includes('unshipped')) return 'unshipped';
+    return 'orders';
+  }
+
+  function parseVisibleSelection() {
+    const rows = Array.from(document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]'));
+    return rows.map(row => {
+      const text = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+      const orderNumber = (text.match(/PO-\d+-\d{8,}/) || [])[0] || '';
+      const packageId = (text.match(/PK-[A-Za-z0-9-]+/) || [])[0] || '';
+      const trackingNumber = ((text.match(/Tracking number:?\s*([A-Z0-9-]{6,})/i) || [])[1] || '');
+      const checkbox = row.querySelector('[data-testid="beast-core-checkbox"]');
+      const selected = checkbox && (checkbox.getAttribute('data-checked') === 'true' || checkbox.getAttribute('aria-checked') === 'true' || checkbox.querySelector('input')?.checked);
+      return { orderNumber, packageId, trackingNumber, selected: !!selected };
+    }).filter(row => row.orderNumber);
+  }
+
+  function identityOf(row) { return [row.orderNumber || '', row.packageId || '', row.trackingNumber || ''].filter(Boolean).join('|'); }
+
+  async function readWorkflowState() {
+    const data = await chrome.storage.local.get([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
+    return {
+      selected: data[SELECTED_ORDERS_KEY] || { updatedAt: 0, orders: {} },
+      shipped: data[SELECTED_SHIPPED_KEY] || { matchedCount: 0, pendingCount: 0, rows: [] }
+    };
+  }
+
+  async function refreshWorkflowSummary() {
+    const state = await readWorkflowState();
+    const selected = Object.values(state.selected.orders || {});
+    const matched = Number(state.shipped.matchedCount || (state.shipped.rows || []).length || 0);
+    const pending = selected.length ? Math.max(0, selected.length - matched) : 0;
+    if ($('selectedCount')) $('selectedCount').textContent = selected.length;
+    if ($('matchedCount')) $('matchedCount').textContent = matched;
+    if ($('pendingCount')) $('pendingCount').textContent = pending;
+    const mode = workflowMode();
+    if ($('selectionTab')) $('selectionTab').textContent = mode === 'shipped' ? 'Shipped' : mode === 'unshipped' ? 'Unshipped' : 'Orders';
+    if ($('selectionHint')) $('selectionHint').textContent = mode === 'unshipped'
+      ? 'Selections are saved automatically while you buy labels.'
+      : mode === 'shipped' ? 'Click Refresh Shipped after labels move these orders here.' : 'Open Unshipped or Shipped to use this workflow.';
+    if ($('btnRefreshShipped')) $('btnRefreshShipped').disabled = workflowBusy;
+    if ($('btnExportSelected')) $('btnExportSelected').disabled = workflowBusy || matched === 0;
+    lastWorkflowRows = state.shipped.rows || [];
+  }
+
+  async function persistVisibleSelection() {
+    if (workflowMode() !== 'unshipped') return;
+    const visible = parseVisibleSelection();
+    if (!visible.length) return;
+    const data = await chrome.storage.local.get(SELECTED_ORDERS_KEY);
+    const current = data[SELECTED_ORDERS_KEY] || { updatedAt: 0, orders: {} };
+    const orders = { ...(current.orders || {}) };
+    visible.forEach(row => {
+      const key = identityOf(row);
+      if (!key) return;
+      if (row.selected) orders[key] = { orderNumber: row.orderNumber, packageId: row.packageId, trackingNumber: row.trackingNumber, selectedAt: orders[key]?.selectedAt || Date.now() };
+      else delete orders[key];
+    });
+    await chrome.storage.local.set({ [SELECTED_ORDERS_KEY]: { updatedAt: Date.now(), orders } });
+    await refreshWorkflowSummary();
+  }
+
+  async function clearWorkflowSelection() {
+    await chrome.storage.local.remove([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
+    lastWorkflowRows = [];
+    if ($('tsvCard')) $('tsvCard').style.display = 'none';
+    await refreshWorkflowSummary();
+    setStatus('Saved selection cleared', 's-done');
+    setTimeout(() => setStatus('Ready to export', 's-ready'), 2500);
+  }
+
+  function copyTextWithFallback(text) {
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).catch(() => copyTextFallback(text));
+    return copyTextFallback(text);
+  }
+  function copyTextFallback(text) {
+    const area = document.createElement('textarea');
+    area.value = text; area.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+    document.body.appendChild(area); area.focus(); area.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
+    area.remove(); return ok ? Promise.resolve() : Promise.reject(new Error('Clipboard permission denied'));
+  }
+
+  function showSelectedLabelRows(msg) {
+    lastWorkflowRows = msg.rows || [];
+    if ($('tsvText')) $('tsvText').value = msg.tsv || '';
+    if ($('tsvCount')) $('tsvCount').textContent = `${lastWorkflowRows.length} rows`;
+    if ($('tsvCard')) $('tsvCard').style.display = 'block';
+    workflowBusy = false;
+    setStatus(`${lastWorkflowRows.length} rows ready for Sheets`, 's-done');
+    refreshWorkflowSummary();
+  }
+
+  async function refreshSelectedShipped() {
+    if (workflowBusy) return;
+    workflowBusy = true;
+    await refreshWorkflowSummary();
+    showProgress(true); setStatus('Scanning Shipped orders...', 's-running'); updateProgress(5, 'Scanning Shipped pages...', '');
+    chrome.runtime.sendMessage({ type: 'refreshSelectedShipped' });
+  }
+
+  async function exportSelectedLabelSheets() {
+    if (workflowBusy) return;
+    const state = await readWorkflowState();
+    const rows = state.shipped.rows || lastWorkflowRows;
+    if (!rows.length) { setStatus('Refresh Shipped first', 's-error'); return; }
+    workflowBusy = true;
+    showProgress(true); setStatus('Extracting selected orders...', 's-running'); updateProgress(10, 'Opening order details...', `${rows.length} matched orders`);
+    chrome.runtime.sendMessage({ type: 'exportSelectedLabelSheets', rows });
+  }
+
   // ── Start export ──────────────────────────────────────────────────────────
   function startExport(sheetsMode) {
     if (running) return;
@@ -472,9 +646,29 @@
       setTimeout(() => setStatus('Ready to export', 's-ready'), 5000);
     }
     if (msg.type === 'cancelled') {
-      running = false; setButtons(false); showProgress(false);
+      running = false; workflowBusy = false; setButtons(false); showProgress(false);
       setStatus('Cancelled', 's-error');
       setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+    }
+    if (msg.type === 'selectedShippedProgress') {
+      const total = Number(msg.total || 0);
+      const current = Number(msg.current || 0);
+      updateProgress(total ? Math.min(92, 10 + (current / total) * 75) : 20, msg.message || 'Scanning Shipped pages...', `${current} matched / ${total} selected`);
+    }
+    if (msg.type === 'selectedShippedReady') {
+      workflowBusy = false; running = false; showProgress(false); setButtons(false);
+      if ($('selectedCount')) $('selectedCount').textContent = msg.selectedCount || 0;
+      if ($('matchedCount')) $('matchedCount').textContent = msg.matchedCount || 0;
+      if ($('pendingCount')) $('pendingCount').textContent = msg.pendingCount || 0;
+      lastWorkflowRows = msg.rows || [];
+      setStatus(`${msg.matchedCount || 0} Shipped orders matched`, 's-done');
+      showResult(`${msg.matchedCount || 0} matched · ${msg.pendingCount || 0} pending`);
+      refreshWorkflowSummary();
+    }
+    if (msg.type === 'selectedLabelRowsReady') showSelectedLabelRows(msg);
+    if (msg.type === 'selectedShippedError' || msg.type === 'selectedLabelExportError') {
+      workflowBusy = false; running = false; showProgress(false); setButtons(false);
+      setStatus((msg.message || 'Workflow failed').slice(0, 48), 's-error');
     }
   });
 
@@ -532,6 +726,18 @@
     } else if (id === 'btnSheets') {
       if (!minimized && !running) startExport(true);
       else if (minimized) setMinimized(false);
+    } else if (id === 'btnRefreshShipped') {
+      if (!minimized) refreshSelectedShipped();
+    } else if (id === 'btnExportSelected') {
+      if (!minimized) exportSelectedLabelSheets();
+    } else if (id === 'btnClearSelection') {
+      if (!minimized) clearWorkflowSelection();
+    } else if (id === 'btnCopySelected') {
+      const text = $('tsvText')?.value || '';
+      copyTextWithFallback(text).then(() => {
+        setStatus('TSV copied — paste into Sheets', 's-done');
+        showResult('TSV copied to clipboard');
+      }).catch(() => setStatus('Copy blocked — use the text box', 's-error'));
     } else if (id === 'btnCancel') {
       // Visual flash to confirm click registered
       btn.style.background = 'rgba(239,68,68,0.25)';
@@ -540,6 +746,20 @@
     }
   }, true); // useCapture:true — fires before any other handler
 
+  // ── Selection persistence watcher ─────────────────────────────────────────
+  let selectionSaveTimer = null;
+  function scheduleSelectionSave() {
+    clearTimeout(selectionSaveTimer);
+    selectionSaveTimer = setTimeout(() => persistVisibleSelection().catch(() => {}), 350);
+  }
+  document.addEventListener('click', scheduleSelectionSave, true);
+  const tableObserver = new MutationObserver(() => {
+    if (workflowMode() === 'unshipped') scheduleSelectionSave();
+  });
+  tableObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-checked', 'aria-checked', 'class'] });
+  setInterval(() => refreshWorkflowSummary().catch(() => {}), 2500);
+  refreshWorkflowSummary().catch(() => {});
+
   // ── SPA navigation watcher (URL-based, 3s poll) ───────────────────────────
   let _lastUrl = window.location.href;
   setInterval(() => {
@@ -547,7 +767,8 @@
     if (cur === _lastUrl) return;
     _lastUrl = cur;
     host.style.display = isOnOrdersPage() ? '' : 'none';
-    if (isOnOrdersPage() && !running) setStatus('Ready to export', 's-ready');
+    refreshWorkflowSummary().catch(() => {});
+    if (isOnOrdersPage() && !running && !workflowBusy) setStatus('Ready to export', 's-ready');
   }, 3000);
 
   // Initial visibility
