@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.1
+// Temu Order Exporter — Content Script v8.8.2
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -304,6 +304,8 @@
     .tsv-card { background:rgba(0,212,170,.055); border:1px solid rgba(0,212,170,.18); border-radius:9px; padding:8px; }
     .tsv-card textarea { width:100%; height:48px; resize:none; border:1px solid rgba(255,255,255,.08); border-radius:6px; background:#080c12; color:#94a3b8; padding:5px; font:8px/1.3 monospace; outline:none; }
     .tsv-copy { margin-top:5px; height:27px; font-size:9px; }
+    .tsv-download-row { display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:5px; }
+    .tsv-download-row .btn { height:26px; font-size:8px; }
 
     /* ── DRAG DOTS ───────────────────────────────────────────── */
     .drag-dots {
@@ -331,7 +333,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.1 · Bulk Label Workflow</div>
+          <div class="version">v8.8.2 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -366,6 +368,10 @@
           <div class="selection-title"><strong>Sheets TSV ready</strong><span class="selection-tab" id="tsvCount">0 rows</span></div>
           <textarea id="tsvText" readonly></textarea>
           <button class="btn btn-outline tsv-copy" id="btnCopySelected">Copy TSV to clipboard</button>
+          <div class="tsv-download-row">
+            <button class="btn btn-outline" id="btnDownloadSelectedXlsx">Download XLSX</button>
+            <button class="btn btn-outline" id="btnDownloadSelectedCsv">Download CSV</button>
+          </div>
         </div>
 
         <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
@@ -460,6 +466,7 @@
   const SELECTED_SHIPPED_KEY = 'temuSelectedShipped_v1';
   let workflowBusy = false;
   let lastWorkflowRows = [];
+  let lastWorkflowHistoryId = null;
 
   function workflowMode() {
     const params = new URLSearchParams(window.location.search);
@@ -598,6 +605,7 @@
 
   function showSelectedLabelRows(msg) {
     lastWorkflowRows = msg.rows || [];
+    lastWorkflowHistoryId = msg.historyId || null;
     running = false;
     showProgress(false);
     if ($('tsvText')) $('tsvText').value = msg.tsv || '';
@@ -614,6 +622,17 @@
     await refreshWorkflowSummary();
     showProgress(true); setStatus('Scanning Shipped orders...', 's-running'); updateProgress(5, 'Scanning Shipped pages...', '');
     chrome.runtime.sendMessage({ type: 'refreshSelectedShipped' });
+  }
+
+  function downloadSelectedLabel(format) {
+    if (!lastWorkflowRows.length) { setStatus('No rows available for download', 's-error'); return; }
+    chrome.runtime.sendMessage({
+      type: 'downloadSelectedLabelFile',
+      rows: lastWorkflowRows,
+      format,
+      historyId: lastWorkflowHistoryId
+    });
+    setStatus(`Preparing ${format.toUpperCase()} download...`, 's-running');
   }
 
   async function exportSelectedLabelSheets() {
@@ -716,6 +735,14 @@
       refreshWorkflowSummary();
     }
     if (msg.type === 'selectedLabelRowsReady') showSelectedLabelRows(msg);
+    if (msg.type === 'selectedLabelFileDownloaded') {
+      workflowBusy = false;
+      setStatus(`${String(msg.format || 'file').toUpperCase()} downloaded`, 's-done');
+    }
+    if (msg.type === 'selectedLabelDownloadError') {
+      workflowBusy = false;
+      setStatus((msg.message || 'Download failed').slice(0, 64), 's-error');
+    }
     if (msg.type === 'selectedShippedError' || msg.type === 'selectedLabelExportError') {
       workflowBusy = false; running = false; showProgress(false); setButtons(false);
       setStatus((msg.message || 'Workflow failed').slice(0, 48), 's-error');
@@ -782,6 +809,10 @@
       if (!minimized) exportSelectedLabelSheets();
     } else if (id === 'btnClearSelection') {
       if (!minimized) clearWorkflowSelection();
+    } else if (id === 'btnDownloadSelectedXlsx') {
+      downloadSelectedLabel('xlsx');
+    } else if (id === 'btnDownloadSelectedCsv') {
+      downloadSelectedLabel('csv');
     } else if (id === 'btnCopySelected') {
       const text = $('tsvText')?.value || '';
       copyTextWithFallback(text).then(() => {

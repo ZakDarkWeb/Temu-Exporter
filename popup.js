@@ -783,8 +783,8 @@ async function renderHistory() {
   listEl.innerHTML = hist.map((entry, hi) => {
     const d = new Date(entry.syncedAt);
     const timeStr = d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-    const modeClass = entry.mode === 'sheets' ? 'hist-mode-sheets' : entry.mode === 'xlsx' ? 'hist-mode-xlsx' : 'hist-mode-csv';
-    const modeLabel = entry.mode === 'sheets' ? '\ud83d\udcca Sheets' : entry.mode === 'xlsx' ? '\ud83d\udcca XLSX' : entry.mode === 'csv' ? '\ud83d\udcc4 CSV' : entry.mode.toUpperCase();
+    const modeClass = (entry.mode === 'sheets' || entry.mode === 'selected-label') ? 'hist-mode-sheets' : entry.mode === 'xlsx' ? 'hist-mode-xlsx' : 'hist-mode-csv';
+    const modeLabel = entry.mode === 'selected-label' ? '\ud83d\udcca Selected Labels' : entry.mode === 'sheets' ? '\ud83d\udcca Sheets' : entry.mode === 'xlsx' ? '\ud83d\udcca XLSX' : entry.mode === 'csv' ? '\ud83d\udcc4 CSV' : entry.mode.toUpperCase();
     const hasRows   = entry.rows && entry.rows.length > 0;
     const copyBtn   = hasRows ? `<button class="hist-btn green" data-action="copy" data-id="${entry.id}" title="Copy to clipboard (paste in Google Sheets)">\ud83d\udccb Copy</button>` : '';
     const xlsxBtn   = hasRows ? `<button class="hist-btn purple" data-action="xlsx" data-id="${entry.id}">\ud83d\udcca XLSX</button>` : '';
@@ -820,16 +820,16 @@ document.getElementById('histList').addEventListener('click', async e => {
   if (!entry) return;
 
   if (action === 'copy') {
-    const columns = getSelectedColumns();
-    const includeHeaders = true;
-    const tsv = buildTSV(entry.rows, columns.length ? columns : SHEETS_ALL_COLS.map(c => c.key), includeHeaders);
+    const tsv = entry.mode === 'selected-label'
+      ? buildSelectedLabelTSV(entry.rows, true)
+      : buildTSV(entry.rows, getSelectedColumns().length ? getSelectedColumns() : SHEETS_ALL_COLS.map(c => c.key), true);
     const ok = await copyTextToClipboard(tsv);
     setStatus(ok ? '\ud83d\udccb' : '\u26a0\ufe0f',
       ok ? `${entry.rows.length} rows copied! Ctrl+V in Sheets.` : 'Clipboard write failed.',
       ok ? 'success' : 'error');
   }
   else if (action === 'xlsx' || action === 'csv') {
-    chrome.runtime.sendMessage({ type: 'downloadFromHistory', rows: entry.rows, format: action });
+    chrome.runtime.sendMessage({ type: 'downloadFromHistory', rows: entry.rows, format: action, mode: entry.mode, schema: entry.mode });
     setStatus('\u2b07\ufe0f', `Downloading ${action.toUpperCase()}\u2026`, 'info');
   }
   else if (action === 'delete') {
@@ -866,6 +866,8 @@ const SHEETS_ALL_COLS = [
 
 // Pending rows for "Copy Again" button
 let _lastSheetRows = [];
+let _lastSheetSchema = 'generic';
+let _lastSheetHistoryId = null;
 const SELECTED_LABEL_KEYS = ['shippingDate','orderDate','trackingNumber','orderNumber','customerName','productDetails','qty','estimatedRevenue','shippingCost'];
 const SELECTED_LABEL_HEADERS = ['Shipping Date','Order Date','Tracking Number','Order No','Customer Name','Product Details','Qty (No)','Est. Revenue','Shipping Cost'];
 
@@ -1002,6 +1004,39 @@ async function saveLastSync(count) {
 
 // ── Core: copy rows to clipboard after syncing ─────────────────────────────────────
 
+function buildSelectedLabelTSV(rows, includeHeaders = true) {
+  const clean = value => String(value == null ? '' : value).replace(/[\\t\\r\\n]+/g, ' ').trim();
+  const lines = (rows || []).map(row => SELECTED_LABEL_KEYS.map(key => clean(row[key])));
+  if (includeHeaders) lines.unshift(SELECTED_LABEL_HEADERS);
+  return lines.map(row => row.join('\\t')).join('\\n');
+}
+
+function setSheetResultSource(schema = 'generic', historyId = null) {
+  _lastSheetSchema = schema;
+  _lastSheetHistoryId = historyId || null;
+  const downloadRow = $('sheetsDownloadRow');
+  if (downloadRow) downloadRow.style.display = _lastSheetRows.length ? 'grid' : 'none';
+}
+
+async function showSelectedLabelResult(rows, msg = {}) {
+  if (!rows || rows.length === 0) {
+    setStatus('⚠️', 'No complete selected-label rows were extracted.', 'error');
+    return;
+  }
+  _lastSheetRows = rows;
+  setSheetResultSource('selected-label', msg.historyId || null);
+  const tsv = buildSelectedLabelTSV(rows, true);
+  setSheetsFallbackText(tsv, true);
+  const resultEl = $('sheetsResult');
+  if (resultEl) resultEl.style.display = 'flex';
+  if ($('sheetsResultCount')) $('sheetsResultCount').textContent = `✅ ${rows.length} complete rows ready`;
+  if ($('sheetsResultSub')) $('sheetsResultSub').textContent = `${msg.failedCount || 0} failed or incomplete orders were excluded · fixed 9-column schema`;
+  if ($('sheetsFailNote')) $('sheetsFailNote').textContent = msg.failedCount ? `⚠️ ${msg.failedCount} order${msg.failedCount === 1 ? '' : 's'} did not pass completeness checks.` : '';
+  if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${rows.length} selected orders are ready with 9 columns.`;
+  setStatus('📋', `${rows.length} complete rows ready — copy or download the sheet.`, 'success');
+  await renderHistory();
+}
+
 function setSheetsFallbackText(tsv, visible) {
   const el = $('sheetsFallbackText');
   const note = $('sheetsManualNote');
@@ -1052,8 +1087,16 @@ async function processSheetsSyncResult(rows, ordersFound, failedCount, source = 
   await updateSheetsRegistry(rowsToExport);
   await saveLastSync(rowsToExport.length);
 
-  // Store for "Copy Again"
-  _lastSheetRows = rows;
+  // Store for "Copy Again" and enable result downloads.
+  _lastSheetRows = rowsToExport;
+  const historyEntry = await saveToHistory({
+    label: source === 'selection' ? `Selected orders — ${rowsToExport.length} rows` : `Sheets sync — ${rowsToExport.length} rows`,
+    mode: source === 'selected-label' ? 'selected-label' : 'sheets',
+    ordersFound,
+    rowsExported: rowsToExport.length,
+    rows: rowsToExport
+  });
+  setSheetResultSource(source, historyEntry.id);
 
   // Show result card
   const resultEl    = $('sheetsResult');
@@ -1107,19 +1150,16 @@ chrome.runtime.onMessage.addListener(msg => {
     if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${msg.ordersFound || 0} selected orders are ready for Sheets.`;
   }
 
-  // Selected-label mode has a fixed nine-column contract and bypasses general column preferences.
+  // Selected-label mode always uses the fixed nine-column contract and the
+  // history entry created by the background worker.
   if (msg.source === 'selected-label') {
     chrome.storage.session.get('sheetsSyncRows', async data => {
       try {
         const rows = data.sheetsSyncRows ? JSON.parse(data.sheetsSyncRows) : [];
-        const esc = value => String(value == null ? '' : value).replace(/[\t\r\n]+/g, ' ').trim();
-        const tsv = [SELECTED_LABEL_HEADERS, ...rows.map(row => SELECTED_LABEL_KEYS.map(key => esc(row[key])))].map(row => row.join('\t')).join('\n');
-        setSheetsFallbackText(tsv, true);
-        _lastSheetRows = rows;
-        if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${rows.length} selected orders are ready with 9 columns.`;
-        setStatus('📋', `${rows.length} selected rows ready — click Copy to Clipboard.`, 'success');
+        switchTab('sheets');
+        await showSelectedLabelResult(rows, { ...msg, historyId: msg.historyId || data.sheetsSyncHistoryId });
       } catch (e) {
-        setStatus('❌', 'Failed to prepare selected-label TSV: ' + e.message, 'error');
+        setStatus('❌', 'Failed to prepare selected-label result: ' + e.message, 'error');
       }
     });
     return;
@@ -1219,9 +1259,10 @@ $('sheetsSyncCustomBtn').addEventListener('click', () => {
 // Copy Again — this is intentionally a direct user action for clipboard permission.
 $('sheetsCopyAgain').addEventListener('click', async () => {
   if (!_lastSheetRows.length) { setStatus('⚠️', 'No data to copy. Run a sync first.', 'info'); return; }
-  const columns = getSelectedColumns();
-  const includeHeaders = $('sheetsIncludeHeaders')?.checked !== false;
-  const tsv = buildTSV(_lastSheetRows, columns, includeHeaders);
+  const includeHeaders = _lastSheetSchema === 'selected-label' ? true : $('sheetsIncludeHeaders')?.checked !== false;
+  const tsv = _lastSheetSchema === 'selected-label'
+    ? buildSelectedLabelTSV(_lastSheetRows, includeHeaders)
+    : buildTSV(_lastSheetRows, getSelectedColumns(), includeHeaders);
   const ok = await copyTextToClipboard(tsv);
   setSheetsFallbackText(tsv, !ok);
   const resultCount = $('sheetsResultCount');
@@ -1235,6 +1276,22 @@ $('sheetsCopyAgain').addEventListener('click', async () => {
     setStatus('⚠️', 'Clipboard blocked. Select the text below and press Ctrl+C.', 'error');
   }
 });
+
+async function downloadCurrentSheet(format) {
+  if (!_lastSheetRows.length) { setStatus('⚠️', 'No data to download. Run an export first.', 'info'); return; }
+  chrome.runtime.sendMessage({
+    type: _lastSheetSchema === 'selected-label' ? 'downloadSelectedLabelFile' : 'downloadFromHistory',
+    rows: _lastSheetRows,
+    format,
+    mode: _lastSheetSchema,
+    schema: _lastSheetSchema,
+    historyId: _lastSheetHistoryId
+  });
+  setStatus('⬇️', `Preparing ${format.toUpperCase()} download…`, 'info');
+}
+
+$('sheetsDownloadXlsx').addEventListener('click', () => downloadCurrentSheet('xlsx'));
+$('sheetsDownloadCsv').addEventListener('click', () => downloadCurrentSheet('csv'));
 
 // Save column settings when changed
 $('sheetsColGrid').addEventListener('change', () => {
@@ -1256,15 +1313,18 @@ chrome.storage.local.get('temuSheetsColumns', ({ temuSheetsColumns }) => {
 });
 
 // Check for pending sync data (popup was closed during sync, then reopened)
-chrome.storage.session.get(['sheetsSyncRows', 'sheetsSyncOrderCount'], async data => {
+chrome.storage.session.get(['sheetsSyncRows', 'sheetsSyncOrderCount', 'sheetsSyncSource', 'sheetsSyncHistoryId'], async data => {
   if (data.sheetsSyncRows) {
     try {
       const rows = JSON.parse(data.sheetsSyncRows);
       if (rows.length > 0) {
-        // Switch to sheets tab and show result
         switchTab('sheets');
-        setStatus('📋', `${rows.length} synced orders ready to copy! Click below.`, 'info');
-        await processSheetsSyncResult(rows, rows.length, 0, 'date', false);
+        if (data.sheetsSyncSource === 'selected-label') {
+          await showSelectedLabelResult(rows, { historyId: data.sheetsSyncHistoryId, failedCount: 0 });
+        } else {
+          setStatus('📋', `${rows.length} synced orders ready to copy or download.`, 'info');
+          await processSheetsSyncResult(rows, data.sheetsSyncOrderCount || rows.length, 0, data.sheetsSyncSource || 'date', false);
+        }
         // Keep session rows until the user successfully copies them. This makes
         // the result recoverable if the popup is closed or clipboard is blocked.
       }
@@ -2179,3 +2239,15 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+
+
+// Selected-label download feedback.
+chrome.runtime.onMessage.addListener(msg => {
+  if (!msg) return;
+  if (msg.type === 'selectedLabelFileDownloaded' || msg.type === 'historyFileDownloaded') {
+    setStatus('⬇️', `${String(msg.format || 'file').toUpperCase()} download started.`, 'success');
+  }
+  if (msg.type === 'selectedLabelDownloadError') {
+    setStatus('❌', msg.message || 'Download failed.', 'error');
+  }
+});

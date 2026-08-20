@@ -1,4 +1,4 @@
-// background.js — Temu Order Tab Exporter v5.0
+// background.js — Temu Order Tab Exporter v8.8.2
 
 // ── SheetJS (Style supported version) ─────────────────────────────────────────
 let XLSX_LOADED = false;
@@ -42,6 +42,9 @@ const SELECTED_LABEL_HEADERS = [
   'Shipping Date', 'Order Date', 'Tracking Number', 'Order No',
   'Customer Name', 'Product Details', 'Qty (No)', 'Est. Revenue', 'Shipping Cost'
 ];
+const EXPORT_HISTORY_KEY = 'temuExportHistory';
+const EXPORT_HISTORY_MAX = 15;
+const EXPORT_HISTORY_MAX_ROWS = 2000;
 
 // ── Utility ────────────────────────────────────────────────────────────────────
 function sleep(ms) {
@@ -56,6 +59,29 @@ function cleanupStrayTabs() {
       console.log('[Temu Exporter] Cleaned up', tabs.length, 'stray tab(s)');
     }
   });
+}
+
+async function saveSelectedLabelHistory(rows, ordersFound, failedCount = 0) {
+  const data = await chrome.storage.local.get(EXPORT_HISTORY_KEY);
+  const history = Array.isArray(data[EXPORT_HISTORY_KEY]) ? data[EXPORT_HISTORY_KEY] : [];
+  const safeRows = (rows || []).slice(0, EXPORT_HISTORY_MAX_ROWS).map(row => Object.fromEntries(
+    SELECTED_LABEL_KEYS.map(key => [key, row?.[key] ?? ''])
+  ));
+  const entry = {
+    id: Date.now(),
+    label: `Selected labels — ${ordersFound || safeRows.length} orders`,
+    mode: 'selected-label',
+    ordersFound: ordersFound || safeRows.length,
+    rowsExported: safeRows.length,
+    failedCount: failedCount || 0,
+    rows: safeRows,
+    headers: SELECTED_LABEL_HEADERS,
+    keys: SELECTED_LABEL_KEYS,
+    syncedAt: Date.now()
+  };
+  history.unshift(entry);
+  await chrome.storage.local.set({ [EXPORT_HISTORY_KEY]: history.slice(0, EXPORT_HISTORY_MAX) });
+  return entry;
 }
 
 function parseDateStr(str) {
@@ -177,11 +203,28 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       tabs.forEach(t => chrome.tabs.remove(t.id).catch(() => {}));
     });
   }
-  // ── History: re-download a past export ───────────────────────────────────────
+  // ── Selected-label downloads and history re-downloads ───────────────────────
+  if (msg.type === 'downloadSelectedLabelFile') {
+    try {
+      const rows = Array.isArray(msg.rows) ? msg.rows : [];
+      if (!rows.length) throw new Error('No selected-label rows available.');
+      const result = generateSelectedLabelExport(rows, msg.format || 'xlsx');
+      chrome.downloads.download({ url: result.dataUrl, filename: result.filename });
+      sendMsg({ type: 'selectedLabelFileDownloaded', format: msg.format || 'xlsx', filename: result.filename });
+    } catch (e) {
+      sendMsg({ type: 'selectedLabelDownloadError', message: 'Download failed: ' + e.message });
+    }
+  }
   if (msg.type === 'downloadFromHistory') {
     try {
-      const { dataUrl, filename } = generateExport(msg.rows, msg.rows.length, msg.format || 'xlsx');
-      chrome.downloads.download({ url: dataUrl, filename });
+      const rows = Array.isArray(msg.rows) ? msg.rows : [];
+      if (!rows.length) throw new Error('This history entry has no stored rows.');
+      const isSelectedLabel = msg.schema === 'selected-label' || msg.mode === 'selected-label';
+      const result = isSelectedLabel
+        ? generateSelectedLabelExport(rows, msg.format || 'xlsx')
+        : generateExport(rows, rows.length, msg.format || 'xlsx');
+      chrome.downloads.download({ url: result.dataUrl, filename: result.filename });
+      sendMsg({ type: 'historyFileDownloaded', format: msg.format || 'xlsx', filename: result.filename });
     } catch (e) {
       sendMsg({ type: 'error', message: 'History download failed: ' + e.message });
     }
@@ -835,11 +878,16 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
       const outputHeaders = selectedLabelMode ? SELECTED_LABEL_HEADERS : EXPORT_HEADERS;
       const rowsJson = JSON.stringify(outputRows);
       const escTsv = value => String(value == null ? '' : value).replace(/[\t\r\n]+/g, ' ').trim();
-      const outputTsv = [outputHeaders, ...outputRows.map(row => SELECTED_LABEL_KEYS.map(key => escTsv(row[key])))].map(row => row.join('\t')).join('\n');
+      const outputTsv = [outputHeaders, ...outputRows.map(row => (selectedLabelMode ? SELECTED_LABEL_KEYS : EXPORT_COLS).map(key => escTsv(row[key])))].map(row => row.join('\t')).join('\n');
+      const historyEntry = selectedLabelMode
+        ? await saveSelectedLabelHistory(outputRows, orderRecords.length, permanentFails.length)
+        : null;
       await chrome.storage.session.set({
         sheetsSyncRows: rowsJson,
         sheetsSyncHeaders: outputHeaders,
-        sheetsSyncOrderCount: orderRecords.length
+        sheetsSyncOrderCount: orderRecords.length,
+        sheetsSyncSource: sheetsSource,
+        sheetsSyncHistoryId: historyEntry?.id || null
       });
       if (selectedLabelMode && notifyTabId) {
         const selectedState = await loadSelectedOrders();
@@ -850,7 +898,8 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
           tsv: outputTsv,
           selectedCount: Object.keys(selectedState.orders || {}).length,
           matchedCount: outputRows.length,
-          failedCount: permanentFails.length
+          failedCount: permanentFails.length,
+          historyId: historyEntry?.id || null
         }).catch(() => {});
       }
 
@@ -873,7 +922,8 @@ async function _processBatchAndExport(allOrderUrls, format, tabDelay, randExtra,
         rowsExported: outputRows.length,
         failedCount:  permanentFails.length,
         failedOrders: permanentFails.slice(0, 20),
-        pagesScraped: totalPagesLabel
+        pagesScraped: totalPagesLabel,
+        historyId: historyEntry?.id || null
       });
     } else {
       // ── NORMAL MODE: download file ─────────────────────────────────────────────────
@@ -1150,9 +1200,11 @@ async function waitForPageReady(tabId, maxMs = 10000) {
             var t = tbodies[i].textContent || '';
             if (t.includes('Goods ID:') || t.includes('SKU ID:')) return 'products_ready';
           }
-          // Secondary: purchase info visible (catches orders with no product table)
+          // Secondary: require the complete detail shell, not only the Order No.
+          // Temu can render the URL/order header before product and package data.
           var body = document.body ? (document.body.innerText || '') : '';
-          if (body.includes('Purchase date') && body.includes('Recipient name')) return 'info_ready';
+          if (body.includes('Purchase date') && body.includes('Recipient name') &&
+              body.includes('Order contents') && body.includes('Est. total shipping cost')) return 'detail_ready';
           return false;
         }
       });
@@ -1164,34 +1216,59 @@ async function waitForPageReady(tabId, maxMs = 10000) {
 }
 
 // ── Single tab processor with retry ───────────────────────────────────────────
+function isCompleteOrderData(data) {
+  if (!data || !data.orderNumber) return false;
+  const hasCustomer = Boolean(String(data.recipientName || '').trim());
+  const hasOrderDate = Boolean(String(data.purchaseDate || '').trim());
+  const hasProduct = Array.isArray(data.products) && data.products.some(product => String(product?.title || '').trim().length > 2);
+  const hasPackage = Array.isArray(data.packages) && data.packages.some(pkg => String(pkg?.packageId || pkg?.trackingNumber || '').trim());
+  const hasShippingCost = Boolean(String(data.shippingCost || '').trim());
+  return hasCustomer && hasOrderDate && hasProduct && hasPackage && hasShippingCost;
+}
+
 async function processTabWithRetry(tab, attempt = 0) {
   // Fix 3: Abort early if the tab has been closed by the user
   try {
     await chrome.tabs.get(tab.id);
   } catch (e) {
-    return { ok: false, tabUrl: tab.url || 'Tab closed by user' };
+    return { ok: false, tabUrl: tab.url || 'Tab closed by user', reason: 'tab-closed' };
   }
 
   try {
-    // Wait for React to render before injecting extractor
-    await waitForPageReady(tab.id);
+    // Wait for React to render before injecting extractor. A partial shell can
+    // contain the Order No long before customer/product/package fields arrive.
+    await waitForPageReady(tab.id, 20000);
+    // Let the final React package/revenue sections settle after the readiness marker.
+    await sleep(900 + (attempt * 1100));
 
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func:   extractPageData
     });
-    // Log null results so DevTools shows which orders had no data
-    if (!result) {
-      console.warn('[Temu Exporter] extractPageData returned null for tab', tab.id, tab.url);
+    const data = result || null;
+    if (!isCompleteOrderData(data)) {
+      console.warn('[Temu Exporter] Incomplete order data; retrying', tab.url, {
+        orderNumber: data?.orderNumber || '',
+        hasCustomer: Boolean(data?.recipientName),
+        hasOrderDate: Boolean(data?.purchaseDate),
+        products: data?.products?.length || 0,
+        packages: data?.packages?.length || 0,
+        shippingCost: Boolean(data?.shippingCost)
+      });
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        return processTabWithRetry(tab, attempt + 1);
+      }
+      return { ok: false, data: null, tabUrl: tab.url || '', reason: 'incomplete-data' };
     }
-    return { ok: true, data: result || null };
+    return { ok: true, data };
   } catch (err) {
     if (attempt < MAX_RETRIES) {
       await sleep(RETRY_DELAY_MS * (attempt + 1));
       return processTabWithRetry(tab, attempt + 1);
     }
     console.error(`[Temu Exporter] Tab ${tab.id} failed after ${MAX_RETRIES} retries:`, err.message, tab.url);
-    return { ok: false, tabUrl: tab.url || `Tab ID ${tab.id}` };
+    return { ok: false, tabUrl: tab.url || `Tab ID ${tab.id}`, reason: 'exception' };
   }
 }
 
@@ -1716,6 +1793,61 @@ function extractPageData() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // EXPORT GENERATORS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+function normalizeSelectedLabelRows(rows) {
+  return (rows || []).map(row => SELECTED_LABEL_KEYS.map(key => {
+    const value = row?.[key] ?? '';
+    if (key === 'estimatedRevenue' || key === 'shippingCost') {
+      const number = parseFloat(String(value).replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(number) ? number : value;
+    }
+    if (key === 'qty') {
+      const number = parseInt(String(value).replace(/[^0-9-]/g, ''), 10);
+      return Number.isFinite(number) ? number : value;
+    }
+    return value;
+  }));
+}
+
+function generateSelectedLabelCSV(rows, base) {
+  const esc = value => '"' + String(value == null ? '' : value).replace(/"/g, '""').replace(/[\r\n]+/g, ' ').trim() + '"';
+  const lines = [SELECTED_LABEL_HEADERS.map(esc).join(',')];
+  normalizeSelectedLabelRows(rows).forEach(row => lines.push(row.map(esc).join(',')));
+  const csv = '\uFEFF' + lines.join('\r\n');
+  return { dataUrl: 'data:text/csv;charset=utf-8;base64,' + btoa(unescape(encodeURIComponent(csv))), filename: base + '.csv' };
+}
+
+function generateSelectedLabelXLSX(rows, base) {
+  if (!XLSX_LOADED || typeof XLSX === 'undefined') return generateSelectedLabelCSV(rows, base);
+  const wsData = [SELECTED_LABEL_HEADERS, ...normalizeSelectedLabelRows(rows)];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = SELECTED_LABEL_HEADERS.map((header, col) => {
+    const maxLen = wsData.reduce((max, row) => Math.max(max, String(row[col] ?? '').length), header.length);
+    return { wch: Math.min(Math.max(maxLen + 3, 12), 48) };
+  });
+  ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2', sqref: 'A2' };
+  SELECTED_LABEL_HEADERS.forEach((_, col) => {
+    const ref = XLSX.utils.encode_cell({ r: 0, c: col });
+    if (ws[ref]) ws[ref].s = {
+      font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+      fill: { fgColor: { rgb: '00B050' }, patternType: 'solid' },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border: { bottom: { style: 'thin', color: { rgb: '007A3D' } } }
+    };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Selected Labels');
+  const b64 = XLSX.write(wb, { bookType: 'xlsx', type: 'base64', cellStyles: true });
+  return { dataUrl: 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + b64, filename: base + '.xlsx' };
+}
+
+function generateSelectedLabelExport(rows, format = 'xlsx') {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+  const base = `temu_selected_labels_${ts}_${rows.length}orders`;
+  return format === 'csv' ? generateSelectedLabelCSV(rows, base) : generateSelectedLabelXLSX(rows, base);
+}
 
 function generateExport(flatRows, orderCount, format) {
   const now = new Date();
