@@ -23,7 +23,17 @@ const context = {
   }
 };
 vm.createContext(context);
-vm.runInContext(fs.readFileSync('background.js', 'utf8'), context, { filename: 'background.js' });
+const backgroundSource = fs.readFileSync('background.js', 'utf8');
+vm.runInContext(backgroundSource, context, { filename: 'background.js' });
+
+for (const required of [
+  "const BULK_HISTORY_KEY = 'temuBulkTaskHistory_v1'",
+  'async function archiveActiveBulkRecord',
+  'async function exportBulkHistory',
+  "status: record.errorCount > 0 ? 'partial' : 'ready'"
+]) {
+  if (!backgroundSource.includes(required)) throw new Error(`missing task-history regression marker: ${required}`);
+}
 
 const rows = context.normalizeBulkSeedRows([
   { orderNumber: 'PO-211-12345678901234567', trackingNumber: '1ZABC', labelDate: 'Aug 19, 2026, 11:54 pm PKT', customerName: 'Buyer', productDetails: 'Ball', qty: '2', shippingCost: '$5.74' },

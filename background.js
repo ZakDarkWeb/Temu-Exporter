@@ -17,6 +17,8 @@ const MAX_RETRIES     = 3;
 const RETRY_DELAY_MS  = 1500;
 const TAB_LOAD_TIMEOUT = 15000; // 15s per tab load (reduced from 30s)
 const LAST_BULK_KEY   = 'temuLastBulkPurchase_v1';
+const BULK_HISTORY_KEY = 'temuBulkTaskHistory_v1';
+const BULK_HISTORY_MAX = 15;
 const MAX_BULK_ORDERS = 100;
 const lastBulkJobs    = new Map();
 
@@ -152,6 +154,17 @@ async function setLastBulkRecord(record) {
   await chrome.storage.local.set({ [LAST_BULK_KEY]: record });
 }
 
+async function archiveActiveBulkRecord(nextTaskId) {
+  const current = await getLastBulkRecord();
+  if (!current || !current.taskId || current.taskId === nextTaskId) return;
+  const data = await chrome.storage.local.get(BULK_HISTORY_KEY);
+  const history = Array.isArray(data[BULK_HISTORY_KEY]) ? data[BULK_HISTORY_KEY] : [];
+  const archived = { ...current, archivedAt: new Date().toISOString() };
+  const updated = [archived, ...history.filter(item => item.taskId !== archived.taskId)]
+    .slice(0, BULK_HISTORY_MAX);
+  await chrome.storage.local.set({ [BULK_HISTORY_KEY]: updated });
+}
+
 async function enrichLastBulkRecord(seedRows) {
   const records = [];
   for (const seed of seedRows) {
@@ -206,12 +219,14 @@ async function captureLastBulkPurchase(msg) {
   }
   if (lastBulkJobs.has(taskId)) return;
 
+  await archiveActiveBulkRecord(taskId);
+
   const record = {
-    version: 1,
+    version: 2,
     taskId,
     submittedAt: cleanBulkCell(msg.submittedAt, 80),
     capturedAt: new Date().toISOString(),
-    status: Number(msg.errorCount) > 0 ? 'partial' : 'enriching',
+    status: Number(msg.errorCount) > 0 ? 'enriching_partial' : 'enriching',
     processedCount: Number(msg.processedCount) || seedRows.length,
     successCount: Number(msg.successCount) || seedRows.length,
     errorCount: Number(msg.errorCount) || 0,
@@ -223,7 +238,7 @@ async function captureLastBulkPurchase(msg) {
 
   const job = (async () => {
     const rows = await enrichLastBulkRecord(seedRows);
-    const ready = { ...record, rows, rowCount: rows.length, status: 'ready', enrichedAt: new Date().toISOString() };
+    const ready = { ...record, rows, rowCount: rows.length, status: record.errorCount > 0 ? 'partial' : 'ready', enrichedAt: new Date().toISOString() };
     await setLastBulkRecord(ready);
     sendMsg({ type: 'lastBulkPurchaseReady', taskId, count: rows.length, status: ready.status });
     return ready;
@@ -255,7 +270,25 @@ async function exportLastBulkPurchase(format = 'xlsx') {
   const base = `temu_last_bulk_purchase_${safeTask}_${record.rows.length}orders`;
   const result = format === 'csv' ? generateCSV(record.rows, base) : generateXLSX(record.rows, base);
   await chrome.downloads.download({ url: result.dataUrl, filename: result.filename });
+  await chrome.storage.local.set({
+    lastBulkExport: { taskId: record.taskId, exportedAt: new Date().toISOString(), count: record.rows.length }
+  });
   sendMsg({ type: 'lastBulkPurchaseExported', taskId: record.taskId, count: record.rows.length, filename: result.filename });
+}
+
+async function exportBulkHistory(taskId, format = 'xlsx') {
+  const safeTaskId = safeBulkTaskId(taskId);
+  if (!safeTaskId) throw new Error('Invalid bulk task ID.');
+  const data = await chrome.storage.local.get(BULK_HISTORY_KEY);
+  const history = Array.isArray(data[BULK_HISTORY_KEY]) ? data[BULK_HISTORY_KEY] : [];
+  const record = history.find(item => item.taskId === safeTaskId);
+  if (!record || !Array.isArray(record.rows) || record.rows.length === 0) {
+    throw new Error('That historical bulk task has no stored rows.');
+  }
+  const base = `temu_bulk_history_${safeTaskId}_${record.rows.length}orders`;
+  const result = format === 'csv' ? generateCSV(record.rows, base) : generateXLSX(record.rows, base);
+  await chrome.downloads.download({ url: result.dataUrl, filename: result.filename });
+  sendMsg({ type: 'lastBulkPurchaseExported', taskId: safeTaskId, count: record.rows.length, filename: result.filename });
 }
 
 // ── Message router ─────────────────────────────────────────────────────────────
@@ -379,6 +412,12 @@ chrome.runtime.onMessage.addListener((msg) => {
     exportLastBulkPurchase(msg.format || 'xlsx').catch(e => {
       console.error('[Temu Exporter] last bulk export failed:', e);
       sendMsg({ type: 'lastBulkPurchaseError', message: 'Last bulk purchase export failed: ' + e.message });
+    });
+  }
+  if (msg.type === 'exportBulkHistory') {
+    exportBulkHistory(msg.taskId, msg.format || 'xlsx').catch(e => {
+      console.error('[Temu Exporter] historical bulk export failed:', e);
+      sendMsg({ type: 'lastBulkPurchaseError', message: 'Historical bulk export failed: ' + e.message });
     });
   }
   if (msg.type === 'exportPrePurchaseBatch') {

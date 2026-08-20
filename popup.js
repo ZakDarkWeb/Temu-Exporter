@@ -349,7 +349,7 @@ function showAutoMode(isShipped) {
   headerSub.textContent = 'Shipped orders list';
   autoPanel.style.display  = 'block';
   manualPanel.style.display = 'none';
-  autoBtn.style.display    = 'flex';
+  autoBtn.style.display    = (activeTab === 'pages' || activeTab === 'date') ? 'flex' : 'none';
   manualBtn.style.display  = 'none';
   statPagesLbl.textContent = 'Pages';
   calcEstimate();
@@ -565,7 +565,7 @@ chrome.runtime.onMessage.addListener(msg => {
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
-let activeTab = 'pages';  // 'pages' | 'date' | 'select' | 'sheets' | 'history'
+let activeTab = 'select';  // 'select' | 'history' | 'settings' are the focused workflow tabs
 
 const tabContentMap = {
   pages:  $('tabContentPages'),
@@ -579,7 +579,7 @@ const tabContentMap = {
 function getAutoBtnLabel() {
   if (activeTab === 'pages')  return '🚀 Start Auto-Export';
   if (activeTab === 'date')   return '🗓️ Start Date Export';
-  if (activeTab === 'select') return '☑ Export Selected';
+  if (activeTab === 'select') return null;
   if (activeTab === 'sheets')  return null; // own buttons
   if (activeTab === 'history')  return null;
   if (activeTab === 'settings') return null;
@@ -622,9 +622,8 @@ document.querySelectorAll('.mode-tab').forEach(btn => {
 
 // IMP 8: Restore last tab on startup
 chrome.storage.local.get('lastActiveTab', ({ lastActiveTab }) => {
-  if (lastActiveTab && tabContentMap[lastActiveTab]) {
-    switchTab(lastActiveTab);
-  }
+  const preferred = ['select', 'history', 'settings'].includes(lastActiveTab) ? lastActiveTab : 'select';
+  switchTab(tabContentMap[preferred] ? preferred : 'select');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -632,7 +631,8 @@ chrome.storage.local.get('lastActiveTab', ({ lastActiveTab }) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const TAB_VIS_KEYS = ['pages', 'date', 'select', 'sheets', 'history'];
-const DEFAULT_VIS  = { pages: true, date: true, select: true, sheets: true, history: true };
+const DEFAULT_VIS  = { pages: false, date: false, select: true, sheets: false, history: true };
+const FOCUS_MODE_KEY = 'savedBatchFocusMode_v1';
 
 function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -656,8 +656,13 @@ function applyTabVisibility(vis) {
 }
 
 function loadTabVisibility() {
-  chrome.storage.local.get('tabVisibility', ({ tabVisibility }) => {
-    applyTabVisibility(Object.assign({}, DEFAULT_VIS, tabVisibility || {}));
+  chrome.storage.local.get(['tabVisibility', FOCUS_MODE_KEY], data => {
+    const hasFocusMigration = data[FOCUS_MODE_KEY] === true;
+    const visibility = hasFocusMigration
+      ? Object.assign({}, DEFAULT_VIS, data.tabVisibility || {})
+      : { ...DEFAULT_VIS };
+    if (!hasFocusMigration) chrome.storage.local.set({ tabVisibility: visibility, [FOCUS_MODE_KEY]: true });
+    applyTabVisibility(visibility);
   });
 }
 
@@ -744,7 +749,7 @@ async function deleteHistoryEntry(id) {
 }
 
 async function clearHistory() {
-  await chrome.storage.local.remove(HIST_KEY);
+  await chrome.storage.local.remove([HIST_KEY, 'temuBulkTaskHistory_v1']);
 }
 
 // ── Render the history list into the DOM ────────────────────────────────────────────
@@ -752,39 +757,67 @@ async function clearHistory() {
 async function renderHistory() {
   const listEl = $('histList');
   if (!listEl) return;
-  const hist = await loadHistory();
+  const [exportData, bulkData] = await Promise.all([
+    chrome.storage.local.get(HIST_KEY),
+    chrome.storage.local.get('temuBulkTaskHistory_v1')
+  ]);
+  const hist = Array.isArray(exportData[HIST_KEY]) ? exportData[HIST_KEY] : [];
+  const bulkHist = Array.isArray(bulkData.temuBulkTaskHistory_v1) ? bulkData.temuBulkTaskHistory_v1 : [];
 
-  if (hist.length === 0) {
-    listEl.innerHTML = `<div class="hist-empty"><div class="hist-empty-icon">\ud83d\udccb</div>No exports yet. Run an export and it will appear here.</div>`;
+  if (hist.length === 0 && bulkHist.length === 0) {
+    listEl.innerHTML = `<div class="hist-empty"><div class="hist-empty-icon">\ud83d\udccb</div>No bulk-label tasks or exports yet.</div>`;
     return;
   }
 
-  listEl.innerHTML = hist.map((entry, hi) => {
+  const bulkMarkup = bulkHist.map((entry, hi) => {
+    const d = new Date(entry.submittedAt || entry.capturedAt || entry.archivedAt || Date.now());
+    const timeStr = d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    const count = entry.rows?.length || entry.successCount || 0;
+    const hasRows = Array.isArray(entry.rows) && entry.rows.length > 0;
+    const state = entry.status === 'partial' ? 'Partial' : 'Completed';
+    const xlsxBtn = hasRows ? `<button class="hist-btn purple" data-action="bulk-xlsx" data-id="${escapeHtml(entry.taskId)}">\ud83d\udcca XLSX</button>` : '';
+    return `
+      <div class="hist-entry bulk-task-entry" data-id="${escapeHtml(entry.taskId)}" style="--hi:${hi}">
+        <div class="hist-entry-top">
+          <div>
+            <div class="hist-entry-label">\ud83d\udce6 Bulk label task ${escapeHtml(entry.taskId || '')}</div>
+            <div class="hist-entry-time">${escapeHtml(timeStr)}</div>
+          </div>
+          <span class="hist-mode-badge hist-mode-xlsx">${state}</span>
+        </div>
+        <div class="hist-stats"><strong>${count}</strong> orders &mdash; <strong>${escapeHtml(entry.successCount || count)}</strong> successful</div>
+        <div class="hist-actions">
+          ${xlsxBtn}
+          <button class="hist-btn red" data-action="bulk-delete" data-id="${escapeHtml(entry.taskId)}" title="Delete this task from history">\ud83d\uddd1</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  const exportMarkup = hist.map((entry, hi) => {
     const d = new Date(entry.syncedAt);
     const timeStr = d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
     const modeClass = entry.mode === 'sheets' ? 'hist-mode-sheets' : entry.mode === 'xlsx' ? 'hist-mode-xlsx' : 'hist-mode-csv';
-    const modeLabel = entry.mode === 'sheets' ? '\ud83d\udcca Sheets' : entry.mode === 'xlsx' ? '\ud83d\udcca XLSX' : entry.mode === 'csv' ? '\ud83d\udcc4 CSV' : entry.mode.toUpperCase();
-    const hasRows   = entry.rows && entry.rows.length > 0;
-    const copyBtn   = hasRows ? `<button class="hist-btn green" data-action="copy" data-id="${entry.id}" title="Copy to clipboard (paste in Google Sheets)">\ud83d\udccb Copy</button>` : '';
-    const xlsxBtn   = hasRows ? `<button class="hist-btn purple" data-action="xlsx" data-id="${entry.id}">\ud83d\udcca XLSX</button>` : '';
-    const csvBtn    = hasRows ? `<button class="hist-btn" data-action="csv" data-id="${entry.id}">\ud83d\udcc4 CSV</button>` : '';
-    const noDataNote= !hasRows ? `<span style="font-size:10px;color:var(--muted);">(row data not stored for this export)</span>` : '';
+    const modeLabel = entry.mode === 'sheets' ? '\ud83d\udcca Sheets' : entry.mode === 'xlsx' ? '\ud83d\udcca XLSX' : entry.mode === 'csv' ? '\ud83d\udcc4 CSV' : String(entry.mode || '').toUpperCase();
+    const hasRows = entry.rows && entry.rows.length > 0;
+    const copyBtn = hasRows ? `<button class="hist-btn green" data-action="copy" data-id="${entry.id}" title="Copy to clipboard (paste in Google Sheets)">\ud83d\udccb Copy</button>` : '';
+    const xlsxBtn = hasRows ? `<button class="hist-btn purple" data-action="xlsx" data-id="${entry.id}">\ud83d\udcca XLSX</button>` : '';
+    const csvBtn = hasRows ? `<button class="hist-btn" data-action="csv" data-id="${entry.id}">\ud83d\udcc4 CSV</button>` : '';
+    const noDataNote = !hasRows ? `<span style="font-size:10px;color:var(--muted);">(row data not stored)</span>` : '';
     return `
       <div class="hist-entry" data-id="${entry.id}" style="--hi:${hi}">
         <div class="hist-entry-top">
           <div>
-            <div class="hist-entry-label">${entry.label}</div>
-            <div class="hist-entry-time">${timeStr}</div>
+            <div class="hist-entry-label">${escapeHtml(entry.label)}</div>
+            <div class="hist-entry-time">${escapeHtml(timeStr)}</div>
           </div>
           <span class="hist-mode-badge ${modeClass}">${modeLabel}</span>
         </div>
-        <div class="hist-stats"><strong>${entry.ordersFound}</strong> orders &mdash; <strong>${entry.rowsExported}</strong> rows</div>
-        <div class="hist-actions">
-          ${copyBtn}${xlsxBtn}${csvBtn}${noDataNote}
-          <button class="hist-btn red" data-action="delete" data-id="${entry.id}" title="Delete this entry">\ud83d\uddd1</button>
-        </div>
+        <div class="hist-stats"><strong>${escapeHtml(entry.ordersFound)}</strong> orders &mdash; <strong>${escapeHtml(entry.rowsExported)}</strong> rows</div>
+        <div class="hist-actions">${copyBtn}${xlsxBtn}${csvBtn}${noDataNote}<button class="hist-btn red" data-action="delete" data-id="${entry.id}" title="Delete this entry">\ud83d\uddd1</button></div>
       </div>`;
   }).join('');
+
+  listEl.innerHTML = bulkMarkup + exportMarkup;
 }
 
 // ── History list event delegation ────────────────────────────────────────────────────
@@ -793,25 +826,36 @@ document.getElementById('histList').addEventListener('click', async e => {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
-  const id     = Number(btn.dataset.id);
-  const hist   = await loadHistory();
-  const entry  = hist.find(h => h.id === id);
-  if (!entry) return;
+  const rawId = btn.dataset.id || '';
 
+  if (action === 'bulk-xlsx' || action === 'bulk-delete') {
+    const data = await chrome.storage.local.get('temuBulkTaskHistory_v1');
+    const bulkHist = Array.isArray(data.temuBulkTaskHistory_v1) ? data.temuBulkTaskHistory_v1 : [];
+    const entry = bulkHist.find(h => h.taskId === rawId);
+    if (!entry) return;
+    if (action === 'bulk-xlsx') {
+      chrome.runtime.sendMessage({ type: 'exportBulkHistory', taskId: rawId, format: 'xlsx' });
+      setStatus('\u2b07\ufe0f', `Downloading bulk task ${rawId}\u2026`, 'info');
+    } else {
+      await chrome.storage.local.set({ temuBulkTaskHistory_v1: bulkHist.filter(h => h.taskId !== rawId) });
+      renderHistory();
+    }
+    return;
+  }
+
+  const id = Number(rawId);
+  const hist = await loadHistory();
+  const entry = hist.find(h => h.id === id);
+  if (!entry) return;
   if (action === 'copy') {
     const columns = getSelectedColumns();
-    const includeHeaders = true;
-    const tsv = buildTSV(entry.rows, columns.length ? columns : SHEETS_ALL_COLS.map(c => c.key), includeHeaders);
+    const tsv = buildTSV(entry.rows, columns.length ? columns : SHEETS_ALL_COLS.map(c => c.key), true);
     const ok = await copyTextToClipboard(tsv);
-    setStatus(ok ? '\ud83d\udccb' : '\u26a0\ufe0f',
-      ok ? `${entry.rows.length} rows copied! Ctrl+V in Sheets.` : 'Clipboard write failed.',
-      ok ? 'success' : 'error');
-  }
-  else if (action === 'xlsx' || action === 'csv') {
+    setStatus(ok ? '\ud83d\udccb' : '\u26a0\ufe0f', ok ? `${entry.rows.length} rows copied! Ctrl+V in Sheets.` : 'Clipboard write failed.', ok ? 'success' : 'error');
+  } else if (action === 'xlsx' || action === 'csv') {
     chrome.runtime.sendMessage({ type: 'downloadFromHistory', rows: entry.rows, format: action });
     setStatus('\u2b07\ufe0f', `Downloading ${action.toUpperCase()}\u2026`, 'info');
-  }
-  else if (action === 'delete') {
+  } else if (action === 'delete') {
     await deleteHistoryEntry(id);
     renderHistory();
   }
@@ -1391,32 +1435,36 @@ const clearLastBulkBtn  = $('clearLastBulkBtn');
 
 function checkLastBulkPurchase() {
   if (!lastBulkBanner) return;
-  chrome.storage.local.get(['temuPrePurchaseBatch_v1'], data => {
-    const record = data.temuPrePurchaseBatch_v1;
+  chrome.storage.local.get(['temuLastBulkPurchase_v1'], data => {
+    const record = data.temuLastBulkPurchase_v1;
+    const count = record?.rows?.length || record?.successCount || 0;
     lastBulkBanner.style.display = 'block';
-    const hasBatch = !!record && Array.isArray(record.orderUrls) && record.orderUrls.length > 0;
-    if (!hasBatch) {
+    if (!record || count === 0) {
       if (lastBulkCount) lastBulkCount.textContent = '0';
-      if (lastBulkMeta) lastBulkMeta.textContent = 'Select orders on Unshipped before buying labels';
-      if (savedBatchStatus) savedBatchStatus.textContent = 'Waiting';
-      if (savedBatchStatus) savedBatchStatus.className = 'saved-batch-status waiting';
-      if (exportLastBulkBtn) { exportLastBulkBtn.disabled = true; exportLastBulkBtn.textContent = '📊 Export to Excel'; }
+      if (lastBulkMeta) lastBulkMeta.textContent = 'Open the newest successful task and click View details';
+      if (savedBatchStatus) { savedBatchStatus.textContent = 'Waiting'; savedBatchStatus.className = 'saved-batch-status waiting'; }
+      if (exportLastBulkBtn) { exportLastBulkBtn.disabled = true; exportLastBulkBtn.textContent = '📊 Export Last Bulk Purchase'; }
       return;
     }
-    if (lastBulkCount) lastBulkCount.textContent = record.orderUrls.length;
+    if (lastBulkCount) lastBulkCount.textContent = count;
     if (lastBulkMeta) {
+      const task = record.taskId ? `Task ${record.taskId}` : 'Newest successful task';
       let when = '';
-      try { when = new Date(record.savedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch (_) {}
-      lastBulkMeta.textContent = `Saved before label purchase${when ? ' · ' + when : ''}`;
+      try { when = new Date(record.submittedAt || record.capturedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch (_) {}
+      lastBulkMeta.textContent = `${task}${when ? ' · ' + when : ''}`;
     }
-    if (savedBatchStatus) { savedBatchStatus.textContent = 'Ready'; savedBatchStatus.className = 'saved-batch-status ready'; }
-    if (exportLastBulkBtn) { exportLastBulkBtn.disabled = false; exportLastBulkBtn.textContent = '📊 Export to Excel'; }
+    const preparing = record.status === 'enriching' || record.status === 'enriching_partial';
+    if (savedBatchStatus) { savedBatchStatus.textContent = preparing ? 'Preparing' : 'Ready'; savedBatchStatus.className = `saved-batch-status ${preparing ? 'waiting' : 'ready'}`; }
+    if (exportLastBulkBtn) {
+      exportLastBulkBtn.disabled = preparing || !record.rows?.length;
+      exportLastBulkBtn.textContent = preparing ? '⏳ Preparing task…' : '📊 Export Last Bulk Purchase';
+    }
   });
 }
 
 if (chrome.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.temuPrePurchaseBatch_v1) checkLastBulkPurchase();
+    if (area === 'local' && (changes.temuLastBulkPurchase_v1 || changes.temuBulkTaskHistory_v1)) checkLastBulkPurchase();
   });
 }
 
@@ -1424,11 +1472,11 @@ if (exportLastBulkBtn) {
   exportLastBulkBtn.addEventListener('click', () => {
     exportLastBulkBtn.disabled = true;
     exportLastBulkBtn.textContent = '⏳ Exporting…';
-    chrome.runtime.sendMessage({ type: 'exportPrePurchaseBatch' }, () => {
+    chrome.runtime.sendMessage({ type: 'exportLastBulkPurchase' }, () => {
       if (chrome.runtime.lastError) {
         setStatus('⚠️', 'Saved batch export failed', 'error');
         exportLastBulkBtn.disabled = false;
-        exportLastBulkBtn.textContent = '📊 Export Excel';
+        exportLastBulkBtn.textContent = '📊 Export Last Bulk Purchase';
       }
     });
   });
@@ -1436,9 +1484,9 @@ if (exportLastBulkBtn) {
 
 if (clearLastBulkBtn) {
   clearLastBulkBtn.addEventListener('click', () => {
-    chrome.storage.local.remove(['temuPrePurchaseBatch_v1'], () => {
+    chrome.storage.local.remove(['temuLastBulkPurchase_v1', 'lastBulkExport'], () => {
       checkLastBulkPurchase();
-      setStatus('✅', 'New batch started — previous selection cleared', 'success');
+      setStatus('✅', 'Active bulk task cleared — history kept', 'success');
       if (savedBatchStatus) { savedBatchStatus.textContent = 'Waiting'; savedBatchStatus.className = 'saved-batch-status waiting'; }
     });
   });

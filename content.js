@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.9
+// Temu Order Exporter — Content Script v9.0
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -303,7 +303,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.9 · Saved Batch</div>
+          <div class="version">v9.0 · Last Bulk Purchase</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -316,9 +316,9 @@
           <span id="statusTxt">Ready to export</span>
         </div>
 
-        <button class="btn btn-primary" id="btnExport">⚡ Export Today</button>
-        <button class="btn btn-outline" id="btnSheets">📊 Sheets Sync Today</button>
-        <button class="btn btn-outline" id="btnLastBulk">📦 Last Bulk Purchase</button>
+        <button class="btn btn-primary" id="btnExport" style="display:none">⚡ Export Today</button>
+        <button class="btn btn-outline" id="btnSheets" style="display:none">📊 Sheets Sync Today</button>
+        <button class="btn btn-primary" id="btnLastBulk">📊 Export Last Bulk Purchase</button>
 
         <div class="progress-card" id="progressCard" style="display:none;">
           <div class="progress-row">
@@ -420,14 +420,21 @@
   function refreshLastBulkButton() {
     const btn = $('btnLastBulk');
     if (!btn) return;
-    chrome.storage.local.get('temuPrePurchaseBatch_v1', data => {
-      const record = data.temuPrePurchaseBatch_v1;
-      if (record?.orderUrls?.length) {
-        btn.textContent = `📊 Export Saved Batch (${record.orderUrls.length})`;
-        btn.title = `Saved before label purchase · ${record.savedAt || ''}`;
+    chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
+      const record = data.temuLastBulkPurchase_v1;
+      const count = record?.rows?.length || record?.successCount || 0;
+      if ((record?.status === 'ready' || record?.status === 'partial') && count > 0) {
+        btn.textContent = `📊 Export Last Bulk (${count})`;
+        btn.title = `Task ${record.taskId || ''} · newest successful bulk label purchase`;
+        btn.disabled = false;
+      } else if (record?.status === 'enriching' || record?.status === 'enriching_partial') {
+        btn.textContent = `⏳ Preparing Last Bulk (${count})`;
+        btn.title = `Task ${record.taskId || ''} is still being prepared`;
+        btn.disabled = true;
       } else {
-        btn.textContent = '📦 Select Orders Before Buying Labels';
-        btn.title = 'Select orders on the Unshipped tab first';
+        btn.textContent = '📦 Open task details to capture labels';
+        btn.title = 'Open the newest successful task details in Temu first';
+        btn.disabled = false;
       }
     });
   }
@@ -435,14 +442,17 @@
   function handleLastBulkClick() {
     const btn = $('btnLastBulk');
     if (!btn) return;
-    chrome.storage.local.get('temuPrePurchaseBatch_v1', data => {
-      const record = data.temuPrePurchaseBatch_v1;
-      if (record?.orderUrls?.length) {
-        setStatus('Exporting saved label batch...', 's-running');
-        chrome.runtime.sendMessage({ type: 'exportPrePurchaseBatch' });
+    chrome.storage.local.get('temuLastBulkPurchase_v1', data => {
+      const record = data.temuLastBulkPurchase_v1;
+      if ((record?.status === 'ready' || record?.status === 'partial') && record.rows?.length) {
+        setStatus('Exporting newest bulk label task...', 's-running');
+        chrome.runtime.sendMessage({ type: 'exportLastBulkPurchase' });
+      } else if (record?.status === 'enriching' || record?.status === 'enriching_partial') {
+        setStatus('Preparing newest bulk label task...', 's-running');
+        showResult('Please wait while order details are collected.');
       } else {
-        setStatus('No saved Unshipped selection', 's-error');
-        showResult('Select orders on Unshipped before buying labels.');
+        setStatus('No bulk task captured yet', 's-error');
+        showResult('Open the newest successful task and click View details.');
         setTimeout(() => setStatus('Ready to export', 's-ready'), 4500);
       }
     });
@@ -699,7 +709,7 @@
 })();
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LABEL BATCH EXPORT — Detects task-detail page and shows export modal
+  // LABEL BATCH CAPTURE — Detects task-detail page and saves the newest task
 // Runs as separate IIFE to stay independent from the floating widget above
 // ═══════════════════════════════════════════════════════════════════════════════
 (function () {
@@ -988,9 +998,7 @@
     // Wait for page table to render
     const ready = await waitForTable(12000);
     if (!ready) {
-      // Show modal even if table not found (0 orders)
       chrome.runtime.sendMessage({ type: 'lastBulkPurchaseError', message: 'Task detail table was not available.' });
-      showModal([], taskId);
       return;
     }
 
@@ -1009,7 +1017,8 @@
         errorCount: taskCounts.errorCount,
         orders
       });
-      showModal(orders, taskId);
+      // The popup is the only normal export surface; do not show a second in-page modal.
+      document.getElementById(MODAL_ID)?.remove();
   }
 
   // ── Run on page load ──────────────────────────────────────────────────────
