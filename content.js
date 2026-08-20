@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.5
+// Temu Order Exporter — Content Script v8.8.6
 // Uses Shadow DOM for full CSS isolation from Temu page styles
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -333,7 +333,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.5 · Bulk Label Workflow</div>
+          <div class="version">v8.8.6 · Bulk Label Workflow</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -470,7 +470,7 @@
     const params = new URLSearchParams(window.location.search);
     const active = params.get('activeTab');
     if (active === '2') return 'unshipped';
-    if (active === '3') return 'shipped';
+    if (active === '3' || active === '4') return 'shipped';
     const url = window.location.href.toLowerCase();
     if (url.includes('shipped')) return 'shipped';
     if (url.includes('unshipped')) return 'unshipped';

@@ -579,13 +579,12 @@ chrome.runtime.onMessage.addListener(msg => {
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
-let activeTab = 'pages';  // 'pages' | 'date' | 'select' | 'sheets' | 'history'
+let activeTab = 'pages';  // 'pages' | 'date' | 'select' | 'history'
 
 const tabContentMap = {
   pages:  $('tabContentPages'),
   date:   $('tabContentDate'),
   select: $('tabContentSelect'),
-  sheets:  $('tabContentSheets'),
   history:  $('tabContentHistory'),
   settings: $('tabContentSettings')
 };
@@ -596,7 +595,6 @@ function getAutoBtnLabel() {
   if (activeTab === 'pages')  return '🚀 Start Auto-Export';
   if (activeTab === 'date')   return '🗓️ Start Date Export';
   if (activeTab === 'select') return '☑ Export Selected';
-  if (activeTab === 'sheets')  return null; // own buttons
   if (activeTab === 'history')  return null;
   if (activeTab === 'settings') return null;
   return '🚀 Start';
@@ -617,7 +615,6 @@ function switchTab(tab) {
   if (sharedExportControls) {
     sharedExportControls.style.display = sharedExportTabs.has(tab) ? 'flex' : 'none';
   }
-  // Sheets tab has its own action buttons — hide/show main autoBtn
   const label = getAutoBtnLabel();
   if (label === null) {
     autoBtn.style.display = 'none';
@@ -630,8 +627,6 @@ function switchTab(tab) {
   // Update selection count if switching to select tab
   if (tab === 'select') { startSelectionPolling(); checkLabelRun(); }
   else stopSelectionPolling();
-  // Load sheets last sync info when switching to sheets tab
-  if (tab === 'sheets')  loadSheetsLastSync();
   // Render history when switching to history tab
   if (tab === 'history') renderHistory();
 }
@@ -652,8 +647,8 @@ chrome.storage.local.get('lastActiveTab', ({ lastActiveTab }) => {
 // SETTINGS MODULE v8.3 — Tab Visibility Toggles
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const TAB_VIS_KEYS = ['pages', 'date', 'select', 'sheets', 'history'];
-const DEFAULT_VIS  = { pages: true, date: true, select: true, sheets: true, history: true };
+const TAB_VIS_KEYS = ['pages', 'date', 'select', 'history'];
+const DEFAULT_VIS  = { pages: true, date: true, select: true, history: true };
 
 function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -1127,210 +1122,6 @@ async function processSheetsSyncResult(rows, ordersFound, failedCount, source = 
   await loadSheetsLastSync();
 }
 
-// ── Message handler for sheetsSyncReady ───────────────────────────────────────────────
-// Add to existing chrome.runtime.onMessage listener:
-
-chrome.runtime.onMessage.addListener(msg => {
-  if (msg.type !== 'sheetsSyncReady') return;
-
-  // Hide progress, cancel button
-  progressSec.style.display = 'none';
-  liveCounter.style.display = 'none';
-  cancelBtn.style.display   = 'none';
-  running = false;
-
-  // Disable all sheets sync buttons
-  ['sheetsSyncToday','sheetsSyncYesterday','sheetsSyncLast7','sheetsSyncCustomBtn'].forEach(id => {
-    const el = $(id); if (el) el.disabled = false;
-  });
-
-  // Selected-order Sheets mode reuses the same clipboard pipeline.
-  if (msg.source === 'selection') {
-    switchTab('sheets');
-    if (selectedSheetsStatus) selectedSheetsStatus.textContent = `${msg.ordersFound || 0} selected orders are ready for Sheets.`;
-  }
-
-  // Selected-label mode always uses the fixed nine-column contract and the
-  // history entry created by the background worker.
-  if (msg.source === 'selected-label') {
-    chrome.storage.session.get('sheetsSyncRows', async data => {
-      try {
-        const rows = data.sheetsSyncRows ? JSON.parse(data.sheetsSyncRows) : [];
-        switchTab('sheets');
-        await showSelectedLabelResult(rows, { ...msg, historyId: msg.historyId || data.sheetsSyncHistoryId });
-      } catch (e) {
-        setStatus('❌', 'Failed to prepare selected-label result: ' + e.message, 'error');
-      }
-    });
-    return;
-  }
-
-  // Read rows from session storage and process
-  chrome.storage.session.get('sheetsSyncRows', async data => {
-    try {
-      const rows = data.sheetsSyncRows ? JSON.parse(data.sheetsSyncRows) : [];
-      await processSheetsSyncResult(rows, msg.ordersFound, msg.failedCount, msg.source || 'date', false);
-    } catch (e) {
-      setStatus('❌', 'Failed to process synced data: ' + e.message, 'error');
-    } finally {
-      if (copySelectedSheetsBtn) copySelectedSheetsBtn.disabled = false;
-    }
-    // Keep session data until a direct user copy succeeds.
-  });
-});
-
-// ── Helper: kick off a Sheets Sync for a given date range ───────────────────────────
-
-function startSheetsSync(fromDate, toDate, maxPages = 10) {
-  if (!currentListTabId) {
-    setStatus('⚠️', 'Please open the Temu Shipped orders tab first.', 'error');
-    return;
-  }
-  running = true;
-  // Show progress UI
-  progressSec.style.display = 'block';
-  stepsRow.style.display    = 'flex';
-  cancelBtn.style.display   = 'flex';
-  liveCounter.style.display = 'none';
-  $('sheetsResult').style.display = 'none';
-  setStatus('🔄', 'Scanning Shipped orders…', 'info');
-
-  // Disable all sheets sync buttons during run
-  ['sheetsSyncToday','sheetsSyncYesterday','sheetsSyncLast7','sheetsSyncCustomBtn'].forEach(id => {
-    const el = $(id); if (el) el.disabled = true;
-  });
-
-  const speed     = speedSlider?.value || 2;
-  const tabDelay  = speed === '1' ? 2000 : speed === '3' ? 600 : 1200;
-  const randExtra = speed === '1' ? 1500 : speed === '3' ? 400 : 800;
-
-  chrome.runtime.sendMessage({
-    type: 'startSheetsSync', listTabId: currentListTabId,
-    fromDate, toDate, tabDelay, randExtra, maxPages
-  });
-}
-
-// ── Button Handlers for Sheets Tab ──────────────────────────────────────────────────
-
-// Today's Labels
-$('sheetsSyncToday').addEventListener('click', () => {
-  const now   = new Date();
-  const start = new Date(now); start.setHours(0, 0, 0, 0);
-  startSheetsSync(toLocalISO(start), toLocalISO(now), 15);
-});
-
-// Yesterday
-$('sheetsSyncYesterday').addEventListener('click', () => {
-  const now   = new Date();
-  const start = new Date(now); start.setDate(start.getDate()-1); start.setHours(0,0,0,0);
-  const end   = new Date(now); end.setDate(end.getDate()-1); end.setHours(23,59,59,0);
-  startSheetsSync(toLocalISO(start), toLocalISO(end), 15);
-});
-
-// Last 7 days
-$('sheetsSyncLast7').addEventListener('click', () => {
-  const now   = new Date();
-  const start = new Date(now); start.setDate(start.getDate()-7); start.setHours(0,0,0,0);
-  startSheetsSync(toLocalISO(start), toLocalISO(now), 50);
-});
-
-// Toggle custom range panel
-$('sheetsSyncCustom').addEventListener('click', () => {
-  const panel = $('sheetsCustomRange');
-  if (!panel) return;
-  const isHidden = panel.style.display === 'none';
-  panel.style.display = isHidden ? 'block' : 'none';
-  if (isHidden && !$('sheetsDateFrom').value) {
-    // Pre-fill with today
-    const now = new Date(); const start = new Date(now); start.setHours(0,0,0,0);
-    $('sheetsDateFrom').value = toLocalISO(start);
-    $('sheetsDateTo').value   = toLocalISO(now);
-  }
-});
-
-// Custom range sync
-$('sheetsSyncCustomBtn').addEventListener('click', () => {
-  const from = $('sheetsDateFrom').value;
-  const to   = $('sheetsDateTo').value;
-  if (!from || !to) { setStatus('⚠️', 'Please select both From and To dates.', 'error'); return; }
-  startSheetsSync(from, to, 999);
-});
-
-// Copy Again — this is intentionally a direct user action for clipboard permission.
-$('sheetsCopyAgain').addEventListener('click', async () => {
-  if (!_lastSheetRows.length) { setStatus('⚠️', 'No data to copy. Run a sync first.', 'info'); return; }
-  const includeHeaders = _lastSheetSchema === 'selected-label' ? true : $('sheetsIncludeHeaders')?.checked !== false;
-  const tsv = _lastSheetSchema === 'selected-label'
-    ? buildSelectedLabelTSV(_lastSheetRows, includeHeaders)
-    : buildTSV(_lastSheetRows, getSelectedColumns(), includeHeaders);
-  const ok = await copyTextToClipboard(tsv);
-  setSheetsFallbackText(tsv, !ok);
-  const resultCount = $('sheetsResultCount');
-  if (resultCount) resultCount.textContent = ok
-    ? `✅ ${_lastSheetRows.length} rows copied to clipboard!`
-    : `⚠️ ${_lastSheetRows.length} rows ready — clipboard was blocked`;
-  if (ok) {
-    chrome.storage.session.remove('sheetsSyncRows').catch(() => {});
-    setStatus('📋', `${_lastSheetRows.length} rows copied! Open Sheets → Ctrl+V to paste.`, 'success');
-  } else {
-    setStatus('⚠️', 'Clipboard blocked. Select the text below and press Ctrl+C.', 'error');
-  }
-});
-
-async function downloadCurrentSheet(format) {
-  if (!_lastSheetRows.length) { setStatus('⚠️', 'No data to download. Run an export first.', 'info'); return; }
-  chrome.runtime.sendMessage({
-    type: _lastSheetSchema === 'selected-label' ? 'downloadSelectedLabelFile' : 'downloadFromHistory',
-    rows: _lastSheetRows,
-    format,
-    mode: _lastSheetSchema,
-    schema: _lastSheetSchema,
-    historyId: _lastSheetHistoryId
-  });
-  setStatus('⬇️', `Preparing ${format.toUpperCase()} download…`, 'info');
-}
-
-$('sheetsDownloadXlsx').addEventListener('click', () => downloadCurrentSheet('xlsx'));
-$('sheetsDownloadCsv').addEventListener('click', () => downloadCurrentSheet('csv'));
-
-// Save column settings when changed
-$('sheetsColGrid').addEventListener('change', () => {
-  const cols = {};
-  document.querySelectorAll('#sheetsColGrid input[data-col]').forEach(inp => {
-    cols[inp.dataset.col] = inp.checked;
-  });
-  chrome.storage.local.set({ temuSheetsColumns: cols }).catch(() => {});
-});
-
-// Load saved column settings
-chrome.storage.local.get('temuSheetsColumns', ({ temuSheetsColumns }) => {
-  if (!temuSheetsColumns) return;
-  document.querySelectorAll('#sheetsColGrid input[data-col]').forEach(inp => {
-    if (inp.dataset.col in temuSheetsColumns) {
-      inp.checked = temuSheetsColumns[inp.dataset.col];
-    }
-  });
-});
-
-// Check for pending sync data (popup was closed during sync, then reopened)
-chrome.storage.session.get(['sheetsSyncRows', 'sheetsSyncOrderCount', 'sheetsSyncSource', 'sheetsSyncHistoryId'], async data => {
-  if (data.sheetsSyncRows) {
-    try {
-      const rows = JSON.parse(data.sheetsSyncRows);
-      if (rows.length > 0) {
-        switchTab('sheets');
-        if (data.sheetsSyncSource === 'selected-label') {
-          await showSelectedLabelResult(rows, { historyId: data.sheetsSyncHistoryId, failedCount: 0 });
-        } else {
-          setStatus('📋', `${rows.length} synced orders ready to copy or download.`, 'info');
-          await processSheetsSyncResult(rows, data.sheetsSyncOrderCount || rows.length, 0, data.sheetsSyncSource || 'date', false);
-        }
-        // Keep session rows until the user successfully copies them. This makes
-        // the result recoverable if the popup is closed or clipboard is blocked.
-      }
-    } catch (_) {}
-  }
-});
 
 // ── Selection Mode — direct page reading via executeScript ───────────────────
 // No content script needed: popup directly reads Temu's native checkbox state

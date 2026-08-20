@@ -1,4 +1,4 @@
-// background.js — Temu Order Tab Exporter v8.8.5
+// background.js — Temu Order Tab Exporter v8.8.6
 
 // ── SheetJS (Style supported version) ─────────────────────────────────────────
 let XLSX_LOADED = false;
@@ -717,9 +717,26 @@ async function runSelectedShippedRefresh(listTabId) {
             };
           }).filter(function(x) { return x.orderNumber; });
           var fingerprint = items.map(function(x) { return x.orderNumber + '|' + x.packageId + '|' + x.trackingNumber; }).join('||');
-          var next = document.querySelector('[data-testid="beast-core-pagination-next"]');
-          var disabled = !!(next && (next.getAttribute('aria-disabled') === 'true' || next.hasAttribute('disabled') || Array.from(next.classList).some(function(cls) { return /PGT_disabled|disabled/i.test(cls); })));
-          return { items: items, fingerprint: fingerprint, hasNext: !!next && !disabled };
+          function isDisabled(el) {
+            if (!el) return true;
+            if (el.disabled || el.hasAttribute('disabled')) return true;
+            if (el.getAttribute('aria-disabled') === 'true') return true;
+            var cls = typeof el.className === 'string' ? el.className : '';
+            return /disabled/i.test(cls);
+          }
+          var next = document.querySelector('[data-testid="beast-core-pagination-next"]') ||
+                     document.querySelector('li.PGT_next_123') ||
+                     document.querySelector('[aria-label="Next Page"]') ||
+                     document.querySelector('[aria-label="next page"]') ||
+                     document.querySelector('li.ant-pagination-next');
+          if (!next) {
+            next = Array.from(document.querySelectorAll('li[data-testid], li[class*="PGT"], li[class*="pager"]')).find(function(el) {
+              var txt = (el.textContent || '').trim();
+              var testId = el.getAttribute('data-testid') || '';
+              return testId.includes('next') || txt === '>' || txt === '›' || txt === '»';
+            }) || null;
+          }
+          return { items: items, fingerprint: fingerprint, hasNext: !!next && !isDisabled(next) };
         }
       });
       const pageData = result && result[0] && result[0].result;
@@ -732,13 +749,14 @@ async function runSelectedShippedRefresh(listTabId) {
         if (packageMatches && trackingMatches) matched.set(selectedIdentity({ ...selectedItem, ...item }), { ...selectedItem, ...item });
       });
       sendMsg({ type: 'selectedShippedProgress', current: matched.size, total: selected.length, page, message: `Scanned Shipped page ${page}` });
-      if (!pageData.hasNext || pageData.fingerprint === previousFingerprint) break;
-      previousFingerprint = pageData.fingerprint;
-      const clicked = await navigateNextOnList(listTabId);
-      if (!clicked) break;
-      await sleep(1200);
-      await waitForListPageChange(listTabId, pageData.items[0]?.orderNumber || '');
-      page++;
+          if (!pageData.hasNext || pageData.fingerprint === previousFingerprint) break;
+          previousFingerprint = pageData.fingerprint;
+          const previousFirstOrder = pageData.items[0]?.orderNumber || '';
+          const clicked = await navigateNextOnList(listTabId);
+          if (!clicked) break;
+          await waitForListPageChange(listTabId, previousFirstOrder);
+          await sleep(500);
+          page++;
     }
   } catch (error) {
     sendMsg({ type: 'selectedShippedError', message: `Shipped scan failed: ${error.message}` });
@@ -1146,21 +1164,25 @@ async function waitForListPageChange(tabId, previousFirstUrl) {
             var bt = document.body ? (document.body.innerText || '') : '';
             ids = bt.match(/PO-\d+-\d{8,}/g) || [];
           }
-          return ids.join(',');
+          return ids[0] || '';
         }
       });
       return result || '';
     } catch(e) { return ''; }
   }
 
-  const prevIds = await getCurrentOrderIds();
+  const markerText = String(previousFirstUrl || '');
+  const markerMatch = markerText.match(/PO-\d+-\d{8,}/);
+  const previousMarker = markerMatch ? markerMatch[0] : markerText;
+  const prevIds = previousMarker || await getCurrentOrderIds();
 
   for (let attempt = 0; attempt < 30; attempt++) {
     await sleep(400);
     const currIds = await getCurrentOrderIds();
-    // Page changed if new order IDs appeared and list is not empty
-    if (currIds && prevIds && currIds !== prevIds) return;
+    // Page changed if the first Order No differs from the page before the click.
+    if (currIds && prevIds && currIds !== prevIds) return true;
   }
+  return false;
 }
 
 // ── Wait for a tab to finish loading ──────────────────────────────────────────

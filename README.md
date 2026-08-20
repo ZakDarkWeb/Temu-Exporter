@@ -1,4 +1,4 @@
-# Temu Order Tab Exporter v8.8.5
+# Temu Order Tab Exporter v8.8.6
 
 Temu Order Tab Exporter helps Temu sellers export order data to CSV, JSON, Excel, and Google Sheets. The primary workflow is: select orders, purchase labels through Temu’s own controls, move to Shipped, refresh the in-page card, and export complete order details.
 
@@ -10,13 +10,13 @@ Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
 
 On Temu Seller Center → Manage Orders → **Unshipped**, select the orders included in the bulk-label operation. You may also open **Shipped** and select additional rows directly; selections from both tabs are merged and saved in `chrome.storage.local`, surviving pagination and browser restarts.
 
-Use Temu’s own controls to buy labels in bulk. The extension never purchases labels or submits account actions. After the orders appear in **Shipped**, click **Refresh Shipped** on the in-page card. The extension scans Shipped pages, matches the durable selection using Order No and, when available, Package ID and Tracking Number, and reports matched and pending counts.
+Use Temu’s own controls to buy labels in bulk. The extension never purchases labels or submits account actions. After the orders appear in **Shipped**, click **Refresh Shipped** on the in-page card. The extension scans Shipped pages, matches the durable selection using Order No and, when available, Package ID and Tracking Number, and reports matched and pending counts. Pagination now waits against the actual previous first order and supports Temu’s current active Shipped tab (`activeTab=4`).
 
 Click **Export to Sheets** after matching. The extension opens each matched order-detail URL in a background tab, waits for the complete detail shell, extracts the fields, validates that the row is complete, retries incomplete pages, closes the detail tabs, and returns a nine-column TSV. Incomplete Order No-only shells are excluded instead of producing misleading partial spreadsheet rows.
 
 ## Copy and download options
 
-The in-page card removes the two unused Today shortcuts and keeps the approved workflow controls: **Refresh Shipped**, **Export to Sheets**, selection clear/cancel, and the existing result actions. The popup progress panel stays hidden while idle and appears only when a real extraction or matching operation is running. After extraction, the result provides all of the following actions:
+The in-page card removes the two unused Today shortcuts and keeps the approved workflow controls: **Refresh Shipped**, **Export to Sheets**, selection clear/cancel, and the existing result actions. The popup progress panel stays hidden while idle and appears only when a real extraction or matching operation is running. The obsolete popup Sheets tab and its date-based sync controls are removed; selected-label results remain available from the in-page workflow card. After extraction, the result provides all of the following actions:
 
 | Action | Purpose |
 |---|---|

@@ -14,5 +14,5 @@ assert(!content.includes('>⚡ Export Today</button>'), 'Export Today card butto
 assert(!content.includes('>📊 Sheets Sync Today</button>'), 'Sheets Sync Today card button still exposed');
 assert(!content.includes("id === 'btnExport'"), 'legacy Export Today event route still active');
 assert(!content.includes("id === 'btnSheets'"), 'legacy Sheets Sync event route still active');
-assert(popup.includes('sheetsDownloadXlsx') && popup.includes('sheetsDownloadCsv'), 'popup sheet download controls unexpectedly missing');
+assert(!popup.includes('sheetsDownloadXlsx') && !popup.includes('sheetsDownloadCsv'), 'removed popup Sheets download controls still present');
 console.log('primary card UI regression test passed');

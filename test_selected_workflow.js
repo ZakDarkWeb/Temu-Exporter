@@ -5,7 +5,7 @@ const vm = require('vm');
 const source = fs.readFileSync('/home/ubuntu/Temu-Exporter/background.js', 'utf8');
 const contentSource = fs.readFileSync('/home/ubuntu/Temu-Exporter/content.js', 'utf8');
 
-assert(contentSource.includes("if (active === '3') return 'shipped'"), 'Shipped tab detection missing');
+assert(contentSource.includes("if (active === '3' || active === '4') return 'shipped'"), 'current Shipped tab detection missing');
 assert(contentSource.includes("const source = mode === 'shipped' ? 'shipped' : 'unshipped'"), 'selection source tracking missing');
 assert(contentSource.includes('selectionSources'), 'cross-tab selection merge missing');
 assert(contentSource.includes('btnExportSelected'), 'direct Shipped selection export control missing');

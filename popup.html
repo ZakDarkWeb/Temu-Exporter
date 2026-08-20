@@ -1276,7 +1276,6 @@
         <button class="mode-tab active" id="tabPages"   data-tab="pages">&#x1F4C4; Pages</button>
         <button class="mode-tab"         id="tabDate"    data-tab="date">&#x1F4C5; Date</button>
         <button class="mode-tab"         id="tabSelect"  data-tab="select">&#x2611; Select</button>
-        <button class="mode-tab"         id="tabSheets"  data-tab="sheets">&#x1F4CA; Sheets</button>
         <button class="mode-tab"         id="tabHistory" data-tab="history">&#x1F552; History</button>
         <button class="mode-tab"         id="tabSettings" data-tab="settings">&#x2699;&#xFE0F;</button>
       </div>
@@ -1433,137 +1432,6 @@
         </div>
       </div>
 
-      <!-- TAB: Sheets Sync (Mode 4) -->
-      <div class="tab-content" id="tabContentSheets">
-
-        <!-- Hero -->
-        <div class="sheets-hero">
-          <div class="sheets-hero-icon">&#x1F4CA;</div>
-          <div class="sheets-hero-title">Auto Sheets Sync</div>
-          <div class="sheets-hero-sub">Labels buy karo &rarr; extension detect kare &rarr; clipboard mein copy &rarr; Ctrl+V in Google Sheets</div>
-          <div class="sheets-flow">
-            <span class="sheets-flow-step">&#x1F4CB; Scan</span>
-            <span class="sheets-flow-arrow">&rarr;</span>
-            <span class="sheets-flow-step">&#x26A1; Extract</span>
-            <span class="sheets-flow-arrow">&rarr;</span>
-            <span class="sheets-flow-step">&#x1F4CB; Copy</span>
-            <span class="sheets-flow-arrow">&rarr;</span>
-            <span class="sheets-flow-step">&#x2705; Paste</span>
-          </div>
-        </div>
-
-        <!-- Quick Sync Buttons -->
-        <div class="sheets-sync-section">
-          <div class="sheets-sync-label">&#x26A1; Quick Sync</div>
-          <button class="sheets-big-btn" id="sheetsSyncToday">
-            <span class="sheets-big-btn-icon">&#x1F504;</span>
-            <span class="sheets-big-btn-text">
-              <span class="sheets-big-btn-title">Sync Today&apos;s Labels &rarr; Sheets</span>
-              <span class="sheets-big-btn-sub">Automatically detects labels bought today</span>
-            </span>
-          </button>
-          <div class="sheets-small-row">
-            <button class="quick-date-btn" id="sheetsSyncYesterday">&#x23F3; Yesterday</button>
-            <button class="quick-date-btn" id="sheetsSyncLast7">&#x1F4C6; Last 7 days</button>
-            <button class="quick-date-btn" id="sheetsSyncCustom">&#x270F;&#xFE0F; Custom</button>
-          </div>
-        </div>
-
-        <!-- Custom date range (hidden by default) -->
-        <div id="sheetsCustomRange" style="display:none; margin-bottom:10px;">
-          <div class="page-range" style="margin-top:4px;">
-            <div class="date-field">
-              <label>From</label>
-              <input type="datetime-local" class="date-input" id="sheetsDateFrom">
-            </div>
-            <div class="page-arrow">&rarr;</div>
-            <div class="date-field">
-              <label>To</label>
-              <input type="datetime-local" class="date-input" id="sheetsDateTo">
-            </div>
-          </div>
-          <button class="sheets-big-btn" id="sheetsSyncCustomBtn" style="margin-top:6px; background:linear-gradient(135deg,#1e3a5f,#1e40af); border-color:rgba(59,130,246,0.4);">
-            <span class="sheets-big-btn-icon">&#x1F4CA;</span>
-            <span class="sheets-big-btn-text">
-              <span class="sheets-big-btn-title">Sync Custom Range &rarr; Sheets</span>
-              <span class="sheets-big-btn-sub">Extract orders in selected date range</span>
-            </span>
-          </button>
-        </div>
-
-        <!-- Result Area (shown after sync completes) -->
-        <div class="sheets-result" id="sheetsResult" style="display:none;">
-          <div class="sheets-result-count" id="sheetsResultCount"></div>
-          <div class="sheets-result-sub" id="sheetsResultSub"></div>
-          <div class="sheets-paste-hint">&#x1F4CB; Open Google Sheets &rarr; Click cell A1 &rarr; <kbd style="background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:3px;">Ctrl+V</kbd></div>
-          <button class="sheets-copy-btn" id="sheetsCopyAgain">&#x1F4CB; Copy to Clipboard</button>
-          <div class="sheets-download-row" id="sheetsDownloadRow" style="display:none;">
-            <button class="sheets-download-btn" id="sheetsDownloadXlsx">&#x1F4CA; Download XLSX</button>
-            <button class="sheets-download-btn csv" id="sheetsDownloadCsv">&#x1F4C4; Download CSV</button>
-          </div>
-          <textarea class="sheets-manual-copy" id="sheetsFallbackText" aria-label="Rows ready for manual copy" spellcheck="false" style="display:none;"></textarea>
-          <div class="sheets-manual-note" id="sheetsManualNote" style="display:none;">Clipboard permission was blocked. Click inside the text box, press Ctrl+A, Ctrl+C, then paste into Google Sheets.</div>
-          <div class="sheets-fail-note" id="sheetsFailNote"></div>
-        </div>
-
-        <!-- Column Toggles -->
-        <div class="sheets-section">
-          <div class="sheets-section-title">&#x1F4CB; Columns to include</div>
-          <div class="sheets-col-grid" id="sheetsColGrid">
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="labelPurchasedDate" checked> Label Date</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="trackingNumber" checked> Tracking No</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="packageId" checked> Package ID</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="orderNumber" checked> Order No</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="customerName" checked> Customer</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="productDetails" checked> Product</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="qty" checked> Qty</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="estimatedRevenue" checked> Revenue</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingCost" checked> Shipping Cost</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="shippingDate"> Ship Date</label>
-            <label class="sheets-col-toggle"><input type="checkbox" data-col="orderDate"> Order Date</label>
-          </div>
-        </div>
-
-        <!-- Options -->
-        <div class="sheets-opts">
-          <label class="sheets-opt">
-            <input type="checkbox" id="sheetsIncludeHeaders" checked>
-            <span>Include column headers (first row)</span>
-          </label>
-          <label class="sheets-opt">
-            <input type="checkbox" id="sheetsNewOnly">
-            <span>Copy NEW orders only <span class="sheets-dup-badge" id="sheetsDupBadge" style="display:none;">0 already synced</span></span>
-          </label>
-        </div>
-
-        <!-- Last Sync Info -->
-        <div class="sheets-last-sync" id="sheetsLastSync" style="display:none;"></div>
-
-        <!-- Status Tracker -->
-        <div class="status-tracker-section">
-          <div class="status-tracker-title">&#x1F69A; Delivery Status Tracker</div>
-          <div class="status-tracker-sub">Last 50 shipped orders ki delivery status check karo (order detail pages scan karta hai)</div>
-          <button id="statusCheckBtn">&#x1F50D; Check Delivery Status (Last 50 Orders)</button>
-          <div class="status-results-wrap" id="statusResultsWrap">
-            <div class="status-results-header">
-              <span class="status-results-title" id="statusResultsTitle"></span>
-              <button class="status-csv-btn" id="statusCsvBtn">&#x2B07; Download CSV</button>
-            </div>
-            <table class="status-table" id="statusTable">
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Tracking</th>
-                  <th>Status</th>
-                  <th>Last Update</th>
-                </tr>
-              </thead>
-              <tbody id="statusTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-      </div>
 
       <!-- TAB: History -->
       <div class="tab-content" id="tabContentHistory">
@@ -1605,12 +1473,6 @@
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
             <label class="settings-toggle-row">
-              <span class="settings-toggle-icon">&#x1F4CA;</span>
-              <span class="settings-toggle-label">Sheets Tab<span class="settings-toggle-sub">Google Sheets sync</span></span>
-              <input type="checkbox" class="tab-visibility-toggle" data-tab-target="sheets" id="visSheets" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-            <label class="settings-toggle-row">
               <span class="settings-toggle-icon">&#x1F552;</span>
               <span class="settings-toggle-label">History Tab<span class="settings-toggle-sub">Past exports &amp; re-download</span></span>
               <input type="checkbox" class="tab-visibility-toggle" data-tab-target="history" id="visHistory" checked>
@@ -1621,7 +1483,7 @@
         <div class="settings-section">
           <div class="settings-section-title">&#x2139;&#xFE0F; About</div>
           <div class="settings-about-card">
-            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.8.5</span></div>
+            <div class="settings-about-row"><span>Version</span><span class="settings-about-val">v8.8.6</span></div>
             <div class="settings-about-row"><span>In-page panel</span><span class="settings-about-val settings-green">Active</span></div>
             <div class="settings-about-row"><span>Export modes</span><span class="settings-about-val">5 modes</span></div>
           </div>
@@ -1714,7 +1576,7 @@
 
   </div>
 
-  <div class="footer"><strong>Temu Exporter</strong><span>v8.8.5</span></div>
+  <div class="footer"><strong>Temu Exporter</strong><span>v8.8.6</span></div>
 
   <script src="popup.js"></script>
 </body>
