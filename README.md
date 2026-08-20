@@ -1,56 +1,46 @@
-# Temu Order Tab Exporter v8.8.6
+# Temu Order Tab Exporter v8.8.7
 
-Temu Order Tab Exporter helps Temu sellers export order data to CSV, JSON, Excel, and Google Sheets. The primary workflow is: select orders, purchase labels through Temu’s own controls, move to Shipped, refresh the in-page card, and export complete order details.
+Temu Order Tab Exporter is a deliberately minimal read-only helper for one seller workflow: remember selected orders, match them after labels move the orders to Shipped, extract the order details, and copy the resulting sheet data to the clipboard.
 
 ## Installation
 
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted extension folder. After replacing an existing version, click **Reload** on the extension card.
 
-## Primary workflow
+## Simple workflow
 
-On Temu Seller Center → Manage Orders → **Unshipped**, select the orders included in the bulk-label operation. You may also open **Shipped** and select additional rows directly; selections from both tabs are merged and saved in `chrome.storage.local`, surviving pagination and browser restarts.
+On Temu Seller Center → Manage Orders → **Unshipped**, select the orders that will be included in the bulk-label purchase. The extension watches the native checkboxes and saves the selected Order No, Package ID, and Tracking Number in local extension storage. The saved selection survives pagination, closing the popup, and browser restart.
 
-Use Temu’s own controls to buy labels in bulk. The extension never purchases labels or submits account actions. After the orders appear in **Shipped**, click **Refresh Shipped** on the in-page card. The extension scans Shipped pages, matches the durable selection using Order No and, when available, Package ID and Tracking Number, and reports matched and pending counts. Pagination now waits against the actual previous first order and supports Temu’s current active Shipped tab (`activeTab=4`).
+Use Temu's own **Buy shipping in bulk** control. The extension never clicks that control. After Temu moves the orders to **Shipped**, click **Refresh Shipped** on the in-page card. The extension scans the Shipped pages, supports Temu's current `activeTab=4` URL, and matches saved orders by Order No while validating Package ID and Tracking Number when available.
 
-Click **Export to Sheets** after matching. The extension opens each matched order-detail URL in a background tab, waits for the complete detail shell, extracts the fields, validates that the row is complete, retries incomplete pages, closes the detail tabs, and returns a nine-column TSV. Incomplete Order No-only shells are excluded instead of producing misleading partial spreadsheet rows.
+When the matched count is ready, click **Export Sheet**. The extension opens only the selected order-detail pages in background tabs, waits for complete detail data, extracts the nine required fields, retries incomplete detail pages, closes the tabs it opened, and shows one **Copy to Clipboard** button. Paste the copied TSV directly into the existing sheet.
 
-## Copy and download options
+The popup is intentionally limited to selection memory and **Debug Detection**. Debug Detection is only for diagnosing whether Temu's current checkbox, row, and Order No DOM can be read. It does not start an export.
 
-The in-page card removes the two unused Today shortcuts and keeps the approved workflow controls: **Refresh Shipped**, **Export to Sheets**, selection clear/cancel, and the existing result actions. The popup progress panel stays hidden while idle and appears only when a real extraction or matching operation is running. The obsolete popup Sheets tab and its date-based sync controls are removed; selected-label results remain available from the in-page workflow card. After extraction, the result provides all of the following actions:
+## Exact sheet columns
 
-| Action | Purpose |
-|---|---|
-| Copy TSV to clipboard | Paste the exact nine-column result into Google Sheets |
-| Download XLSX | Download a formatted Excel workbook with frozen headers and fitted columns |
-| Download CSV | Download a UTF-8 CSV with the same nine-column schema |
-
-The download buttons are available in the in-page result card and in the popup’s Sheets result card. If clipboard access is blocked, the visible text-area fallback can be copied manually.
-
-## Export history
-
-Every completed selected-label export is saved in the extension’s local **History** tab with its rows, schema, order count, and timestamp. History entries remain available after the popup is closed or the browser is restarted. Each entry provides Copy, XLSX, and CSV actions for later re-download. The latest result is also retained in session storage so it can be recovered if the popup closes during extraction.
-
-## Exact selected-label columns
-
-The primary workflow always produces these nine columns in this exact order:
+The output always contains these nine columns in this exact order:
 
 | Column | Source |
 |---|---|
 | Shipping Date | Order-detail shipment date |
 | Order Date | Order-detail purchase/order date |
-| Tracking Number | Package tracking number |
+| Tracking Number | Shipped package tracking number |
 | Order No | Temu parent order number |
-| Customer Name | Recipient/customer name |
-| Product Details | Product title and variant details |
+| Customer Name | Order-detail recipient name |
+| Product Details | Order-detail product title and variant |
 | Qty (No) | Product quantity |
-| Est. Revenue | Estimated order revenue |
-| Shipping Cost | Exact **Est. total shipping cost** field |
+| Est. Revenue | Order-detail estimated revenue |
+| Shipping Cost | Temu's **Est. total shipping cost** field |
 
-Shipping Cost is taken from **Est. total shipping cost**, not the lower-case sales-proceeds `shipping cost` value.
+**Shipping Cost is intentionally taken from Est. total shipping cost, not the lower shipping cost field.**
+
+## Removed by design
+
+The extension no longer exposes page-range export, date-range export, JSON/CSV/XLSX downloads, pre-export Sheets sync, label-run Save/Restore, History, Settings, dashboard statistics, delivery-status tracking, task-detail label-batch export, or multiple copy/download buttons. These were outside the requested workflow and could make it unclear which data was being placed into the seller's sheet.
 
 ## Read-only safety
 
-The extension observes order rows, opens order-detail pages for extraction, reads data, stores export state locally, generates local files, and closes tabs opened for extraction. It does not purchase labels, confirm shipments, print documents, cancel orders, schedule pickups, edit orders, submit orders, or make payments.
+The extension reads order rows and order-detail pages, stores selection state locally, prepares TSV text, and closes only detail tabs created for extraction. It never clicks **Buy shipping**, **Confirm shipment**, **Print**, **Cancel**, **Refund**, **Edit**, **Schedule pickup**, or any payment/account-changing control.
 
 ## Development checks
 
@@ -61,5 +51,6 @@ node --check background.js
 node --check content.js
 node --check popup.js
 node test_selected_workflow.js
-node test_selected_label_quality.js
+node test_shipped_scan_fix.js
+node test_minimal_ui.js
 ```

@@ -304,8 +304,6 @@
     .tsv-card { background:rgba(0,212,170,.055); border:1px solid rgba(0,212,170,.18); border-radius:9px; padding:8px; }
     .tsv-card textarea { width:100%; height:48px; resize:none; border:1px solid rgba(255,255,255,.08); border-radius:6px; background:#080c12; color:#94a3b8; padding:5px; font:8px/1.3 monospace; outline:none; }
     .tsv-copy { margin-top:5px; height:27px; font-size:9px; }
-    .tsv-download-row { display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:5px; }
-    .tsv-download-row .btn { height:26px; font-size:8px; }
 
     /* ── DRAG DOTS ───────────────────────────────────────────── */
     .drag-dots {
@@ -333,7 +331,7 @@
         </div>
         <div class="title-wrap">
           <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.6 · Bulk Label Workflow</div>
+          <div class="version">v8.8.7 · Selection Memory</div>
         </div>
         <div class="actions">
           <button class="icon-btn" id="minBtn">—</button>
@@ -358,20 +356,16 @@
           </div>
           <div class="selection-actions">
             <button class="btn btn-outline" id="btnRefreshShipped">Refresh Shipped</button>
-            <button class="btn btn-primary" id="btnExportSelected">Export to Sheets</button>
+            <button class="btn btn-primary" id="btnExportSelected">Export Sheet</button>
             <button class="btn btn-clear" id="btnClearSelection" title="Clear saved selection">×</button>
           </div>
           <div class="selection-hint" id="selectionHint">Select orders on Unshipped. The selection persists while you buy labels.</div>
         </div>
 
         <div class="tsv-card" id="tsvCard" style="display:none;">
-          <div class="selection-title"><strong>Sheets TSV ready</strong><span class="selection-tab" id="tsvCount">0 rows</span></div>
+          <div class="selection-title"><strong>Sheet data ready</strong><span class="selection-tab" id="tsvCount">0 rows</span></div>
           <textarea id="tsvText" readonly></textarea>
-          <button class="btn btn-outline tsv-copy" id="btnCopySelected">Copy TSV to clipboard</button>
-          <div class="tsv-download-row">
-            <button class="btn btn-outline" id="btnDownloadSelectedXlsx">Download XLSX</button>
-            <button class="btn btn-outline" id="btnDownloadSelectedCsv">Download CSV</button>
-          </div>
+          <button class="btn btn-outline tsv-copy" id="btnCopySelected">Copy to Clipboard</button>
         </div>
 
 
@@ -429,8 +423,8 @@
   }
 
   function setButtons(disabled) {
-    [$('btnExport'), $('btnSheets')].forEach(b => {
-      if (b) { b.disabled = disabled; if (disabled) b.setAttribute('disabled',''); else b.removeAttribute('disabled'); }
+    [$('btnRefreshShipped'), $('btnExportSelected'), $('btnClearSelection')].forEach(b => {
+      if (b) b.disabled = disabled;
     });
   }
 
@@ -622,17 +616,6 @@
     chrome.runtime.sendMessage({ type: 'refreshSelectedShipped' });
   }
 
-  function downloadSelectedLabel(format) {
-    if (!lastWorkflowRows.length) { setStatus('No rows available for download', 's-error'); return; }
-    chrome.runtime.sendMessage({
-      type: 'downloadSelectedLabelFile',
-      rows: lastWorkflowRows,
-      format,
-      historyId: lastWorkflowHistoryId
-    });
-    setStatus(`Preparing ${format.toUpperCase()} download...`, 's-running');
-  }
-
   async function exportSelectedLabelSheets() {
     if (workflowBusy) return;
     const state = await readWorkflowState();
@@ -801,15 +784,11 @@
       if (!minimized) exportSelectedLabelSheets();
     } else if (id === 'btnClearSelection') {
       if (!minimized) clearWorkflowSelection();
-    } else if (id === 'btnDownloadSelectedXlsx') {
-      downloadSelectedLabel('xlsx');
-    } else if (id === 'btnDownloadSelectedCsv') {
-      downloadSelectedLabel('csv');
     } else if (id === 'btnCopySelected') {
       const text = $('tsvText')?.value || '';
       copyTextWithFallback(text).then(() => {
-        setStatus('TSV copied — paste into Sheets', 's-done');
-        showResult('TSV copied to clipboard');
+        setStatus('Copied — paste into your sheet', 's-done');
+        showResult('Copied to clipboard');
       }).catch(() => setStatus('Copy blocked — use the text box', 's-error'));
     } else if (id === 'btnCancel') {
       // Visual flash to confirm click registered
@@ -850,292 +829,3 @@
 })();
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LABEL BATCH EXPORT — Detects task-detail page and shows export modal
-// Runs as separate IIFE to stay independent from the floating widget above
-// ═══════════════════════════════════════════════════════════════════════════════
-(function () {
-  'use strict';
-
-  const MODAL_ID = '__temu_label_batch_modal__';
-
-  function isOnTaskDetailPage() {
-    return window.location.href.includes('seller.temu.com') &&
-      /task[-_]?detail|taskDetail|task_detail/i.test(window.location.href);
-  }
-
-  function extractTaskId() {
-    // Try URL path: /task-detail/TK-xxxxxx or ?taskId=TK-xxx
-    const m = window.location.href.match(/TK-[\w\d]+/i) ||
-              window.location.href.match(/task[-_]?id[=\/]([\w\d-]+)/i);
-    return m ? m[0] : '';
-  }
-
-  // ── Scrape orders from the "View details" table ───────────────────────────
-  function scrapeOrders(taskId) {
-    const orders = [];
-    const today  = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
-    // Find table — try multiple selectors since Temu uses dynamic class names
-    const table = document.querySelector('table') ||
-                  document.querySelector('[class*="table"]');
-    if (!table) return [];
-
-    // Get header columns to build index map
-    const thEls  = [...(table.querySelectorAll('thead th') || table.querySelectorAll('th'))];
-    const headers = thEls.map(th => th.textContent.toLowerCase().trim());
-    const idx = {
-      order:    headers.findIndex(h => h.includes('order')),
-      pkg:      headers.findIndex(h => h.includes('package')),
-      tracking: headers.findIndex(h => h.includes('tracking')),
-      service:  headers.findIndex(h => h.includes('service')),
-      cost:     headers.findIndex(h => h.includes('cost') || h.includes('shipping cost')),
-    };
-
-    // Fallback indices if headers not found
-    if (idx.order    < 0) idx.order    = 0;
-    if (idx.pkg      < 0) idx.pkg      = 1;
-    if (idx.tracking < 0) idx.tracking = 8;
-    if (idx.service  < 0) idx.service  = 6;
-    if (idx.cost     < 0) idx.cost     = 7;
-
-    const rows = table.querySelectorAll('tbody tr');
-    rows.forEach(tr => {
-      const cells = [...tr.querySelectorAll('td')];
-      if (cells.length < 3) return;
-
-      const getText = (i) => (cells[i]?.textContent || '').replace(/\s+/g, ' ').trim();
-
-      // Extract Order ID (PO-xxx pattern)
-      const orderCell = getText(idx.order);
-      const orderMatch = orderCell.match(/PO-[\d-]+/);
-      const orderNumber = orderMatch ? orderMatch[0] : orderCell.split('\n')[0].trim();
-      if (!orderNumber) return;
-
-      // Extract Package ID (PK-xxx pattern)
-      const pkgCell = getText(idx.pkg);
-      const pkgMatch = pkgCell.match(/PK-[\w\d]+/);
-      const packageId = pkgMatch ? pkgMatch[0] : pkgCell.split('\n')[0].trim();
-
-      orders.push({
-        orderNumber,
-        packageId,
-        trackingNumber: getText(idx.tracking),
-        shippingService: getText(idx.service),
-        shippingCost: getText(idx.cost).replace(/\$/g, '').trim(),
-        labelDate: today,
-        taskId
-      });
-    });
-
-    return orders;
-  }
-
-  // ── Wait for table to appear ──────────────────────────────────────────────
-  function waitForTable(maxMs = 10000) {
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const check = () => {
-        const tbl = document.querySelector('table') || document.querySelector('[class*="table"]');
-        const rows = tbl?.querySelectorAll('tbody tr');
-        if (rows && rows.length > 0) { resolve(true); return; }
-        if (Date.now() - start > maxMs) { resolve(false); return; }
-        setTimeout(check, 600);
-      };
-      check();
-    });
-  }
-
-  // ── Build and show the export modal ──────────────────────────────────────
-  function showModal(orders, taskId) {
-    // Remove existing modal
-    document.getElementById(MODAL_ID)?.remove();
-
-    const orderCount = orders.length;
-    const previewOrders = orders.slice(0, 3);
-
-    const modal = document.createElement('div');
-    modal.id = MODAL_ID;
-    modal.style.cssText = `
-      position: fixed; top: 24px; right: 24px; z-index: 2147483646;
-      width: 340px;
-      background: rgba(10,14,22,0.97);
-      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-      border: 1px solid rgba(0,212,170,0.3);
-      border-radius: 16px;
-      box-shadow: 0 0 0 1px rgba(0,212,170,0.07), 0 20px 60px rgba(0,0,0,0.85), 0 0 80px rgba(0,212,170,0.06);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 13px; color: #f1f5f9;
-      overflow: hidden;
-      animation: lbSlideIn 0.3s cubic-bezier(0.34,1.56,0.64,1);
-    `;
-
-    modal.innerHTML = `
-      <style>
-        @keyframes lbSlideIn { from { opacity:0; transform: translateY(-16px) scale(0.95); } to { opacity:1; transform: none; } }
-        #${MODAL_ID} * { box-sizing: border-box; margin: 0; padding: 0; }
-        #${MODAL_ID} .lb-header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(0,212,170,0.04); }
-        #${MODAL_ID} .lb-icon { width: 36px; height: 36px; border-radius: 10px; background: rgba(0,212,170,0.12); border: 1px solid rgba(0,212,170,0.3); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        #${MODAL_ID} .lb-title { font-size: 13px; font-weight: 800; color: #f1f5f9; letter-spacing: -0.3px; }
-        #${MODAL_ID} .lb-sub { font-size: 10px; color: #64748b; font-weight: 600; margin-top: 1px; }
-        #${MODAL_ID} .lb-close { margin-left: auto; width: 26px; height: 26px; border-radius: 6px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); cursor: pointer; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 14px; font-family: inherit; transition: background 0.15s; }
-        #${MODAL_ID} .lb-close:hover { background: rgba(255,255,255,0.09); color: #f1f5f9; }
-        #${MODAL_ID} .lb-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
-        #${MODAL_ID} .lb-count-row { display: flex; align-items: center; gap: 8px; background: rgba(0,212,170,0.07); border: 1px solid rgba(0,212,170,0.18); border-radius: 10px; padding: 10px 12px; }
-        #${MODAL_ID} .lb-count-num { font-size: 22px; font-weight: 900; color: #00d4aa; font-variant-numeric: tabular-nums; line-height: 1; }
-        #${MODAL_ID} .lb-count-label { font-size: 11px; color: #94a3b8; font-weight: 600; }
-        #${MODAL_ID} .lb-task-id { font-size: 9px; color: #475569; font-weight: 700; letter-spacing: 0.3px; font-family: monospace; }
-        #${MODAL_ID} .lb-preview { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; overflow: hidden; }
-        #${MODAL_ID} .lb-preview-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 10px; }
-        #${MODAL_ID} .lb-preview-row:last-child { border-bottom: none; }
-        #${MODAL_ID} .lb-order { color: #60a5fa; font-weight: 700; font-family: monospace; flex: 1; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        #${MODAL_ID} .lb-track { color: #475569; font-size: 9px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
-        #${MODAL_ID} .lb-more { padding: 6px 10px; font-size: 9px; color: #475569; font-weight: 600; text-align: center; }
-        #${MODAL_ID} .lb-format-row { display: flex; gap: 6px; }
-        #${MODAL_ID} .lb-fmt-btn { flex: 1; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); color: #94a3b8; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; transition: all 0.15s; }
-        #${MODAL_ID} .lb-fmt-btn.active { background: rgba(0,212,170,0.12); border-color: rgba(0,212,170,0.4); color: #00d4aa; }
-        #${MODAL_ID} .lb-fmt-btn:hover:not(.active) { background: rgba(255,255,255,0.07); color: #f1f5f9; }
-        #${MODAL_ID} .lb-export-btn { width: 100%; height: 40px; border-radius: 10px; background: linear-gradient(130deg, #00d4aa 0%, #00b894 100%); border: none; color: #00170f; font-size: 12px; font-weight: 900; font-family: inherit; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; box-sizing: border-box; transition: opacity 0.15s, transform 0.15s; letter-spacing: 0.2px; }
-        #${MODAL_ID} .lb-export-btn:hover { opacity: 0.92; transform: translateY(-1px); }
-        #${MODAL_ID} .lb-export-btn:active { transform: scale(0.97); }
-        #${MODAL_ID} .lb-export-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-        #${MODAL_ID} .lb-status { font-size: 10px; font-weight: 600; text-align: center; color: #64748b; min-height: 16px; }
-        #${MODAL_ID} .lb-status.success { color: #00d4aa; }
-        #${MODAL_ID} .lb-status.error { color: #f87171; }
-      </style>
-
-      <div class="lb-header">
-        <div class="lb-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <rect x="2" y="3" width="20" height="18" rx="3" stroke="#00d4aa" stroke-width="1.5"/>
-            <path d="M8 8h8M8 12h8M8 16h5" stroke="#00d4aa" stroke-width="1.5" stroke-linecap="round"/>
-            <path d="M17 15l2 2 3-3" stroke="#00d4aa" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <div>
-          <div class="lb-title">Label Batch Export</div>
-          <div class="lb-sub">Task Detail Page Detected</div>
-        </div>
-        <button class="lb-close" id="lbCloseBtn">✕</button>
-      </div>
-
-      <div class="lb-body">
-        <div class="lb-count-row">
-          <div>
-            <div class="lb-count-num">${orderCount}</div>
-            <div class="lb-count-label">Orders detected in this batch</div>
-          </div>
-          ${taskId ? `<div style="margin-left:auto"><div class="lb-task-id">${taskId}</div></div>` : ''}
-        </div>
-
-        ${orderCount > 0 ? `
-        <div class="lb-preview">
-          ${previewOrders.map(o => `
-            <div class="lb-preview-row">
-              <span class="lb-order">${o.orderNumber}</span>
-              <span class="lb-track">${o.trackingNumber || '—'}</span>
-              <span style="font-size:9px;color:#475569;white-space:nowrap">${o.shippingCost ? '$'+o.shippingCost : ''}</span>
-            </div>
-          `).join('')}
-          ${orderCount > 3 ? `<div class="lb-more">+${orderCount - 3} more orders</div>` : ''}
-        </div>
-        ` : '<div style="text-align:center;font-size:11px;color:#ef4444;padding:8px">⚠ No orders detected in table</div>'}
-
-        <div class="lb-format-row">
-          <button class="lb-fmt-btn active" id="lbFmtXlsx">📊 Excel</button>
-          <button class="lb-fmt-btn" id="lbFmtCsv">📄 CSV</button>
-        </div>
-
-        <button class="lb-export-btn" id="lbExportBtn" ${orderCount === 0 ? 'disabled' : ''}>
-          ⬇ Export ${orderCount} Orders
-        </button>
-
-        <div class="lb-status" id="lbStatus"></div>
-      </div>
-    `;
-
-    document.body.appendChild(modal);
-
-    // ── Wire events ──────────────────────────────────────────────────────────
-    let selectedFormat = 'xlsx';
-
-    document.getElementById('lbCloseBtn').onclick = () => modal.remove();
-
-    const xlsxBtn = document.getElementById('lbFmtXlsx');
-    const csvBtn  = document.getElementById('lbFmtCsv');
-    xlsxBtn.onclick = () => { selectedFormat = 'xlsx'; xlsxBtn.classList.add('active'); csvBtn.classList.remove('active'); };
-    csvBtn.onclick  = () => { selectedFormat = 'csv';  csvBtn.classList.add('active'); xlsxBtn.classList.remove('active'); };
-
-    document.getElementById('lbExportBtn').onclick = () => {
-      const btn = document.getElementById('lbExportBtn');
-      const statusEl = document.getElementById('lbStatus');
-      btn.disabled = true;
-      btn.textContent = '⏳ Exporting...';
-      statusEl.textContent = 'Sending to background...';
-      statusEl.className = 'lb-status';
-
-      try {
-        chrome.runtime.sendMessage({ type: 'exportLabelBatch', orders, taskId, format: selectedFormat }, () => {
-          if (chrome.runtime.lastError) {
-            statusEl.textContent = '✗ Error: ' + chrome.runtime.lastError.message;
-            statusEl.className = 'lb-status error';
-            btn.disabled = false;
-            btn.innerHTML = '⬇ Export ' + orderCount + ' Orders';
-          } else {
-            statusEl.textContent = '✓ Exported! Check your Downloads folder.';
-            statusEl.className = 'lb-status success';
-            btn.innerHTML = '✓ Done!';
-            setTimeout(() => { modal.remove(); }, 4000);
-          }
-        });
-      } catch (e) {
-        statusEl.textContent = '✗ Failed: ' + e.message;
-        statusEl.className = 'lb-status error';
-        btn.disabled = false;
-        btn.innerHTML = '⬇ Retry Export';
-      }
-    };
-  }
-
-  // ── Main init function ────────────────────────────────────────────────────
-  async function initLabelBatchExport() {
-    if (!isOnTaskDetailPage()) return;
-    if (document.getElementById(MODAL_ID)) return; // already shown
-
-    const taskId = extractTaskId();
-
-    // Wait for page table to render
-    const ready = await waitForTable(12000);
-    if (!ready) {
-      // Show modal even if table not found (0 orders)
-      showModal([], taskId);
-      return;
-    }
-
-    // Extra wait for React to finish rendering rows
-    await new Promise(r => setTimeout(r, 800));
-
-    const orders = scrapeOrders(taskId);
-    showModal(orders, taskId);
-  }
-
-  // ── Run on page load ──────────────────────────────────────────────────────
-  if (isOnTaskDetailPage()) {
-    initLabelBatchExport();
-  }
-
-  // ── Listen for URL changes (SPA navigation) — separate from main watcher ──
-  let _lbLastUrl = window.location.href;
-  setInterval(() => {
-    const cur = window.location.href;
-    if (cur === _lbLastUrl) return;
-    _lbLastUrl = cur;
-    if (isOnTaskDetailPage()) {
-      // Small delay for React to render new page content
-      setTimeout(initLabelBatchExport, 1500);
-    } else {
-      // Clean up modal if navigated away
-      document.getElementById(MODAL_ID)?.remove();
-    }
-  }, 1500);
-
-})();

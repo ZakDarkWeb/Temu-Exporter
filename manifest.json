@@ -1,16 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Tab Exporter",
-  "version": "8.8.6",
+  "version": "8.8.7",
 
-  "description": "Export Temu seller orders to CSV/JSON/Excel/Sheets. 4 modes: By Pages, By Date Range, By Selection, Sheets Sync.",
+  "description": "Remember selected Temu orders, match them after labels move to Shipped, and copy the exact nine-column sheet data to the clipboard.",
   "permissions": [
     "tabs",
     "scripting",
     "activeTab",
-    "downloads",
     "storage",
-    "notifications",
     "clipboardWrite"
   ],
   "host_permissions": [
@@ -43,11 +41,5 @@
     "32":  "icons/icon32.png",
     "48":  "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["libs/xlsx-js-style.js"],
-      "matches":   ["https://seller.temu.com/*"]
-    }
-  ]
+  }
 }
