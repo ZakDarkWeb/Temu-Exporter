@@ -2,7 +2,7 @@
 
 Yeh Chrome extension Temu Seller Center ke `buy-shipping-bulk-details.html` page par active hoti hai. Version 2.8.0 mein bulk page open rehta hai aur extension background mein maximum **two order-detail tabs** process karti hai. Panel ab ZHunter PRO-inspired dark navy/cyan neon branding, glass-grid card styling, collapsible floating mode, toolbar icons, Settings drawer, local sheet history, Download again, Delete, aur reduced-motion support ke saath aata hai. Har detail tab structured Temu data read karke record worker ko bhejti hai, phir deterministic cleanup ke through close ho jata hai. Worker restart ke baad orphan detail tabs bhi automatically close hote hain, isliye tabs accumulate nahi hone chahiye.
 
-Agar Temu kisi order par `/no-auth.html`, login page, no-internet page, ya timeout show kare to extension us order ko turant lose nahi karti. Same order ko exponential backoff ke saath maximum three attempts tak retry kiya jata hai, aur har retry mein current Temu session identifier preserve hota hai. Retry ke baad bhi failure ho to batch next order par continue hota hai aur failed order workbook ke `Extraction Status` sheet mein record hota hai. Version 2.8.0 intentional tab closures ko retry errors nahi samajhti, every retry mein session preserve karti hai, purana v6 checkpoint reuse nahi karti, aur legacy exporter detail tabs ko startup/new batch/Stop-Clear par clean karti hai. Premium UI, Popup Command Center, retry-failed-only aur history features local-only hain; smooth transitions, hover/active micro-interactions, polished buttons, pipeline animation aur accessibility states lightweight CSS par based hain; extraction behavior ya accuracy workflow change nahi hua.
+Agar Temu kisi order par `/no-auth.html`, login page, no-internet page, ya timeout show kare to extension us order ko turant lose nahi karti. Same order ko exponential backoff ke saath maximum three attempts tak retry kiya jata hai, aur har retry mein current Temu session identifier preserve hota hai. Retry ke baad bhi failure ho to batch next order par continue hota hai aur failed order workbook ke `Extraction Status` sheet mein record hota hai. Version 2.8.0 intentional tab closures ko retry errors nahi samajhti, every retry mein session preserve karti hai, purana v6 checkpoint reuse nahi karti, aur legacy exporter detail tabs ko startup/new batch/Stop-Clear par clean karti hai. Premium UI, Popup Command Center, retry-failed-only, branded TO icon set aur history features local-only hain; smooth transitions, hover/active micro-interactions, polished buttons, pipeline animation aur accessibility states lightweight CSS par based hain; extraction behavior ya accuracy workflow change nahi hua.
 
 ## Excel output
 
@@ -21,6 +21,10 @@ Agar Temu kisi order par `/no-auth.html`, login page, no-internet page, ya timeo
 | Shipping Cost | Bottom-left package `Est. total shipping cost`; populated only on the first product row of a multi-product order. |
 
 Agar retry ya incomplete-field issue ho to `Extraction Status` sheet mein time, order number, package ID, attempts, aur error message mil jayega. Is se koi order silently disappear nahi hota. Dates ab sirf `Aug 21, 2026` format mein export hoti hain, aur quantity integer number format mein export hoti hai, isliye `1.00` ki jagah `1` nazar aayega.
+
+## Branded extension icon
+
+Extension card aur toolbar ke liye custom **TO** icon set add kiya gaya hai. White geometric `TO` monogram, cyan neon edge, dark navy glass-grid background aur upward export arrow current extension branding ke saath match karte hain. Chrome ke liye `icons/icon16.png`, `icon32.png`, `icon48.png`, aur `icon128.png` registered hain. Design details `ICON_DESIGN.md` mein documented hain.
 
 ## Popup Command Center
 
@@ -43,7 +47,7 @@ Sheet history last **20 extraction sessions** browser storage mein rakhti hai. H
 3. **Developer mode** enable karein.
 4. Purani Temu Order Exporter entry par **Remove** click karein, phir **Load unpacked** select karke naye extracted `temu-order-exporter` folder ko choose karein. Is folder ke andar `manifest.json` directly hona chahiye.
 5. Temu Seller Center mein sign in rahein aur bulk-shipping detail page open karein.
-6. Page reload karein. Right-bottom mein **Temu Order Exporter 2.8** panel nazar aayega.
+6. Page reload karein. Right-bottom mein **Temu Order Exporter 2.8** panel nazar aayega. Chrome extension card ya toolbar mein naya icon na aaye to extension card par **Reload** click karein; Chrome kabhi kabhi purana icon cache rakhta hai.
 
 ## Use karne ka tareeqa
 

@@ -65,3 +65,7 @@ The preserved v2.6.0 preview and interactive 2.7.0 preview were rendered in Chro
 ## v2.8 Popup Command Center and recovery verification
 
 The v2.8 popup preview rendered a compact dark-neon command center with page detection, status/progress, four metrics, Capture/Details/XLSX pipeline stages, quick actions, Retry failed recovery, recent sheet history, local-only badge, and Open bulk page shortcut. The updated in-page preview rendered the same pipeline stages and an inline Retry failed recovery card while preserving the existing Settings, Sheet history, and minimize controls. Both surfaces use CSS-only transform/opacity-first motion with reduced-motion fallbacks.
+
+## Branded icon verification
+
+The v2.8 package now includes a custom TO monogram icon set with a dark navy glass-grid background, cyan neon rim, white lettering, and an integrated upward export arrow. `icons/icon16.png`, `icon32.png`, `icon48.png`, and `icon128.png` were generated as exact RGBA PNG dimensions, registered under both Manifest V3 `icons` and `action.default_icon`, and visually checked at 128px and 16px for small-size legibility. No extraction code or permissions changed.
