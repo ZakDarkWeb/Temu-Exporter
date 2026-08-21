@@ -6,7 +6,7 @@ The previous extension navigated the active bulk page into one order-detail page
 
 ## Structured parser verification
 
-The captured signed-in detail bootstrap data verified Customer Name `Larry Northcutt`, Order No `PO-211-01861395087993272`, Order Date `Aug 19, 2026, 8:35 pm GMT(UTC+0)`, Product Details beginning with `Callaway Golf Supersoft Golf Balls`, Qty `1`, Tracking Number `1Z16E50BYW50615076`, Shipping Date `Aug 20, 2026, 4:16 pm GMT`, Est. Revenue `$16.02`, and Shipping Cost `$6.24`. The structured bootstrap fixture test passed.
+The captured signed-in detail bootstrap data verified Customer Name `[sample recipient]`, Order No `[sample order]`, Order Date `Aug 19, 2026, 8:35 pm GMT(UTC+0)`, Product Details beginning with `Callaway Golf Supersoft Golf Balls`, Qty `1`, Tracking Number `[sample tracking]`, Shipping Date `Aug 20, 2026, 4:16 pm GMT`, Est. Revenue `$16.02`, and Shipping Cost `$6.24`. The structured bootstrap fixture test passed.
 
 ## Worker recovery verification
 
@@ -32,7 +32,7 @@ Temu is a client-rendered application and can change internal bootstrap field na
 
 ## Live signed-in validation
 
-The current signed-in Temu session loaded the requested bulk page with 29 purchased labels and 29 body rows. The first detail page loaded for PO-211-01861395087993272 and exposed one structured order in `window.rawData.store.orderList`, a populated package list, and all required labels. Live sample values matched the parser: Purchase date `Aug 19, 2026, 8:35 pm GMT(UTC+0)`, Shipment confirmed at `Aug 20, 2026, 4:16 pm GMT`, quantity `1 shipped`, tracking number `1Z16E50BYW50615076`, Estimated revenue `$16.02`, and shipping cost `$6.24`. The date-only and integer-quantity fixes are therefore compatible with the current signed-in DOM.
+The current signed-in Temu session loaded the requested bulk page with 29 purchased labels and 29 body rows. The first detail page loaded for [sample order] and exposed one structured order in `window.rawData.store.orderList`, a populated package list, and all required labels. Live sample values matched the parser: Purchase date `Aug 19, 2026, 8:35 pm GMT(UTC+0)`, Shipment confirmed at `Aug 20, 2026, 4:16 pm GMT`, quantity `1 shipped`, tracking number `[sample tracking]`, Estimated revenue `$16.02`, and shipping cost `$6.24`. The date-only and integer-quantity fixes are therefore compatible with the current signed-in DOM.
 
 The live retry diagnosis also found that the old worker passed `_x_sessn_id` only on the first detail attempt. Version 2.0.1 preserves that session identifier on every retry URL. The worker regression test verifies the generated detail URLs keep the session parameter, preventing retries from repeatedly becoming unauthenticated solely because the session query parameter was dropped.
 

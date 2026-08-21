@@ -41,10 +41,12 @@
   let historyDrawer = null;
   let detailReported = false;
   let bootstrapStoreCache;
+  const shownWarningKeys = new Set();
+  let drawerFocusReturn = null;
 
   function defaultState() {
     return {
-      version: 7,
+      version: 8,
       status: 'idle',
       sourceUrl: '',
       sourceTabId: null,
@@ -55,7 +57,9 @@
       attempts: {},
       records: [],
       errors: [],
-      updatedAt: null
+      warnings: [],
+      updatedAt: null,
+      completedAt: null
     };
   }
 
@@ -75,17 +79,22 @@
   }
 
   async function saveHistoryEntry() {
-    if (!uiPrefs.saveHistory || !state.records.length || !state.runId || (lastHistoryRunId === state.runId && state.status !== 'complete')) return;
+    if (!uiPrefs.saveHistory || !state.records.length || !state.runId) return;
     const cleanRecords = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
+    const existing = historyEntries.find(item => item.id === `run-${state.runId}`);
+    if (existing?.completed && state.status === 'complete') return;
     const entry = {
+      schemaVersion: 2,
       id: `run-${state.runId}`,
       runId: state.runId,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      completed: state.status === 'complete',
       orders: state.rows.length,
       rows: cleanRecords.length,
       errors: state.errors.length,
+      warnings: state.warnings?.length || 0,
       records: cleanRecords,
-      errorsData: state.errors
+      errorsData: [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))]
     };
     historyEntries = [entry, ...historyEntries.filter(item => item.id !== entry.id)].slice(0, HISTORY_LIMIT);
     lastHistoryRunId = state.runId;
@@ -130,24 +139,34 @@
     log('Sheet history cleared.');
   }
 
-  function closeDrawers() {
+  function closeDrawers(restoreFocus = true) {
     settingsDrawer?.classList.remove('is-open');
     historyDrawer?.classList.remove('is-open');
+    settingsDrawer?.setAttribute('aria-hidden', 'true');
+    historyDrawer?.setAttribute('aria-hidden', 'true');
     panel?.classList.remove('drawer-open');
     panel?.querySelector('[data-action="settings"]')?.setAttribute('aria-expanded', 'false');
     panel?.querySelector('[data-action="history"]')?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && drawerFocusReturn && typeof drawerFocusReturn.focus === 'function') drawerFocusReturn.focus();
+    if (restoreFocus) drawerFocusReturn = null;
   }
 
   function toggleDrawer(drawer) {
     const target = drawer === 'settings' ? settingsDrawer : historyDrawer;
+    const trigger = panel?.querySelector(`[data-action="${drawer}"]`);
     const shouldOpen = !target?.classList.contains('is-open');
-    closeDrawers();
-    if (shouldOpen) {
-      target?.classList.add('is-open');
-      panel?.classList.add('drawer-open');
-      panel?.querySelector(`[data-action="${drawer}"]`)?.setAttribute('aria-expanded', 'true');
-      if (drawer === 'history') renderHistory();
+    if (!shouldOpen) {
+      closeDrawers();
+      return;
     }
+    drawerFocusReturn = trigger || document.activeElement;
+    closeDrawers(false);
+    target?.classList.add('is-open');
+    target?.setAttribute('aria-hidden', 'false');
+    panel?.classList.add('drawer-open');
+    trigger?.setAttribute('aria-expanded', 'true');
+    if (drawer === 'history') renderHistory();
+    setTimeout(() => target?.querySelector('button, input')?.focus(), 0);
   }
 
   async function setMinimized(value) {
@@ -248,6 +267,21 @@
         else resolve(response || {});
       });
     });
+  }
+
+  async function sendMessageWithAck(message, attempts = 3) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await sendMessage(message);
+        if (response?.accepted || response?.ok) return response;
+        lastError = new Error('Background worker did not accept the detail message.');
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < attempts) await sleep(250 * attempt);
+    }
+    throw lastError || new Error('Background worker did not acknowledge the detail message.');
   }
 
   async function getCurrentState() {
@@ -547,24 +581,40 @@
       }
       const missing = [...new Set(records.flatMap((record, index) => missingFields(record, index)))];
       if (!allRecordsComplete(records)) throw new Error(`Order-detail data was incomplete after rendering. Missing: ${missing.join(', ') || 'unknown fields'}`);
-      await sendMessage({ type: 'TEMU_DETAIL_RESULT', records, missing: [] });
+      await sendMessageWithAck({ type: 'TEMU_DETAIL_RESULT', records, missing: [] });
     } catch (error) {
-      await sendMessage({ type: 'TEMU_DETAIL_ERROR', message: error?.message || String(error) });
+      try { await sendMessageWithAck({ type: 'TEMU_DETAIL_ERROR', message: error?.message || String(error) }); } catch (_) { /* worker timeout/recovery remains the final safeguard */ }
     }
   }
 
   function captureBulkRows() {
     const rows = [...document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]')];
+    const header = document.querySelector('tr[data-testid="beast-core-table-header-tr"]');
+    const headerCells = header ? [...header.querySelectorAll('th[data-testid="beast-core-table-th"], th')] : [];
+    const headers = headerCells.map(textOf).map(value => value.toLowerCase());
+    const indexOf = (patterns, fallback) => {
+      const index = headers.findIndex(headerText => patterns.some(pattern => headerText.includes(pattern)));
+      return index >= 0 ? index : fallback;
+    };
+    const indexes = {
+      orderNo: indexOf(['order details', 'order id'], 0),
+      packageId: indexOf(['package id', 'package'], 1),
+      trackingNumber: indexOf(['tracking number', 'tracking'], 8),
+      shippingCost: indexOf(['total shipping cost', 'shipping cost'], 7)
+    };
+    const seen = new Set();
     return rows.map((row, position) => {
       const cells = [...row.querySelectorAll('td[data-testid="beast-core-table-td"], td')];
-      return {
-        position,
-        orderNo: normalize(textOf(cells[0])),
-        packageId: normalize(textOf(cells[1])),
-        trackingNumber: normalize(textOf(cells[8])),
-        shippingCost: normalize(textOf(cells[7]))
-      };
-    }).filter(row => row.orderNo || row.packageId);
+      const orderNo = normalize(textOf(cells[indexes.orderNo]));
+      const packageId = normalize(textOf(cells[indexes.packageId]));
+      return { position, orderNo, packageId, trackingNumber: normalize(textOf(cells[indexes.trackingNumber])), shippingCost: normalize(textOf(cells[indexes.shippingCost])) };
+    }).filter(row => {
+      if (!row.orderNo || !row.packageId) return false;
+      const key = `${row.orderNo}::${row.packageId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   function log(message, type = 'info') {
@@ -608,7 +658,7 @@
     const detail = stats.total ? `${stats.done} of ${stats.total} orders processed` : 'Open a Temu bulk-shipping page to begin';
     const stateMessage = stats.status === 'running' ? 'Live extraction in progress' : stats.status === 'paused' ? 'Checkpoint saved — ready to resume' : stats.status === 'complete' ? 'Extraction complete — workbook ready' : 'Ready for a new extraction';
     const recoveryVisible = state.errors.length > 0 && stats.status !== 'running' && !stats.active;
-    if (progressBox) progressBox.textContent = `${stats.status} — ${stats.done}/${stats.total || 0} orders — ${stats.rows} product rows — ${stats.active} active — ${stats.failed} errors — ${stats.retried} retried`;
+    if (progressBox) progressBox.textContent = `${stats.status} — ${stats.done}/${stats.total || 0} orders — ${stats.rows} product rows — ${stats.active} active — ${stats.failed} errors — ${(state.warnings || []).length} warnings — ${stats.retried} retried`;
     if (statusChip) {
       statusChip.textContent = stats.status;
       statusChip.dataset.status = stats.status.toLowerCase();
@@ -680,10 +730,10 @@
         <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">II</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
         <div class="temu-exporter-recovery" data-role="recovery"><div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div><button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">↻</span><span>Retry failed</span></button></div>
         <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
-        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.8.0</span></div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.9.0</span></div>
       </div>
-      <aside class="temu-exporter-drawer" data-role="settings-drawer" aria-label="Settings"><div class="temu-exporter-drawer-head"><div><strong>Settings</strong><small>Personalize your workspace</small></div><button type="button" data-action="close-settings" aria-label="Close settings">×</button></div><div class="temu-exporter-setting-row"><div><strong>Save sheet history</strong><small>Keep the last 20 sessions locally</small></div><label class="temu-exporter-switch"><input type="checkbox" data-setting="saveHistory"><span></span></label></div><div class="temu-exporter-setting-row"><div><strong>Motion effects</strong><small>Use subtle neon status animations</small></div><label class="temu-exporter-switch"><input type="checkbox" data-setting="motion"><span></span></label></div><div class="temu-exporter-setting-note">Data stays in this browser. Nothing is uploaded.</div></aside>
-      <aside class="temu-exporter-drawer" data-role="history-drawer" aria-label="Sheet history"><div class="temu-exporter-drawer-head"><div><strong>Sheet history</strong><small>Last 20 exports stored locally</small></div><button type="button" data-action="close-history" aria-label="Close history">×</button></div><div class="temu-exporter-history-list" data-role="history-list"></div><button type="button" class="temu-exporter-clear-history" data-action="clear-history">Clear all history</button></aside>
+      <aside class="temu-exporter-drawer" data-role="settings-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Settings"><div class="temu-exporter-drawer-head"><div><strong>Settings</strong><small>Personalize your workspace</small></div><button type="button" class="temu-exporter-drawer-close" data-action="close-settings" aria-label="Close settings">×</button></div><div class="temu-exporter-setting-row"><div><strong>Save sheet history</strong><small>Keep the last 20 sessions locally</small></div><label class="temu-exporter-switch" for="temu-setting-history"><input id="temu-setting-history" type="checkbox" data-setting="saveHistory" aria-label="Save sheet history"><span></span></label></div><div class="temu-exporter-setting-row"><div><strong>Motion effects</strong><small>Use subtle neon status animations</small></div><label class="temu-exporter-switch" for="temu-setting-motion"><input id="temu-setting-motion" type="checkbox" data-setting="motion" aria-label="Motion effects"><span></span></label></div><div class="temu-exporter-setting-note">Data stays in this browser. Nothing is uploaded.</div></aside>
+      <aside class="temu-exporter-drawer" data-role="history-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Sheet history"><div class="temu-exporter-drawer-head"><div><strong>Sheet history</strong><small>Last 20 exports stored locally</small></div><button type="button" class="temu-exporter-drawer-close" data-action="close-history" aria-label="Close history">×</button></div><div class="temu-exporter-history-list" data-role="history-list" tabindex="0"></div><button type="button" class="temu-exporter-clear-history" data-action="clear-history">Clear all history</button></aside>
     `;
     document.documentElement.appendChild(panel);
     progressBox = panel.querySelector('[data-role="progress"]');
@@ -722,7 +772,8 @@
     buttons.download.addEventListener('click', async () => {
       await saveHistoryEntry();
       const records = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
-      downloadRecords(records, state.errors, `Downloaded ${records.length} records as an Excel workbook.`);
+      const statusRows = [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))];
+      downloadRecords(records, statusRows, `Downloaded ${records.length} records as an Excel workbook.`);
     });
     panel.querySelector('[data-action="history"]').addEventListener('click', () => toggleDrawer('history'));
     panel.querySelector('[data-action="settings"]').addEventListener('click', () => toggleDrawer('settings'));
@@ -736,6 +787,7 @@
     panel.querySelector('[data-action="close-settings"]').addEventListener('click', closeDrawers);
     panel.querySelector('[data-action="close-history"]').addEventListener('click', closeDrawers);
     panel.querySelector('[data-action="clear-history"]').addEventListener('click', clearHistory);
+    panel.addEventListener('keydown', event => { if (event.key === 'Escape' && panel.classList.contains('drawer-open')) closeDrawers(); });
     panel.querySelector('[data-role="history-list"]').addEventListener('click', event => {
       const actionButton = event.target.closest('[data-history-action]');
       const item = event.target.closest('[data-history-id]');
@@ -760,6 +812,10 @@
       if (message?.type === 'TEMU_STATE_UPDATE') {
         state = { ...defaultState(), ...(message.state || {}) };
         updatePanel();
+        (state.warnings || []).forEach((warning, index) => {
+          const key = warning.key || `${warning.type || 'warning'}:${index}:${warning.message}`;
+          if (!shownWarningKeys.has(key)) { shownWarningKeys.add(key); log(warning.message || 'Extraction warning.', 'warning'); }
+        });
         if (state.status === 'complete') {
           log(`Finished: ${state.records.length} records, ${state.errors.length} errors.`);
           saveHistoryEntry();
@@ -779,13 +835,15 @@
   async function startJob() {
     const rows = captureBulkRows();
     if (!rows.length) {
-      log('No rendered order rows found. Wait for the table and reload the page.', 'error');
+      const noData = /\bno data\b/i.test(textOf(document.body));
+      log(noData ? 'Bulk page has no loaded packages. Open Manage Orders, select orders, then choose Buy shipping in bulk.' : 'No valid rendered order rows found. Wait for the table and reload the page.', 'error');
       return;
     }
     const response = await sendMessage({ type: 'TEMU_START_JOB', sourceUrl: location.href, rows });
+    if (response?.ok === false) throw new Error(response.error || 'Could not start extraction.');
     state = { ...defaultState(), ...(response.state || {}) };
     updatePanel();
-    log(`Started ${rows.length} orders with two background detail tabs.`);
+    log(`Started ${rows.length} unique orders with two background detail tabs.`);
   }
 
   async function pauseJob() {

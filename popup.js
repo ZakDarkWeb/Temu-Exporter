@@ -15,7 +15,7 @@
   const $$ = selector => [...document.querySelectorAll(selector)];
 
   function defaultState() {
-    return { version: 7, runId: null, status: 'idle', sourceUrl: '', sourceTabId: null, rows: [], nextIndex: 0, retryQueue: [], inFlight: [], attempts: {}, records: [], errors: [], updatedAt: null };
+    return { version: 8, runId: null, status: 'idle', sourceUrl: '', sourceTabId: null, rows: [], nextIndex: 0, retryQueue: [], inFlight: [], attempts: {}, records: [], errors: [], warnings: [], updatedAt: null, completedAt: null };
   }
 
   function send(message) {
@@ -37,13 +37,14 @@
   function stats() {
     const total = state.rows.length;
     const done = new Set(state.records.map(record => record.__key || `${record['Order No'] || ''}::${record['Tracking Number'] || ''}`)).size;
-    return { total, done, rows: state.records.length, active: state.inFlight.length, errors: state.errors.length, percent: total ? Math.min(100, Math.round((done / total) * 100)) : 0 };
+    return { total, done, rows: state.records.length, active: state.inFlight.length, errors: state.errors.length, warnings: (state.warnings || []).length, percent: total ? Math.min(100, Math.round((done / total) * 100)) : 0 };
   }
 
   function statusCopy() {
     if (state.status === 'running') return ['Running', 'Live extraction is in progress.'];
     if (state.status === 'paused') return ['Paused', 'Checkpoint saved and ready to resume.'];
     if (state.status === 'complete' && state.errors.length) return ['Complete with errors', 'Successful records are ready; failed orders can be retried.'];
+    if (state.status === 'complete' && (state.warnings || []).length) return ['Complete with notes', 'Workbook is ready; review parser notes in the status sheet.'];
     if (state.status === 'complete') return ['Complete', 'Workbook is ready for download.'];
     return ['Ready', 'Open the bulk-shipping page to begin.'];
   }
@@ -52,6 +53,7 @@
     const path = activeTab?.url ? (() => { try { return new URL(activeTab.url).pathname; } catch (_) { return ''; } })() : '';
     const page = $('[data-role="page-context"]');
     const text = $('[data-role="page-text"]');
+    if (!page || !text) return;
     page.classList.remove('is-ready', 'is-wrong');
     if (path === '/buy-shipping-bulk-details.html') {
       page.classList.add('is-ready');
@@ -89,7 +91,7 @@
     chip.dataset.status = statusKey;
     card.dataset.status = state.status;
     $('[data-role="progress-fill"]').style.width = `${data.percent}%`;
-    $('[data-role="progress-text"]').textContent = `${data.done} of ${data.total} orders · ${data.rows} rows`;
+    $('[data-role="progress-text"]').textContent = `${data.done} of ${data.total} orders · ${data.rows} rows · ${data.errors} errors · ${data.warnings} notes`;
     $('[data-role="progress-percent"]').textContent = `${data.percent}%`;
     $('[data-metric="orders"]').textContent = `${data.done}/${data.total || 0}`;
     $('[data-metric="rows"]').textContent = String(data.rows);
@@ -132,7 +134,7 @@
       list.innerHTML = '<div class="to-popup-empty">No saved sheets yet.</div>';
       return;
     }
-    list.innerHTML = historyEntries.slice(0, 3).map((entry, index) => `<div class="to-popup-history-item"><div><strong>${historyDate(entry.createdAt)}</strong><small>${entry.orders} orders · ${entry.rows} rows · ${entry.errors} errors</small></div><button type="button" data-history-index="${index}" title="Download this sheet" aria-label="Download this sheet">↓</button></div>`).join('');
+    list.innerHTML = historyEntries.slice(0, 3).map((entry, index) => `<div class="to-popup-history-item"><div><strong>${historyDate(entry.createdAt)}</strong><small>${entry.orders} orders · ${entry.rows} rows · ${entry.errors || 0} errors · ${entry.warnings || 0} notes</small></div><button type="button" data-history-index="${index}" title="Download this sheet" aria-label="Download this sheet">↓</button></div>`).join('');
   }
 
   async function loadHistory() {
@@ -199,7 +201,7 @@
   async function retryFailed() { if (!state.errors.length) return; await send({ type: 'TEMU_RETRY_FAILED' }); await refresh(); }
   async function stopJob() { await send({ type: 'TEMU_STOP_JOB' }); await refresh(); }
   function download(records, errors) { window.TemuXlsx.downloadWorkbook((records || []).map(cleanRecord), errors || []); }
-  function downloadCurrent() { download(state.records, state.errors); }
+  function downloadCurrent() { download(state.records, [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))]); }
   function openHistoryDrawer() { sendToActiveContent({ type: 'TEMU_OPEN_HISTORY' }).then(sent => { if (sent) window.close(); }); }
 
   document.addEventListener('click', event => {
@@ -214,7 +216,7 @@
     const historyButton = event.target.closest('[data-history-index]');
     if (historyButton) {
       const entry = historyEntries[Number(historyButton.dataset.historyIndex)];
-      if (entry) download(entry.records, entry.errorsData);
+      if (entry) download(entry.records, entry.errorsData || []);
     }
   });
 

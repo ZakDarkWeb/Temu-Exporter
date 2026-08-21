@@ -14,7 +14,7 @@ assert ws['B2'].value == 'Aug 19, 2026'
 assert ws['G2'].value == 1 and ws['G2'].data_type == 'n' and ws['G2'].number_format == '0'
 assert ws['H2'].value == 16.02 and ws['H2'].data_type == 'n'
 assert ws['I2'].value == 6.24 and ws['I2'].data_type == 'n'
-assert ws['D2'].value == ws['D3'].value == 'PO-211-01861395087993272'
+assert ws['D2'].value == ws['D3'].value and str(ws['D2'].value).startswith('PO-')
 assert ws['F3'].value == 'TaylorMade Blue Ink SpeedSoft Golf Balls'
 assert ws['G3'].value == 1 and ws['G3'].number_format == '0'
 assert ws['H3'].value is None and ws['I3'].value is None

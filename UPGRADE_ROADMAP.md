@@ -119,11 +119,11 @@ All animation classes should be disabled by the existing Motion Effects setting 
 
 ### v2.8 — Command center and recovery
 
-Implemented in v2.8.0: the popup, page detector, status/progress view, quick actions, recent history summary, Retry failed only, and the three-stage in-page/popup pipeline are now available. The worker invariants remain preserved, and focused popup and retry queue fixtures pass.
+The v2.8 command center and recovery foundation remain preserved as the compatibility baseline.
 
-### v2.9 — Workflow intelligence
+### v2.9 — Workflow intelligence and reliability hardening
 
-After a fresh signed-in DOM inspection, add selected-order mode, deduplication, optional pagination scanning, batch labels, export filename templates, and a diagnostics drawer. These features should be validated against the actual current Temu table rather than inferred from old fixtures.
+Implemented in v2.9.0: current signed-in DOM validation, header-aware bulk row capture, stable order/package deduplication, actionable no-data guidance, strict detail payload validation, persisted warning diagnostics, serialized checkpoint commits, attempt-token protection, cancellable timeouts, service-worker wake alarms, orphan-tab reconciliation, popup overflow/focus improvements, and refreshed live-fixture regression coverage. Optional pagination scanning, filename templates, and a larger searchable history remain future work because they require separate product decisions and further live DOM validation.
 
 ### v3.0 — Scale and polish
 
@@ -135,4 +135,4 @@ The following are already the strongest parts of the extension and should remain
 
 ## Proposed next step
 
-The safest next implementation is **v2.9 Workflow Intelligence**: selected-order mode, stable identifier deduplication, optional pagination scanning after a fresh signed-in DOM inspection, batch labels, export filename templates, and a diagnostics drawer. The current v2.8 release intentionally leaves pagination and DOM virtualization unchanged because those behaviors require live Temu validation before they can be implemented safely.
+The safest next implementation is **v3.0 Scale and productivity**: IndexedDB-backed history, searchable error filters, optional completion notifications, export filename templates, and carefully validated pagination support. The v2.9 release intentionally leaves automatic pagination scanning and cloud sync unchanged because those behaviors need separate UX/privacy decisions and additional live Temu validation.

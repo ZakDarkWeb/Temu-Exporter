@@ -1,23 +1,36 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Exporter",
-  "version": "2.8.0",
-  "description": "Fast, resilient Temu Seller order extraction with native Excel XLSX export.",
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://seller.temu.com/*"],
+  "version": "2.9.0",
+  "description": "Reliable local Temu Seller order extraction with recovery, diagnostics, and native Excel XLSX export.",
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://seller.temu.com/*"
+  ],
   "background": {
     "service_worker": "worker.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://seller.temu.com/*"],
-      "css": ["content.css"],
-      "js": ["xlsx.js", "content.js"],
+      "matches": [
+        "https://seller.temu.com/*"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "js": [
+        "xlsx.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "Temu Order Exporter 2.8",
+    "default_title": "Temu Order Exporter 2.9",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

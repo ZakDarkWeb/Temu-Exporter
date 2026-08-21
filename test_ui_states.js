@@ -11,13 +11,13 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-assert(manifest.version === '2.8.0', 'manifest version is not 2.8.0');
+assert(manifest.version === '2.9.0', 'manifest version is not 2.9.0');
 assert(content.includes('data-action="settings"') && content.includes('data-action="history"'), 'drawer controls missing');
-assert(content.includes('aria-expanded="false"'), 'drawer accessibility state missing');
+assert(content.includes('aria-expanded="false"') && content.includes('aria-hidden="true"'), 'drawer accessibility state missing');
 assert(content.includes('setAttribute(\'aria-expanded\', \'true\')'), 'drawer open state is not exposed');
 assert(css.includes('contain: layout paint'), 'panel containment missing');
-assert(css.includes('@keyframes temu-exporter-panel-enter'), 'panel enter animation missing');
-assert(css.includes('@keyframes temu-exporter-drawer-enter'), 'drawer animation missing');
+assert(css.includes('@keyframes zhPanelIn'), 'panel enter animation missing');
+assert(css.includes('@keyframes zhDrawerEnter') && css.includes('.temu-exporter-drawer-close'), 'drawer animation/close style missing');
 assert(css.includes(':active'), 'active button interaction missing');
 assert(css.includes(':focus-visible'), 'keyboard focus state missing');
 assert(css.includes('@media (prefers-reduced-motion: reduce)'), 'reduced-motion fallback missing');
