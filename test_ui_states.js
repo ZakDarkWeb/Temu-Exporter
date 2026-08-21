@@ -11,7 +11,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-assert(manifest.version === '2.7.0', 'manifest version is not 2.7.0');
+assert(manifest.version === '2.8.0', 'manifest version is not 2.8.0');
 assert(content.includes('data-action="settings"') && content.includes('data-action="history"'), 'drawer controls missing');
 assert(content.includes('aria-expanded="false"'), 'drawer accessibility state missing');
 assert(content.includes('setAttribute(\'aria-expanded\', \'true\')'), 'drawer open state is not exposed');

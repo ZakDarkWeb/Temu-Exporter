@@ -214,6 +214,32 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  // Ripple effect: injects an animated span on button click
+  function addRipple(button) {
+    button.addEventListener('click', function(event) {
+      const rect = button.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height);
+      const ripple = document.createElement('span');
+      ripple.className = 'temu-ripple';
+      ripple.style.cssText = `width:${size}px;height:${size}px;left:${event.clientX - rect.left - size / 2}px;top:${event.clientY - rect.top - size / 2}px`;
+      button.appendChild(ripple);
+      ripple.addEventListener('animationend', () => ripple.remove(), { once: true });
+    });
+  }
+
+  // Metric bump: scale-flash animation when value changes
+  const _prevMetricValues = {};
+  function bumpMetric(element, key, value) {
+    if (!element) return;
+    const str = String(value);
+    if (_prevMetricValues[key] === str) return;
+    _prevMetricValues[key] = str;
+    element.classList.remove('temu-metric-bump');
+    void element.offsetWidth; // reflow to restart animation
+    element.classList.add('temu-metric-bump');
+    element.addEventListener('animationend', () => element.classList.remove('temu-metric-bump'), { once: true });
+  }
+
   function sendMessage(message) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(message, response => {
@@ -323,6 +349,31 @@
     return match?.[1] || new URL(location.href).searchParams.get('parent_order_sn') || '';
   }
 
+  function extractRecipientNameFromDom() {
+    // Walk all label-like divs looking for one whose visible text starts with "Recipient name"
+    // The page structure is: div._3XfPagy1 > div._2t_pUr4h ("Recipient name") + div._2-2LmK96 (value)
+    for (const el of document.querySelectorAll('div,span')) {
+      const text = normalize(el.innerText || el.textContent || '');
+      if (text !== 'Recipient name') continue;
+      // Try nextElementSibling first (fastest path)
+      const sibling = el.nextElementSibling;
+      if (sibling) {
+        const val = normalize(sibling.innerText || sibling.textContent || '');
+        if (val && val !== 'Recipient name') return val;
+      }
+      // Also check parent's children
+      const parent = el.parentElement;
+      if (parent) {
+        for (const child of parent.children) {
+          if (child === el) continue;
+          const val = normalize(child.innerText || child.textContent || '');
+          if (val && val !== 'Recipient name') return val;
+        }
+      }
+    }
+    return '';
+  }
+
   function parseDetailRecordsFromDom(active) {
     const packageRoot = findPackageContainer(active?.packageId || '');
     const products = parseProductsFromDom();
@@ -335,7 +386,7 @@
       'Order Date': dateOnly(findSiblingValue('Purchase date') || valueAfterLabel('Purchase date', document, /^(.*?)(?=\s+Shipping service\b|$)/i)),
       'Tracking Number': valueAfterLabel('Tracking number', packageRoot, TRACKING_RE) || '',
       'Order No': parseOrderNumberFromDom() || active?.orderNo || '',
-      'Customer Name': findSiblingValue('Recipient name')
+      'Customer Name': findSiblingValue('Recipient name') || extractRecipientNameFromDom()
     };
     return products.map((product, index) => ({
       ...common,
@@ -438,7 +489,15 @@
         'Order Date': dateOnly(parent.localParentOrderTimeStr || ''),
         'Tracking Number': trackingNumber,
         'Order No': normalize(orderNo),
-        'Customer Name': normalize(shipping.receiptName || ''),
+        'Customer Name': normalize(
+          shipping.receiptName ||
+          shipping.receiverName ||
+          shipping.consigneeName ||
+          shipping.buyerName ||
+          shipping.receiveName ||
+          store.shippingInfo?.name ||
+          ''
+        ) || extractRecipientNameFromDom(),
         'Product Details': cleanProductTitle(productName),
         'Qty (No)': order.quantity ?? order.fulfillmentQuantity ?? order.originQuantity ?? '',
         'Est. Revenue': index === 0 ? (parentRevenue || normalize(order.estimatedIncome || '')) : '',
@@ -558,10 +617,10 @@
     if (statusDetail) statusDetail.textContent = detail;
     if (progressFill) progressFill.style.width = `${stats.percent}%`;
     if (progressPercent) progressPercent.textContent = `${stats.percent}%`;
-    if (metrics.orders) metrics.orders.textContent = `${stats.done}/${stats.total || 0}`;
-    if (metrics.rows) metrics.rows.textContent = String(stats.rows);
-    if (metrics.errors) metrics.errors.textContent = String(stats.failed);
-    if (metrics.active) metrics.active.textContent = String(stats.active);
+    if (metrics.orders) { const v = `${stats.done}/${stats.total || 0}`; if (metrics.orders.textContent !== v) { metrics.orders.textContent = v; bumpMetric(metrics.orders, 'orders', v); } }
+    if (metrics.rows) { const v = String(stats.rows); if (metrics.rows.textContent !== v) { metrics.rows.textContent = v; bumpMetric(metrics.rows, 'rows', v); } }
+    if (metrics.errors) { const v = String(stats.failed); if (metrics.errors.textContent !== v) { metrics.errors.textContent = v; bumpMetric(metrics.errors, 'errors', v); } }
+    if (metrics.active) { const v = String(stats.active); if (metrics.active.textContent !== v) { metrics.active.textContent = v; bumpMetric(metrics.active, 'active', v); } }
     Object.entries(pipelineStages).forEach(([stage, element]) => {
       element.dataset.stage = pipelineState(stage, stats);
     });
@@ -575,7 +634,7 @@
     panel.dataset.status = stats.status.toLowerCase();
     const minimizeButton = panel.querySelector('[data-action="minimize"]');
     if (minimizeButton) {
-      minimizeButton.textContent = uiPrefs.minimized ? '+' : '−';
+      minimizeButton.textContent = uiPrefs.minimized ? '↗' : '−';
       minimizeButton.title = uiPrefs.minimized ? 'Expand panel' : 'Minimize panel';
       minimizeButton.setAttribute('aria-label', uiPrefs.minimized ? 'Expand panel' : 'Minimize panel');
     }
@@ -605,6 +664,7 @@
           <div class="temu-exporter-progress-track" aria-label="Extraction progress"><span data-role="progress-fill"></span></div>
           <div class="temu-exporter-progress-meta"><span data-role="progress"></span><strong data-role="progress-percent">0%</strong></div>
         </div>
+        <div class="temu-exporter-divider">Pipeline</div>
         <div class="temu-exporter-pipeline" data-role="pipeline" aria-label="Extraction pipeline">
           <div class="temu-exporter-pipeline-stage" data-pipeline-stage="capture"><span class="temu-exporter-pipeline-number">1</span><div><strong>Capture rows</strong><small>Bulk page</small></div></div>
           <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
@@ -612,10 +672,12 @@
           <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
           <div class="temu-exporter-pipeline-stage" data-pipeline-stage="workbook"><span class="temu-exporter-pipeline-number">3</span><div><strong>Build XLSX</strong><small>Local file</small></div></div>
         </div>
+        <div class="temu-exporter-divider">Statistics</div>
         <div class="temu-exporter-metrics" aria-label="Extraction statistics">
           <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon orders" aria-hidden="true">↗</span><div><strong data-metric="orders">0/0</strong><small>Orders</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon rows" aria-hidden="true">▦</span><div><strong data-metric="rows">0</strong><small>Product rows</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon active" aria-hidden="true">◌</span><div><strong data-metric="active">0</strong><small>Active tabs</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon errors" aria-hidden="true">!</span><div><strong data-metric="errors">0</strong><small>Errors</small></div></div>
         </div>
-        <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">Ⅱ</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
+        <div class="temu-exporter-divider">Actions</div>
+        <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">II</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
         <div class="temu-exporter-recovery" data-role="recovery"><div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div><button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">↻</span><span>Retry failed</span></button></div>
         <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
         <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.8.0</span></div>
@@ -651,6 +713,8 @@
       details: panel.querySelector('[data-pipeline-stage="details"]'),
       workbook: panel.querySelector('[data-pipeline-stage="workbook"]')
     };
+    // Wire ripple to all action buttons
+    Object.values(buttons).forEach(btn => { if (btn) addRipple(btn); });
     buttons.start.addEventListener('click', startJob);
     buttons.pause.addEventListener('click', pauseJob);
     buttons.stop.addEventListener('click', stopJob);
@@ -663,6 +727,12 @@
     panel.querySelector('[data-action="history"]').addEventListener('click', () => toggleDrawer('history'));
     panel.querySelector('[data-action="settings"]').addEventListener('click', () => toggleDrawer('settings'));
     panel.querySelector('[data-action="minimize"]').addEventListener('click', () => setMinimized(!uiPrefs.minimized));
+    // Click anywhere on FAB when minimized → expand
+    panel.addEventListener('click', (event) => {
+      if (uiPrefs.minimized && !event.target.closest('[data-action]')) {
+        setMinimized(false);
+      }
+    });
     panel.querySelector('[data-action="close-settings"]').addEventListener('click', closeDrawers);
     panel.querySelector('[data-action="close-history"]').addEventListener('click', closeDrawers);
     panel.querySelector('[data-action="clear-history"]').addEventListener('click', clearHistory);
@@ -727,10 +797,11 @@
 
   async function retryFailedJob() {
     if (!state.errors.length || state.status === 'running' || state.inFlight.length) return;
+    const failedCount = state.errors.length; // capture before state is reset by response
     const response = await sendMessage({ type: 'TEMU_RETRY_FAILED' });
     state = { ...defaultState(), ...(response.state || {}) };
     updatePanel();
-    log(`Retrying ${state.rows.length ? 'failed' : 'available'} orders with a fresh attempt budget.`);
+    log(`Retrying ${failedCount} failed order${failedCount === 1 ? '' : 's'} with a fresh attempt budget.`);
   }
 
   async function stopJob() {
