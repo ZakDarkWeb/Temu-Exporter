@@ -757,8 +757,7 @@
       <div class="temu-exporter-header">
         <div class="temu-exporter-brand"><div class="temu-exporter-logo" aria-hidden="true"><span>TO</span></div><div class="temu-exporter-brand-copy"><strong>Temu Order Exporter</strong><small>Seller workflow assistant</small></div></div>
         <div class="temu-exporter-toolbar">
-          <button type="button" data-action="history" title="Sheet history" aria-label="Open sheet history" aria-expanded="false">▤</button>
-          <button type="button" data-action="settings" title="Settings" aria-label="Open settings" aria-expanded="false">⚙</button>
+          <button type="button" class="temu-exporter-tools-button" data-action="tools" title="History & Tools" aria-label="Open History and Tools"><span aria-hidden="true">☷</span><small>Tools</small></button>
           <button type="button" data-action="minimize" title="Minimize panel" aria-label="Minimize panel">−</button>
         </div>
       </div>
@@ -784,10 +783,8 @@
         <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">II</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
         <div class="temu-exporter-recovery" data-role="recovery"><div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div><button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">↻</span><span>Retry failed</span></button></div>
         <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
-        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v3.0.0</span></div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v3.1.0</span></div>
       </div>
-      <aside class="temu-exporter-drawer" data-role="settings-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Settings"><div class="temu-exporter-drawer-head"><div><strong>Settings</strong><small>Personalize your workspace</small></div><button type="button" class="temu-exporter-drawer-close" data-action="close-settings" aria-label="Close settings">×</button></div><div class="temu-exporter-setting-row"><div><strong>Save sheet history</strong><small>Keep the last 20 sessions locally</small></div><label class="temu-exporter-switch" for="temu-setting-history"><input id="temu-setting-history" type="checkbox" data-setting="saveHistory" aria-label="Save sheet history"><span></span></label></div><div class="temu-exporter-setting-row"><div><strong>Motion effects</strong><small>Use subtle neon status animations</small></div><label class="temu-exporter-switch" for="temu-setting-motion"><input id="temu-setting-motion" type="checkbox" data-setting="motion" aria-label="Motion effects"><span></span></label></div><div class="temu-exporter-setting-note">Data stays in this browser. Nothing is uploaded.</div></aside>
-      <aside class="temu-exporter-drawer" data-role="history-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Sheet history"><div class="temu-exporter-drawer-head"><div><strong>Sheet history</strong><small>Last 20 exports stored locally</small></div><button type="button" class="temu-exporter-drawer-close" data-action="close-history" aria-label="Close history">×</button></div><div class="temu-exporter-history-list" data-role="history-list" tabindex="0"></div><button type="button" class="temu-exporter-clear-history" data-action="clear-history">Clear all history</button></aside>
     `;
     document.documentElement.appendChild(panel);
     progressBox = panel.querySelector('[data-role="progress"]');
@@ -829,8 +826,7 @@
       const statusRows = [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))];
       downloadRecords(records, statusRows, `Downloaded ${records.length} records as an Excel workbook.`);
     });
-    panel.querySelector('[data-action="history"]').addEventListener('click', () => toggleDrawer('history'));
-    panel.querySelector('[data-action="settings"]').addEventListener('click', () => toggleDrawer('settings'));
+    panel.querySelector('[data-action="tools"]').addEventListener('click', openToolsPage);
     panel.querySelector('[data-action="minimize"]').addEventListener('click', () => setMinimized(!uiPrefs.minimized));
     // Click anywhere on FAB when minimized → expand
     panel.addEventListener('click', (event) => {
@@ -838,27 +834,12 @@
         setMinimized(false);
       }
     });
-    panel.querySelector('[data-action="close-settings"]').addEventListener('click', closeDrawers);
-    panel.querySelector('[data-action="close-history"]').addEventListener('click', closeDrawers);
-    panel.querySelector('[data-action="clear-history"]').addEventListener('click', clearHistory);
-    panel.addEventListener('keydown', handleDrawerKeydown);
-    panel.querySelector('[data-role="history-list"]').addEventListener('click', event => {
-      const actionButton = event.target.closest('[data-history-action]');
-      const item = event.target.closest('[data-history-id]');
-      if (!actionButton || !item) return;
-      const entry = historyEntries.find(candidate => candidate.id.replace(/[^a-zA-Z0-9_-]/g, '') === item.dataset.historyId);
-      if (!entry) return;
-      if (actionButton.dataset.historyAction === 'download') downloadRecords(entry.records, entry.errorsData, 'Downloaded the selected historical workbook.');
-      if (actionButton.dataset.historyAction === 'delete') deleteHistoryEntry(entry.id);
-    });
     panel.querySelectorAll('[data-setting]').forEach(input => input.addEventListener('change', async event => {
       uiPrefs[event.target.dataset.setting] = event.target.checked;
       panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
       await saveUiPrefs();
       log(`${event.target.dataset.setting === 'motion' ? 'Motion effects' : 'Sheet history'} ${event.target.checked ? 'enabled' : 'disabled'}.`);
     }));
-    panel.querySelector('[data-setting="saveHistory"]').checked = uiPrefs.saveHistory;
-    panel.querySelector('[data-setting="motion"]').checked = uiPrefs.motion;
     panel.classList.toggle('is-minimized', uiPrefs.minimized);
     panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
     renderHistory();
@@ -879,11 +860,17 @@
       } else if (message?.type === 'TEMU_OPEN_PANEL') {
         setMinimized(false);
       } else if (message?.type === 'TEMU_OPEN_HISTORY') {
-        setMinimized(false);
-        toggleDrawer('history');
+        openToolsPage();
       }
     });
     updatePanel();
+  }
+
+  async function openToolsPage() {
+    try {
+      const response = await sendMessage({ type: 'TEMU_OPEN_TOOLS' });
+      if (!response?.ok) log(response?.error || 'Could not open History & Tools.', 'error');
+    } catch (error) { log(error?.message || 'Could not open History & Tools.', 'error'); }
   }
 
   async function startJob() {

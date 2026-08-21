@@ -804,3 +804,62 @@
 }
 
 #temu-order-exporter-panel .temu-exporter-metric-icon.notes { color: var(--zh-yellow); border-color: var(--zh-yellow-bd); background: var(--zh-yellow-soft); }
+
+/* ═══════════════════════════════════════════════════════════════
+   v3.1 POPUP-FREE COMPACT CARD
+   The card is the primary extraction surface; secondary workflows live
+   on tools.html in a separate browser tab.
+   ═══════════════════════════════════════════════════════════════ */
+#temu-order-exporter-panel {
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(580px, calc(100vh - 24px));
+  animation: none !important;
+}
+#temu-order-exporter-panel .temu-exporter-header { height: 58px; min-height: 58px; padding-inline: 13px; }
+#temu-order-exporter-panel .temu-exporter-logo { width: 34px; height: 34px; flex-basis: 34px; border-radius: 10px; animation: none !important; }
+#temu-order-exporter-panel .temu-exporter-logo::before,
+#temu-order-exporter-panel .temu-exporter-logo::after,
+#temu-order-exporter-panel .temu-exporter-status-orbit::before,
+#temu-order-exporter-panel .temu-exporter-live-dot::before { animation: none !important; }
+#temu-order-exporter-panel .temu-exporter-brand-copy strong { font-size: 13px; }
+#temu-order-exporter-panel .temu-exporter-brand-copy small { font-size: 8px; }
+#temu-order-exporter-panel .temu-exporter-toolbar { gap: 5px; }
+#temu-order-exporter-panel .temu-exporter-toolbar button.temu-exporter-tools-button {
+  display: inline-flex; width: auto; min-width: 58px; height: 30px; align-items: center; justify-content: center; gap: 4px;
+  padding: 0 8px; border-radius: 8px; font-size: 12px; letter-spacing: .02em;
+}
+#temu-order-exporter-panel .temu-exporter-tools-button small { color: var(--zh-tx2); font-size: 8px; font-weight: 800; }
+#temu-order-exporter-panel .temu-exporter-body { max-height: calc(100vh - 82px); padding: 11px 12px 12px; }
+#temu-order-exporter-panel .temu-exporter-status-card { padding: 11px 12px; border-radius: 12px; }
+#temu-order-exporter-panel .temu-exporter-status-copy strong { font-size: 12px; }
+#temu-order-exporter-panel .temu-exporter-status-copy span { font-size: 9px; }
+#temu-order-exporter-panel .temu-exporter-progress-track { margin-top: 11px; }
+#temu-order-exporter-panel .temu-exporter-progress-meta { margin-top: 6px; font-size: 8.5px; }
+#temu-order-exporter-panel .temu-exporter-divider { margin: 9px 0 4px; font-size: 7px; }
+#temu-order-exporter-panel .temu-exporter-pipeline { gap: 4px; }
+#temu-order-exporter-panel .temu-exporter-pipeline-stage { padding: 7px 4px; border-radius: 8px; }
+#temu-order-exporter-panel .temu-exporter-pipeline-stage strong { font-size: 8.5px; }
+#temu-order-exporter-panel .temu-exporter-pipeline-stage small { font-size: 7.5px; }
+#temu-order-exporter-panel .temu-exporter-metrics { gap: 6px; margin-top: 7px; }
+#temu-order-exporter-panel .temu-exporter-metric { padding: 8px 3px; border-radius: 8px; }
+#temu-order-exporter-panel .temu-exporter-metric strong { font-size: 12px; }
+#temu-order-exporter-panel .temu-exporter-metric small { font-size: 7px; }
+#temu-order-exporter-panel .temu-exporter-actions { gap: 6px; margin-top: 9px; }
+#temu-order-exporter-panel .temu-exporter-actions button { min-height: 36px; border-radius: 9px; font-size: 10px; }
+#temu-order-exporter-panel .temu-exporter-actions button.primary,
+#temu-order-exporter-panel .temu-exporter-actions button.download { min-height: 38px; }
+#temu-order-exporter-panel .temu-exporter-log-wrap { margin-top: 8px; }
+#temu-order-exporter-panel .temu-exporter-log { max-height: 70px; font-size: 8px; }
+#temu-order-exporter-panel .temu-exporter-footer { min-height: 30px; padding: 7px 12px; font-size: 7.5px; }
+#temu-order-exporter-panel .temu-exporter-drawer { display: none !important; }
+#temu-order-exporter-panel .temu-exporter-recovery.is-visible { max-height: 90px; padding-top: 8px; padding-bottom: 8px; }
+#temu-order-exporter-panel .temu-exporter-recovery strong { font-size: 9px; }
+#temu-order-exporter-panel .temu-exporter-recovery small { font-size: 8px; }
+@media (max-width: 560px) {
+  #temu-order-exporter-panel { right: 12px; bottom: 12px; width: min(360px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
+}
+@media (max-width: 360px) {
+  #temu-order-exporter-panel { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
+  #temu-order-exporter-panel .temu-exporter-tools-button { min-width: 54px; padding-inline: 6px; }
+  #temu-order-exporter-panel .temu-exporter-tools-button small { display: none; }
+}

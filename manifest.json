@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Exporter",
-  "version": "3.0.0",
-  "description": "Polished local Temu Seller order extraction with resilient recovery, diagnostics, and accessible responsive UI.",
+  "version": "3.1.0",
+  "description": "Stable popup-free Temu Seller extraction with a compact in-page card and dedicated History & Tools workspace.",
   "permissions": [
     "alarms",
     "storage",
@@ -30,8 +30,7 @@
     }
   ],
   "action": {
-    "default_title": "Temu Order Exporter 3.0",
-    "default_popup": "popup.html",
+    "default_title": "Open Temu Exporter panel",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

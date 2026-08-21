@@ -493,6 +493,19 @@ async function pump(inputState = null, expectedRunId = null) {
   }
 }
 
+if (chrome.action?.onClicked?.addListener) {
+  chrome.action.onClicked.addListener(async tab => {
+    try {
+      if (tab?.id && tab.url?.startsWith(SELLER_ORIGIN) && new URL(tab.url).pathname === BULK_PATH) {
+        chrome.tabs.sendMessage(tab.id, { type: 'TEMU_OPEN_PANEL' }, () => { void chrome.runtime.lastError; });
+        return;
+      }
+      if (tab?.id) await chrome.tabs.update(tab.id, { url: `${SELLER_ORIGIN}${BULK_PATH}` });
+      else await chrome.tabs.create({ url: `${SELLER_ORIGIN}${BULK_PATH}` });
+    } catch (_) { /* user can reopen the bulk page manually if a tab is unavailable */ }
+  });
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (closingTabs.has(tabId)) return;
   const entry = await findTrackedEntry(tabId);
@@ -520,6 +533,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     else if (message?.type === 'TEMU_RESUME_JOB') sendResponse({ ok: true, state: await resumeJob(sender) });
     else if (message?.type === 'TEMU_STOP_JOB') sendResponse({ ok: true, state: await stopJob() });
     else if (message?.type === 'TEMU_GET_STATE') sendResponse({ ok: true, state: await getState() });
+    else if (message?.type === 'TEMU_OPEN_PANEL') {
+      const current = await getState();
+      if (current.sourceTabId) {
+        try { await chrome.tabs.sendMessage(current.sourceTabId, { type: 'TEMU_OPEN_PANEL' }); sendResponse({ ok: true }); }
+        catch (_) { sendResponse({ ok: false, error: 'Open the Temu bulk page to resume the panel.' }); }
+      } else sendResponse({ ok: false, error: 'Open the Temu bulk page to resume the panel.' });
+    }
+    else if (message?.type === 'TEMU_OPEN_TOOLS') {
+      try { await chrome.tabs.create({ url: chrome.runtime.getURL('tools.html') }); sendResponse({ ok: true }); }
+      catch (_) { sendResponse({ ok: false, error: 'Could not open History & Tools.' }); }
+    }
+    else if (message?.type === 'TEMU_UI_PREFS_UPDATE') sendResponse({ ok: true });
     else if (message?.type === 'TEMU_DETAIL_RESULT' && sender.tab?.id) {
       const entry = await findTrackedEntry(sender.tab.id);
       if (entry) await handleSuccess(entry, message.records || message.record, message.missing || []);

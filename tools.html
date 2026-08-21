@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Temu Exporter 3.1 — History &amp; Tools</title>
+  <link rel="stylesheet" href="tools.css">
+</head>
+<body>
+  <main class="tools-shell">
+    <header class="tools-header">
+      <div class="tools-brand"><span class="tools-logo" aria-hidden="true">TO</span><div><strong>Temu Order Exporter</strong><small>History &amp; Tools</small></div></div>
+      <div class="tools-header-actions"><span class="tools-local"><i></i> Local-only</span><button type="button" data-action="open-bulk">Open bulk page</button></div>
+    </header>
+
+    <section class="tools-hero" aria-labelledby="tools-title">
+      <div><span class="tools-eyebrow">WORKSPACE</span><h1 id="tools-title">History &amp; Tools</h1><p>Review previous workbooks, inspect extraction diagnostics, and manage local settings without crowding the Temu card.</p></div>
+      <button type="button" class="tools-refresh" data-action="refresh" aria-label="Refresh tools page">↻ <span>Refresh</span></button>
+    </section>
+
+    <section class="tools-status-grid" aria-label="Current extraction summary">
+      <article class="tools-status-card tools-status-main"><span class="tools-card-label">CURRENT BATCH</span><strong data-role="status">Ready</strong><small data-role="status-detail">Open the bulk-shipping page to begin.</small><div class="tools-progress"><span data-role="progress-fill"></span></div><div class="tools-progress-meta"><span data-role="progress-text">0 of 0 orders</span><b data-role="progress-percent">0%</b></div></article>
+      <article class="tools-stat"><span class="tools-stat-icon orders">↗</span><strong data-stat="orders">0/0</strong><small>Orders</small></article>
+      <article class="tools-stat"><span class="tools-stat-icon rows">▦</span><strong data-stat="rows">0</strong><small>Product rows</small></article>
+      <article class="tools-stat"><span class="tools-stat-icon errors">!</span><strong data-stat="errors">0</strong><small>Errors</small></article>
+      <article class="tools-stat"><span class="tools-stat-icon notes">i</span><strong data-stat="warnings">0</strong><small>Notes</small></article>
+    </section>
+
+    <section class="tools-actions" aria-label="Batch actions">
+      <button type="button" class="primary" data-action="resume">Resume / open panel</button>
+      <button type="button" class="secondary" data-action="retry">Retry failed</button>
+      <button type="button" class="secondary" data-action="download-current">Download current workbook</button>
+      <button type="button" class="danger" data-action="stop">Stop and clear batch</button>
+    </section>
+
+    <section class="tools-columns">
+      <article class="tools-panel">
+        <div class="tools-panel-head"><div><span class="tools-eyebrow">LOCAL ARCHIVE</span><h2>Recent sheets</h2></div><button type="button" class="text-button" data-action="clear-history">Clear all</button></div>
+        <div class="tools-history" data-role="history-list" aria-live="polite"></div>
+      </article>
+      <article class="tools-panel">
+        <div class="tools-panel-head"><div><span class="tools-eyebrow">OBSERVABILITY</span><h2>Diagnostics</h2></div><span class="tools-count" data-role="diagnostic-count">0 entries</span></div>
+        <div class="tools-diagnostics" data-role="diagnostics" aria-live="polite"></div>
+      </article>
+    </section>
+
+    <section class="tools-settings tools-panel" aria-labelledby="settings-title">
+      <div class="tools-panel-head"><div><span class="tools-eyebrow">PREFERENCES</span><h2 id="settings-title">Workspace settings</h2></div></div>
+      <div class="tools-setting-row"><div><strong>Save sheet history</strong><small>Keep the latest 20 completed sessions in this browser.</small></div><label class="tools-switch"><input type="checkbox" data-setting="saveHistory" aria-label="Save sheet history"><span></span></label></div>
+      <div class="tools-setting-row"><div><strong>Motion effects</strong><small>Use subtle transitions in the in-page card.</small></div><label class="tools-switch"><input type="checkbox" data-setting="motion" aria-label="Motion effects"><span></span></label></div>
+    </section>
+
+    <p class="tools-feedback" data-role="feedback" role="status" aria-live="polite" hidden></p>
+    <footer class="tools-footer"><span>Data stays in this browser. Nothing is uploaded.</span><span>v3.1.0</span></footer>
+  </main>
+  <script src="xlsx.js"></script>
+  <script src="tools.js"></script>
+</body>
+</html>
