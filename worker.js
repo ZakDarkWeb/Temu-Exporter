@@ -43,16 +43,37 @@ async function setState(state) {
 }
 
 async function broadcast(state) {
-  if (!state.sourceTabId) return;
+  if (state.sourceTabId) {
+    try {
+      await chrome.tabs.sendMessage(state.sourceTabId, { type: 'TEMU_STATE_UPDATE', state });
+    } catch (_) {
+      // The source tab may have navigated or closed; the checkpoint remains safe.
+    }
+  }
   try {
-    await chrome.tabs.sendMessage(state.sourceTabId, { type: 'TEMU_STATE_UPDATE', state });
+    chrome.runtime.sendMessage({ type: 'TEMU_STATE_UPDATE', state }, () => { void chrome.runtime.lastError; });
   } catch (_) {
-    // The source tab may have navigated or closed; the checkpoint remains safe.
+    // No popup or extension page may be listening; the checkpoint remains safe.
   }
 }
 
 function jobKey(row, index) {
   return `${row.orderNo || ''}::${row.packageId || ''}::${index}`;
+}
+
+function failedRetryItems(state) {
+  const items = [];
+  const seen = new Set();
+  for (const error of state.errors || []) {
+    const index = Number.isInteger(error.index) ? error.index : Number(error.index);
+    if (!Number.isInteger(index) || !state.rows[index]) continue;
+    const row = state.rows[index];
+    const key = error.key || jobKey(row, index);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ key, index, row });
+  }
+  return items;
 }
 
 function cleanSourceUrl(sourceUrl) {
@@ -138,6 +159,40 @@ async function pauseJob() {
   const state = await getState();
   const paused = await setState({ ...state, status: 'paused' });
   return paused;
+}
+
+async function resumeJob(sender = {}) {
+  const current = await getState();
+  if (current.status !== 'paused' || !current.rows.length) return current;
+  const resumed = await setState({ ...current, status: 'running', sourceTabId: sender.tab?.id || current.sourceTabId || null });
+  pump(resumed, resumed.runId);
+  return resumed;
+}
+
+async function retryFailedJob(sender = {}) {
+  const current = await getState();
+  const items = failedRetryItems(current);
+  if (!items.length || current.status === 'running' || current.inFlight.length || activeTabs.size) return current;
+  const failedKeys = new Set(items.map(item => item.key));
+  const attempts = { ...current.attempts };
+  for (const item of items) delete attempts[item.key];
+  await closeOrphanDetailTabs();
+  activeTabs.clear();
+  const next = {
+    ...current,
+    runId: Date.now(),
+    status: 'running',
+    sourceTabId: sender.tab?.id || current.sourceTabId || null,
+    nextIndex: current.rows.length,
+    retryQueue: items,
+    inFlight: [],
+    attempts,
+    records: current.records.filter(record => !failedKeys.has(record.__key)),
+    errors: []
+  };
+  const saved = await setState(next);
+  pump(saved, saved.runId);
+  return saved;
 }
 
 async function closeTabIntentionally(tabId) {
@@ -297,7 +352,8 @@ async function pump(inputState = null, expectedRunId = null) {
   }
   pumpRunning = true;
   try {
-    const state = inputState || await getState();
+    const sourceState = inputState || await getState();
+    const state = { ...sourceState, rows: [...(sourceState.rows || [])], retryQueue: [...(sourceState.retryQueue || [])], inFlight: [...(sourceState.inFlight || [])] };
     if (state.status !== 'running' || (expectedRunId !== null && state.runId !== expectedRunId)) return;
     for (const entry of state.inFlight) {
       if (entry.tabId && !activeTabs.has(entry.tabId)) activeTabs.set(entry.tabId, entry);
@@ -363,6 +419,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true, state: await startJob(message, sender) });
     } else if (message?.type === 'TEMU_PAUSE_JOB') {
       sendResponse({ ok: true, state: await pauseJob() });
+    } else if (message?.type === 'TEMU_RETRY_FAILED') {
+      sendResponse({ ok: true, state: await retryFailedJob(sender) });
+    } else if (message?.type === 'TEMU_RESUME_JOB') {
+      sendResponse({ ok: true, state: await resumeJob(sender) });
     } else if (message?.type === 'TEMU_STOP_JOB') {
       sendResponse({ ok: true, state: await stopJob() });
     } else if (message?.type === 'TEMU_GET_STATE') {

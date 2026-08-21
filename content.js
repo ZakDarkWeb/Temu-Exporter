@@ -33,6 +33,7 @@
   let progressFill = null;
   let progressPercent = null;
   let metrics = {};
+  let pipelineStages = {};
   let uiPrefs = { minimized: false, motion: true, saveHistory: true };
   let historyEntries = [];
   let lastHistoryRunId = null;
@@ -517,6 +518,19 @@
     logBox.scrollTop = logBox.scrollHeight;
   }
 
+  function pipelineState(stage, stats) {
+    if (!stats.total) return 'idle';
+    if (stage === 'capture') return state.status === 'idle' ? 'idle' : 'complete';
+    if (stage === 'details') {
+      if (state.status === 'complete') return 'complete';
+      if (state.status === 'running') return 'active';
+      if (state.status === 'paused' && stats.done > 0) return 'paused';
+      return stats.done > 0 ? 'complete' : 'idle';
+    }
+    if (state.status === 'complete') return 'complete';
+    return state.records.length ? 'ready' : 'idle';
+  }
+
   function panelStats() {
     const total = state.rows.length;
     const done = new Set(state.records.map(record => record.__key || `${record['Order No'] || ''}::${record['Tracking Number'] || ''}`)).size;
@@ -534,6 +548,7 @@
     const stats = panelStats();
     const detail = stats.total ? `${stats.done} of ${stats.total} orders processed` : 'Open a Temu bulk-shipping page to begin';
     const stateMessage = stats.status === 'running' ? 'Live extraction in progress' : stats.status === 'paused' ? 'Checkpoint saved — ready to resume' : stats.status === 'complete' ? 'Extraction complete — workbook ready' : 'Ready for a new extraction';
+    const recoveryVisible = state.errors.length > 0 && stats.status !== 'running' && !stats.active;
     if (progressBox) progressBox.textContent = `${stats.status} — ${stats.done}/${stats.total || 0} orders — ${stats.rows} product rows — ${stats.active} active — ${stats.failed} errors — ${stats.retried} retried`;
     if (statusChip) {
       statusChip.textContent = stats.status;
@@ -547,6 +562,16 @@
     if (metrics.rows) metrics.rows.textContent = String(stats.rows);
     if (metrics.errors) metrics.errors.textContent = String(stats.failed);
     if (metrics.active) metrics.active.textContent = String(stats.active);
+    Object.entries(pipelineStages).forEach(([stage, element]) => {
+      element.dataset.stage = pipelineState(stage, stats);
+    });
+    const recovery = panel.querySelector('[data-role="recovery"]');
+    const retryButton = buttons.retry;
+    if (recovery) recovery.classList.toggle('is-visible', recoveryVisible);
+    if (retryButton) {
+      retryButton.disabled = !recoveryVisible;
+      retryButton.innerHTML = `<span class="temu-exporter-button-icon" aria-hidden="true">↻</span><span>Retry ${state.errors.length || ''} failed${state.errors.length === 1 ? '' : 's'}</span>`;
+    }
     panel.dataset.status = stats.status.toLowerCase();
     const minimizeButton = panel.querySelector('[data-action="minimize"]');
     if (minimizeButton) {
@@ -580,12 +605,20 @@
           <div class="temu-exporter-progress-track" aria-label="Extraction progress"><span data-role="progress-fill"></span></div>
           <div class="temu-exporter-progress-meta"><span data-role="progress"></span><strong data-role="progress-percent">0%</strong></div>
         </div>
+        <div class="temu-exporter-pipeline" data-role="pipeline" aria-label="Extraction pipeline">
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="capture"><span class="temu-exporter-pipeline-number">1</span><div><strong>Capture rows</strong><small>Bulk page</small></div></div>
+          <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="details"><span class="temu-exporter-pipeline-number">2</span><div><strong>Read details</strong><small>Two tabs</small></div></div>
+          <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="workbook"><span class="temu-exporter-pipeline-number">3</span><div><strong>Build XLSX</strong><small>Local file</small></div></div>
+        </div>
         <div class="temu-exporter-metrics" aria-label="Extraction statistics">
           <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon orders" aria-hidden="true">↗</span><div><strong data-metric="orders">0/0</strong><small>Orders</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon rows" aria-hidden="true">▦</span><div><strong data-metric="rows">0</strong><small>Product rows</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon active" aria-hidden="true">◌</span><div><strong data-metric="active">0</strong><small>Active tabs</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon errors" aria-hidden="true">!</span><div><strong data-metric="errors">0</strong><small>Errors</small></div></div>
         </div>
         <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">Ⅱ</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
+        <div class="temu-exporter-recovery" data-role="recovery"><div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div><button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">↻</span><span>Retry failed</span></button></div>
         <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
-        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.7.0</span></div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.8.0</span></div>
       </div>
       <aside class="temu-exporter-drawer" data-role="settings-drawer" aria-label="Settings"><div class="temu-exporter-drawer-head"><div><strong>Settings</strong><small>Personalize your workspace</small></div><button type="button" data-action="close-settings" aria-label="Close settings">×</button></div><div class="temu-exporter-setting-row"><div><strong>Save sheet history</strong><small>Keep the last 20 sessions locally</small></div><label class="temu-exporter-switch"><input type="checkbox" data-setting="saveHistory"><span></span></label></div><div class="temu-exporter-setting-row"><div><strong>Motion effects</strong><small>Use subtle neon status animations</small></div><label class="temu-exporter-switch"><input type="checkbox" data-setting="motion"><span></span></label></div><div class="temu-exporter-setting-note">Data stays in this browser. Nothing is uploaded.</div></aside>
       <aside class="temu-exporter-drawer" data-role="history-drawer" aria-label="Sheet history"><div class="temu-exporter-drawer-head"><div><strong>Sheet history</strong><small>Last 20 exports stored locally</small></div><button type="button" data-action="close-history" aria-label="Close history">×</button></div><div class="temu-exporter-history-list" data-role="history-list"></div><button type="button" class="temu-exporter-clear-history" data-action="clear-history">Clear all history</button></aside>
@@ -610,11 +643,18 @@
       start: panel.querySelector('[data-action="start"]'),
       pause: panel.querySelector('[data-action="pause"]'),
       stop: panel.querySelector('[data-action="stop"]'),
-      download: panel.querySelector('[data-action="download"]')
+      download: panel.querySelector('[data-action="download"]'),
+      retry: panel.querySelector('[data-action="retry"]')
+    };
+    pipelineStages = {
+      capture: panel.querySelector('[data-pipeline-stage="capture"]'),
+      details: panel.querySelector('[data-pipeline-stage="details"]'),
+      workbook: panel.querySelector('[data-pipeline-stage="workbook"]')
     };
     buttons.start.addEventListener('click', startJob);
     buttons.pause.addEventListener('click', pauseJob);
     buttons.stop.addEventListener('click', stopJob);
+    buttons.retry.addEventListener('click', retryFailedJob);
     buttons.download.addEventListener('click', async () => {
       await saveHistoryEntry();
       const records = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
@@ -654,6 +694,13 @@
           log(`Finished: ${state.records.length} records, ${state.errors.length} errors.`);
           saveHistoryEntry();
         }
+      } else if (message?.type === 'TEMU_POPUP_START') {
+        startJob().catch(error => log(error?.message || 'Could not start extraction.', 'error'));
+      } else if (message?.type === 'TEMU_OPEN_PANEL') {
+        setMinimized(false);
+      } else if (message?.type === 'TEMU_OPEN_HISTORY') {
+        setMinimized(false);
+        toggleDrawer('history');
       }
     });
     updatePanel();
@@ -676,6 +723,14 @@
     state = { ...defaultState(), ...(response.state || {}) };
     updatePanel();
     log('Paused. Current checkpoint is preserved.');
+  }
+
+  async function retryFailedJob() {
+    if (!state.errors.length || state.status === 'running' || state.inFlight.length) return;
+    const response = await sendMessage({ type: 'TEMU_RETRY_FAILED' });
+    state = { ...defaultState(), ...(response.state || {}) };
+    updatePanel();
+    log(`Retrying ${state.rows.length ? 'failed' : 'available'} orders with a fresh attempt budget.`);
   }
 
   async function stopJob() {

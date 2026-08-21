@@ -249,3 +249,28 @@
   #temu-order-exporter-panel *::before,
   #temu-order-exporter-panel *::after { transition-duration: .01ms !important; }
 }
+
+/* v2.8 workflow visualization and recovery card. */
+.temu-exporter-pipeline { display: flex; align-items: stretch; gap: 4px; margin-top: 9px; padding: 7px; border: 1px solid rgba(31, 143, 176, .2); border-radius: 10px; background: rgba(3, 23, 40, .52); }
+.temu-exporter-pipeline-stage { display: flex; min-width: 0; flex: 1; align-items: center; gap: 5px; padding: 5px 4px; border: 1px solid transparent; border-radius: 8px; color: #6e96a6; transition: color .18s ease, background .18s ease, border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.temu-exporter-pipeline-number { display: grid; width: 19px; height: 19px; flex: 0 0 19px; place-items: center; border: 1px solid rgba(57, 170, 197, .3); border-radius: 7px; background: rgba(14, 77, 99, .22); color: #6ca6b8; font-size: 9px; font-weight: 900; transition: color .18s ease, background .18s ease, box-shadow .18s ease; }
+.temu-exporter-pipeline-stage strong { display: block; overflow: hidden; color: inherit; font-size: 8px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.temu-exporter-pipeline-stage small { display: block; margin-top: 1px; color: #4d7787; font-size: 7px; white-space: nowrap; }
+.temu-exporter-pipeline-line { align-self: center; width: 9px; height: 1px; flex: 0 0 9px; background: rgba(48, 126, 151, .32); }
+.temu-exporter-pipeline-stage[data-stage="active"] { border-color: rgba(56, 229, 255, .34); background: rgba(8, 86, 108, .2); color: #c8f7fc; transform: translateY(-1px); box-shadow: 0 0 12px rgba(0, 205, 238, .1); }
+.temu-exporter-pipeline-stage[data-stage="active"] .temu-exporter-pipeline-number { border-color: rgba(65, 232, 250, .78); background: rgba(13, 160, 184, .4); color: #e1fdff; box-shadow: 0 0 10px rgba(47, 224, 246, .34); animation: temu-exporter-pipeline-pulse 1.25s ease-in-out infinite; }
+.temu-exporter-pipeline-stage[data-stage="complete"] { color: #a2e8d0; }
+.temu-exporter-pipeline-stage[data-stage="complete"] .temu-exporter-pipeline-number { border-color: rgba(53, 230, 176, .55); background: rgba(19, 137, 102, .3); color: #64f0bd; }
+.temu-exporter-pipeline-stage[data-stage="ready"] { color: #92c3cf; }
+.temu-exporter-pipeline-stage[data-stage="paused"] { border-color: rgba(240, 194, 66, .28); color: #f0d477; }
+.temu-exporter-recovery { display: flex; max-height: 0; align-items: center; justify-content: space-between; gap: 8px; margin-top: 0; overflow: hidden; padding: 0 9px; border: 1px solid transparent; border-radius: 9px; background: rgba(129, 25, 52, .12); opacity: 0; transform: translateY(-4px); transition: max-height .25s ease, margin-top .25s ease, padding .25s ease, opacity .2s ease, transform .25s ease, border-color .2s ease; }
+.temu-exporter-recovery.is-visible { max-height: 62px; margin-top: 8px; padding-top: 8px; padding-bottom: 8px; border-color: rgba(244, 98, 119, .27); opacity: 1; transform: translateY(0); }
+.temu-exporter-recovery strong { display: block; color: #ffd5da; font-size: 9px; font-weight: 850; }
+.temu-exporter-recovery small { display: block; margin-top: 2px; color: #bb7c87; font-size: 8px; }
+.temu-exporter-recovery button { display: inline-flex; min-height: 27px; align-items: center; gap: 4px; padding: 5px 8px; border: 1px solid rgba(255, 117, 136, .36); border-radius: 8px; background: rgba(145, 33, 57, .3); color: #ffc2cb; cursor: pointer; font: inherit; font-size: 9px; font-weight: 850; transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.temu-exporter-recovery button:not(:disabled):hover { border-color: rgba(255, 143, 158, .74); background: rgba(167, 42, 68, .44); box-shadow: 0 0 14px rgba(247, 77, 108, .15); transform: translateY(-1px); }
+.temu-exporter-recovery button:not(:disabled):active { transform: scale(.97); }
+.temu-exporter-recovery button:disabled { cursor: not-allowed; opacity: .5; }
+@keyframes temu-exporter-pipeline-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(47, 224, 246, .06); } 50% { box-shadow: 0 0 0 4px rgba(47, 224, 246, .1); } }
+@media (max-width: 560px) { .temu-exporter-pipeline-stage small { display: none; } .temu-exporter-pipeline-stage { justify-content: center; } .temu-exporter-recovery { align-items: flex-start; flex-direction: column; } }
+@media (prefers-reduced-motion: reduce) { .temu-exporter-pipeline-stage[data-stage="active"] .temu-exporter-pipeline-number { animation: none; } }
