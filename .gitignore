@@ -1,0 +1,6 @@
+# Local QA artifacts
+__pycache__/
+*.pyc
+test-output.xlsx
+coverage/
+.DS_Store

@@ -13,16 +13,18 @@
       <span class="to-popup-local"><i></i> Local-only</span>
     </header>
 
-    <section class="to-popup-page" data-role="page-context"><span class="to-popup-page-dot"></span><span data-role="page-text">Checking current Temu page…</span></section>
+    <section class="to-popup-page" data-role="page-context"><span class="to-popup-page-dot"></span><span data-role="page-text" aria-live="polite">Checking current Temu page…</span></section>
+
+    <p class="to-popup-action-feedback" data-role="action-feedback" role="status" aria-live="polite" hidden></p>
 
     <section class="to-popup-status-card" data-role="status-card" aria-live="polite">
-      <div class="to-popup-status-line"><div><span class="to-popup-eyebrow">BATCH STATUS</span><strong data-role="status">Ready</strong><small data-role="status-detail">Open the bulk-shipping page to begin.</small></div><span class="to-popup-status-chip" data-role="status-chip">Ready</span></div>
-      <div class="to-popup-progress"><span data-role="progress-fill"></span></div>
-      <div class="to-popup-progress-meta"><span data-role="progress-text">0 of 0 orders</span><b data-role="progress-percent">0%</b></div>
+      <div class="to-popup-status-line"><div><span class="to-popup-eyebrow">BATCH STATUS</span><strong data-role="status" role="status">Ready</strong><small data-role="status-detail">Open the bulk-shipping page to begin.</small></div><span class="to-popup-status-chip" data-role="status-chip">Ready</span></div>
+      <div class="to-popup-progress" data-role="progressbar" role="progressbar" aria-label="Extraction progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0% complete"><span data-role="progress-fill"></span></div>
+      <div class="to-popup-progress-meta"><span data-role="progress-text" aria-live="polite">0 of 0 orders</span><b data-role="progress-percent">0%</b></div>
     </section>
 
     <section class="to-popup-metrics" aria-label="Batch metrics">
-      <div><b data-metric="orders">0/0</b><small>Orders</small></div><div><b data-metric="rows">0</b><small>Rows</small></div><div><b data-metric="active">0</b><small>Tabs</small></div><div class="error"><b data-metric="errors">0</b><small>Errors</small></div>
+      <div><b data-metric="orders">0/0</b><small>Orders</small></div><div><b data-metric="rows">0</b><small>Rows</small></div><div><b data-metric="active">0</b><small>Tabs</small></div><div class="error"><b data-metric="errors">0</b><small>Errors</small></div><div class="notes"><b data-metric="warnings">0</b><small>Notes</small></div>
     </section>
 
     <section class="to-popup-pipeline" aria-label="Extraction pipeline"><div data-stage="capture"><span>1</span><small>Capture</small></div><i></i><div data-stage="details"><span>2</span><small>Details</small></div><i></i><div data-stage="workbook"><span>3</span><small>XLSX</small></div></section>
@@ -38,7 +40,7 @@
 
     <section class="to-popup-history"><div class="to-popup-section-head"><span>Recent sheets</span><button type="button" data-command="history">View all</button></div><div data-role="history-list" class="to-popup-history-list"></div></section>
 
-    <footer class="to-popup-footer"><span>v2.9.0</span><span>Two-tab safe mode</span><button type="button" data-command="open-bulk">Open bulk page</button></footer>
+    <footer class="to-popup-footer"><span>v3.0.0</span><span>Two-tab safe mode</span><button type="button" data-command="open-bulk">Open bulk page</button></footer>
   </main>
   <script src="xlsx.js"></script>
   <script src="popup.js"></script>

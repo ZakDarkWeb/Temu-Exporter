@@ -10,6 +10,7 @@
   let state = defaultState();
   let activeTab = null;
   let historyEntries = [];
+  let actionBusy = false;
 
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
@@ -90,6 +91,11 @@
     const statusKey = state.status === 'complete' && state.errors.length ? 'error' : state.status;
     chip.dataset.status = statusKey;
     card.dataset.status = state.status;
+    const progress = $('[data-role="progressbar"]');
+    if (progress) {
+      progress.setAttribute('aria-valuenow', String(data.percent));
+      progress.setAttribute('aria-valuetext', `${data.percent}% complete`);
+    }
     $('[data-role="progress-fill"]').style.width = `${data.percent}%`;
     $('[data-role="progress-text"]').textContent = `${data.done} of ${data.total} orders · ${data.rows} rows · ${data.errors} errors · ${data.warnings} notes`;
     $('[data-role="progress-percent"]').textContent = `${data.percent}%`;
@@ -97,6 +103,7 @@
     $('[data-metric="rows"]').textContent = String(data.rows);
     $('[data-metric="active"]').textContent = String(data.active);
     $('[data-metric="errors"]').textContent = String(data.errors);
+    $('[data-metric="warnings"]').textContent = String(data.warnings);
     $$('[data-stage]').forEach(stage => { stage.dataset.stage = pipelineState(stage.dataset.stage, data); });
 
     const primary = $('[data-command="primary"]');
@@ -130,11 +137,33 @@
 
   function renderHistory() {
     const list = $('[data-role="history-list"]');
+    if (!list) return;
+    list.replaceChildren();
     if (!historyEntries.length) {
-      list.innerHTML = '<div class="to-popup-empty">No saved sheets yet.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'to-popup-empty';
+      empty.textContent = 'No saved sheets yet.';
+      list.appendChild(empty);
       return;
     }
-    list.innerHTML = historyEntries.slice(0, 3).map((entry, index) => `<div class="to-popup-history-item"><div><strong>${historyDate(entry.createdAt)}</strong><small>${entry.orders} orders · ${entry.rows} rows · ${entry.errors || 0} errors · ${entry.warnings || 0} notes</small></div><button type="button" data-history-index="${index}" title="Download this sheet" aria-label="Download this sheet">↓</button></div>`).join('');
+    historyEntries.slice(0, 3).forEach((entry, index) => {
+      const item = document.createElement('div');
+      item.className = 'to-popup-history-item';
+      const copy = document.createElement('div');
+      const date = document.createElement('strong');
+      const meta = document.createElement('small');
+      date.textContent = historyDate(entry.createdAt);
+      meta.textContent = `${Number(entry.orders) || 0} orders · ${Number(entry.rows) || 0} rows · ${Number(entry.errors) || 0} errors · ${Number(entry.warnings) || 0} notes`;
+      copy.append(date, meta);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.historyIndex = String(index);
+      button.title = 'Download this sheet';
+      button.setAttribute('aria-label', `Download sheet from ${date.textContent}`);
+      button.textContent = '↓';
+      item.append(copy, button);
+      list.appendChild(item);
+    });
   }
 
   async function loadHistory() {
@@ -198,21 +227,56 @@
 
   async function pauseJob() { await send({ type: 'TEMU_PAUSE_JOB' }); await refresh(); }
   async function resumeJob() { await send({ type: 'TEMU_RESUME_JOB' }); await refresh(); }
-  async function retryFailed() { if (!state.errors.length) return; await send({ type: 'TEMU_RETRY_FAILED' }); await refresh(); }
+  async function retryFailed() {
+    if (!state.errors.length || state.status === 'running' || state.inFlight.length) return;
+    await send({ type: 'TEMU_RETRY_FAILED' });
+    await refresh();
+  }
   async function stopJob() { await send({ type: 'TEMU_STOP_JOB' }); await refresh(); }
-  function download(records, errors) { window.TemuXlsx.downloadWorkbook((records || []).map(cleanRecord), errors || []); }
+  function download(records, errors) {
+    if (!records?.length) { showActionFeedback('No workbook rows are ready yet.', 'warning'); return; }
+    window.TemuXlsx.downloadWorkbook((records || []).map(cleanRecord), errors || []);
+    showActionFeedback('Workbook download started.', 'success');
+  }
   function downloadCurrent() { download(state.records, [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))]); }
-  function openHistoryDrawer() { sendToActiveContent({ type: 'TEMU_OPEN_HISTORY' }).then(sent => { if (sent) window.close(); }); }
+  async function openHistoryDrawer() {
+    const sent = await sendToActiveContent({ type: 'TEMU_OPEN_HISTORY' });
+    if (sent) window.close();
+    else showActionFeedback('Open the Temu bulk page to view sheet history.', 'warning');
+  }
+  function showActionFeedback(message, tone = 'error') {
+    const feedback = $('[data-role="action-feedback"]');
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.dataset.tone = tone;
+    feedback.hidden = false;
+    clearTimeout(showActionFeedback.timer);
+    showActionFeedback.timer = setTimeout(() => { feedback.hidden = true; }, 4200);
+  }
+  async function runCommand(command, trigger) {
+    if (actionBusy) return;
+    actionBusy = true;
+    if (trigger) { trigger.disabled = true; trigger.setAttribute('aria-busy', 'true'); }
+    try {
+      if (command === 'primary') await primaryAction();
+      else if (command === 'pause') await pauseJob();
+      else if (command === 'download') downloadCurrent();
+      else if (command === 'stop') await stopJob();
+      else if (command === 'retry') await retryFailed();
+      else if (command === 'history') await openHistoryDrawer();
+      else if (command === 'open-bulk') await openBulkPage();
+    } catch (error) {
+      showActionFeedback(error?.message || 'Action could not be completed. Please try again.');
+    } finally {
+      actionBusy = false;
+      if (trigger) trigger.removeAttribute('aria-busy');
+      renderState();
+    }
+  }
 
   document.addEventListener('click', event => {
-    const command = event.target.closest('[data-command]')?.dataset.command;
-    if (command === 'primary') primaryAction();
-    if (command === 'pause') pauseJob();
-    if (command === 'download') downloadCurrent();
-    if (command === 'stop') stopJob();
-    if (command === 'retry') retryFailed();
-    if (command === 'history') openHistoryDrawer();
-    if (command === 'open-bulk') openBulkPage();
+    const commandButton = event.target.closest('[data-command]');
+    if (commandButton) void runCommand(commandButton.dataset.command, commandButton);
     const historyButton = event.target.closest('[data-history-index]');
     if (historyButton) {
       const entry = historyEntries[Number(historyButton.dataset.historyIndex)];

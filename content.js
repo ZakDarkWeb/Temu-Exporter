@@ -114,15 +114,51 @@
   function renderHistory() {
     const list = panel?.querySelector('[data-role="history-list"]');
     if (!list) return;
+    list.replaceChildren();
     if (!historyEntries.length) {
-      list.innerHTML = '<div class="temu-exporter-empty-state"><span class="temu-exporter-empty-icon">▤</span><strong>No saved sheets yet</strong><small>Completed Excel exports will appear here.</small></div>';
+      const empty = document.createElement('div');
+      empty.className = 'temu-exporter-empty-state';
+      const icon = document.createElement('span');
+      icon.className = 'temu-exporter-empty-icon';
+      icon.textContent = '▤';
+      const title = document.createElement('strong');
+      title.textContent = 'No saved sheets yet';
+      const hint = document.createElement('small');
+      hint.textContent = 'Completed Excel exports will appear here.';
+      empty.append(icon, title, hint);
+      list.appendChild(empty);
       return;
     }
-    list.innerHTML = historyEntries.map(entry => `
-      <div class="temu-exporter-history-item" data-history-id="${String(entry.id).replace(/[^a-zA-Z0-9_-]/g, '')}">
-        <div class="temu-exporter-history-main"><span class="temu-exporter-history-icon">▤</span><div><strong>${historyDate(entry.createdAt)}</strong><small>${entry.orders} orders · ${entry.rows} rows · ${entry.errors} errors</small></div></div>
-        <div class="temu-exporter-history-actions"><button type="button" data-history-action="download" title="Download this sheet" aria-label="Download this sheet">↓</button><button type="button" data-history-action="delete" title="Delete this history item" aria-label="Delete this history item">×</button></div>
-      </div>`).join('');
+    historyEntries.forEach(entry => {
+      const item = document.createElement('div');
+      item.className = 'temu-exporter-history-item';
+      item.dataset.historyId = String(entry.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const main = document.createElement('div');
+      main.className = 'temu-exporter-history-main';
+      const icon = document.createElement('span');
+      icon.className = 'temu-exporter-history-icon';
+      icon.textContent = '▤';
+      const copy = document.createElement('div');
+      const date = document.createElement('strong');
+      const meta = document.createElement('small');
+      date.textContent = historyDate(entry.createdAt);
+      meta.textContent = `${Number(entry.orders) || 0} orders · ${Number(entry.rows) || 0} rows · ${Number(entry.errors) || 0} errors · ${Number(entry.warnings) || 0} notes`;
+      copy.append(date, meta);
+      main.append(icon, copy);
+      const actions = document.createElement('div');
+      actions.className = 'temu-exporter-history-actions';
+      [['download', 'Download this sheet', '↓'], ['delete', 'Delete this history item', '×']].forEach(([action, label, text]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.historyAction = action;
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.textContent = text;
+        actions.appendChild(button);
+      });
+      item.append(main, actions);
+      list.appendChild(item);
+    });
   }
 
   async function deleteHistoryEntry(id) {
@@ -151,6 +187,23 @@
     if (restoreFocus) drawerFocusReturn = null;
   }
 
+  function drawerFocusables(drawer) {
+    return [...drawer.querySelectorAll('button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')].filter(element => element.offsetParent !== null);
+  }
+
+  function handleDrawerKeydown(event) {
+    if (!panel?.classList.contains('drawer-open')) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeDrawers(); return; }
+    if (event.key !== 'Tab') return;
+    const drawer = settingsDrawer?.classList.contains('is-open') ? settingsDrawer : historyDrawer;
+    const focusable = drawer ? drawerFocusables(drawer) : [];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+
   function toggleDrawer(drawer) {
     const target = drawer === 'settings' ? settingsDrawer : historyDrawer;
     const trigger = panel?.querySelector(`[data-action="${drawer}"]`);
@@ -170,6 +223,7 @@
   }
 
   async function setMinimized(value) {
+    if (value && panel?.classList.contains('drawer-open')) closeDrawers(false);
     uiPrefs.minimized = Boolean(value);
     panel?.classList.toggle('is-minimized', uiPrefs.minimized);
     updatePanel();
@@ -730,7 +784,7 @@
         <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">II</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
         <div class="temu-exporter-recovery" data-role="recovery"><div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div><button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">↻</span><span>Retry failed</span></button></div>
         <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
-        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.9.0</span></div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v3.0.0</span></div>
       </div>
       <aside class="temu-exporter-drawer" data-role="settings-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Settings"><div class="temu-exporter-drawer-head"><div><strong>Settings</strong><small>Personalize your workspace</small></div><button type="button" class="temu-exporter-drawer-close" data-action="close-settings" aria-label="Close settings">×</button></div><div class="temu-exporter-setting-row"><div><strong>Save sheet history</strong><small>Keep the last 20 sessions locally</small></div><label class="temu-exporter-switch" for="temu-setting-history"><input id="temu-setting-history" type="checkbox" data-setting="saveHistory" aria-label="Save sheet history"><span></span></label></div><div class="temu-exporter-setting-row"><div><strong>Motion effects</strong><small>Use subtle neon status animations</small></div><label class="temu-exporter-switch" for="temu-setting-motion"><input id="temu-setting-motion" type="checkbox" data-setting="motion" aria-label="Motion effects"><span></span></label></div><div class="temu-exporter-setting-note">Data stays in this browser. Nothing is uploaded.</div></aside>
       <aside class="temu-exporter-drawer" data-role="history-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Sheet history"><div class="temu-exporter-drawer-head"><div><strong>Sheet history</strong><small>Last 20 exports stored locally</small></div><button type="button" class="temu-exporter-drawer-close" data-action="close-history" aria-label="Close history">×</button></div><div class="temu-exporter-history-list" data-role="history-list" tabindex="0"></div><button type="button" class="temu-exporter-clear-history" data-action="clear-history">Clear all history</button></aside>
@@ -787,7 +841,7 @@
     panel.querySelector('[data-action="close-settings"]').addEventListener('click', closeDrawers);
     panel.querySelector('[data-action="close-history"]').addEventListener('click', closeDrawers);
     panel.querySelector('[data-action="clear-history"]').addEventListener('click', clearHistory);
-    panel.addEventListener('keydown', event => { if (event.key === 'Escape' && panel.classList.contains('drawer-open')) closeDrawers(); });
+    panel.addEventListener('keydown', handleDrawerKeydown);
     panel.querySelector('[data-role="history-list"]').addEventListener('click', event => {
       const actionButton = event.target.closest('[data-history-action]');
       const item = event.target.closest('[data-history-id]');
@@ -833,6 +887,9 @@
   }
 
   async function startJob() {
+    shownWarningKeys.clear();
+    bootstrapStoreCache = undefined;
+    if (logBox) logBox.textContent = '';
     const rows = captureBulkRows();
     if (!rows.length) {
       const noData = /\bno data\b/i.test(textOf(document.body));
@@ -855,6 +912,7 @@
 
   async function retryFailedJob() {
     if (!state.errors.length || state.status === 'running' || state.inFlight.length) return;
+    shownWarningKeys.clear();
     const failedCount = state.errors.length; // capture before state is reset by response
     const response = await sendMessage({ type: 'TEMU_RETRY_FAILED' });
     state = { ...defaultState(), ...(response.state || {}) };
@@ -863,6 +921,7 @@
   }
 
   async function stopJob() {
+    shownWarningKeys.clear();
     const response = await sendMessage({ type: 'TEMU_STOP_JOB' });
     state = { ...defaultState(), ...(response.state || {}) };
     if (logBox) logBox.textContent = '';

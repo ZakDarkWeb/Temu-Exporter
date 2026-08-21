@@ -709,3 +709,98 @@
 .temu-exporter-log-info { color: var(--zh-tx3); }
 .temu-exporter-history-list { max-height: 300px; overflow-y: auto; overscroll-behavior: contain; }
 .temu-exporter-drawer-close:focus-visible, .temu-exporter-history-list:focus-visible { outline: 2px solid var(--zh-theme); outline-offset: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   v3.0 UI/UX REFINEMENT LAYER
+   Intentional final-cascade overrides: clearer hierarchy, safer density,
+   responsive bounds, and one consistent interaction language.
+   ═══════════════════════════════════════════════════════════════ */
+#temu-order-exporter-panel {
+  color-scheme: dark;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(760px, calc(100vh - 24px));
+  border-color: rgba(103,232,249,.30);
+  background: linear-gradient(160deg, rgba(3,8,22,.98), rgba(4,11,28,.98));
+  box-shadow: 0 18px 70px rgba(0,0,0,.62), 0 0 0 1px rgba(0,229,255,.07), 0 0 36px rgba(0,229,255,.10);
+}
+#temu-order-exporter-panel .temu-exporter-header {
+  height: 66px; min-height: 66px; padding-inline: 16px;
+  background: linear-gradient(135deg, rgba(8,22,45,.98), rgba(5,13,30,.96));
+}
+#temu-order-exporter-panel .temu-exporter-brand { gap: 10px; }
+#temu-order-exporter-panel .temu-exporter-logo { width: 38px; height: 38px; flex-basis: 38px; border-radius: 12px; }
+#temu-order-exporter-panel .temu-exporter-brand strong { font-size: 14px; letter-spacing: -.35px; }
+#temu-order-exporter-panel .temu-exporter-brand small { color: var(--zh-tx2); font-size: 9px; }
+#temu-order-exporter-panel .temu-exporter-toolbar { gap: 6px; }
+#temu-order-exporter-panel .temu-exporter-toolbar button { width: 32px; height: 32px; border-radius: 9px; }
+#temu-order-exporter-panel .temu-exporter-body {
+  min-height: 0; max-height: min(680px, calc(100vh - 102px)); overflow-y: auto;
+  overscroll-behavior: contain; scrollbar-gutter: stable; padding: 14px 15px 15px;
+}
+#temu-order-exporter-panel .temu-exporter-status-card { padding: 13px 14px 12px 15px; border-radius: 14px; }
+#temu-order-exporter-panel .temu-exporter-status-copy strong { font-size: 13.5px; }
+#temu-order-exporter-panel .temu-exporter-status-copy span { color: var(--zh-tx2); font-size: 10px; }
+#temu-order-exporter-panel .temu-exporter-status-chip { min-width: 64px; padding: 4px 9px; text-align: center; }
+#temu-order-exporter-panel .temu-exporter-progress-track { height: 5px; margin-top: 14px; border-radius: 999px; }
+#temu-order-exporter-panel .temu-exporter-progress-meta { margin-top: 8px; font-size: 9.5px; }
+#temu-order-exporter-panel .temu-exporter-metrics { gap: 8px; margin-top: 11px; }
+#temu-order-exporter-panel .temu-exporter-metric { min-width: 0; padding: 10px 5px 9px; border-radius: 10px; }
+#temu-order-exporter-panel .temu-exporter-metric strong { font-size: 14px; }
+#temu-order-exporter-panel .temu-exporter-metric small { font-size: 8px; letter-spacing: .45px; color: var(--zh-tx2); }
+#temu-order-exporter-panel .temu-exporter-actions { gap: 9px; margin-top: 14px; }
+#temu-order-exporter-panel .temu-exporter-actions button { min-height: 42px; border-radius: 10px; font-size: 11.5px; }
+#temu-order-exporter-panel .temu-exporter-actions button.primary,
+#temu-order-exporter-panel .temu-exporter-actions button.download { min-height: 44px; }
+#temu-order-exporter-panel .temu-exporter-pipeline { margin-top: 12px; }
+#temu-order-exporter-panel .temu-exporter-pipeline-stage { min-width: 0; padding: 8px 5px; border-radius: 10px; font-size: 9px; }
+#temu-order-exporter-panel .temu-exporter-pipeline-stage small { color: inherit; font-size: 8.5px; line-height: 1.25; }
+#temu-order-exporter-panel .temu-exporter-log-wrap { margin-top: 13px; }
+#temu-order-exporter-panel .temu-exporter-log-label { font-size: 8.5px; letter-spacing: .12em; }
+#temu-order-exporter-panel .temu-exporter-log { max-height: 96px; margin-top: 6px; border-radius: 10px; font-size: 9.5px; scrollbar-gutter: stable; }
+#temu-order-exporter-panel .temu-exporter-log > div { padding: 5px 9px; line-height: 1.45; }
+#temu-order-exporter-panel .temu-exporter-recovery { gap: 10px; padding-inline: 12px; border-radius: 10px; }
+#temu-order-exporter-panel .temu-exporter-recovery.is-visible { max-height: 110px; padding-top: 10px; padding-bottom: 10px; }
+#temu-order-exporter-panel .temu-exporter-recovery strong { font-size: 10px; }
+#temu-order-exporter-panel .temu-exporter-recovery small { color: var(--zh-tx2); font-size: 9px; line-height: 1.35; }
+#temu-order-exporter-panel .temu-exporter-recovery button { min-height: 32px; padding-inline: 12px; border-radius: 9px; font-size: 9.5px; white-space: nowrap; }
+#temu-order-exporter-panel .temu-exporter-footer { min-height: 38px; padding: 9px 15px; font-size: 8.5px; }
+#temu-order-exporter-panel button { -webkit-tap-highlight-color: transparent; }
+#temu-order-exporter-panel button:focus-visible,
+#temu-order-exporter-panel input:focus-visible,
+#temu-order-exporter-panel [tabindex]:focus-visible { outline: 2px solid var(--zh-theme); outline-offset: 3px; }
+#temu-order-exporter-panel .temu-exporter-drawer { background: linear-gradient(160deg, rgba(4,12,29,.99), rgba(3,7,18,.99)); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+#temu-order-exporter-panel .temu-exporter-drawer-head { min-height: 58px; padding: 13px 16px; }
+#temu-order-exporter-panel .temu-exporter-drawer-head strong { font-size: 13px; }
+#temu-order-exporter-panel .temu-exporter-drawer-body { padding: 14px 16px; }
+#temu-order-exporter-panel .temu-exporter-drawer-close { width: 32px; height: 32px; border-radius: 9px; font-size: 16px; }
+#temu-order-exporter-panel .temu-exporter-history-list { max-height: min(400px, calc(100vh - 190px)); padding: 3px 1px; scrollbar-gutter: stable; }
+#temu-order-exporter-panel .temu-exporter-history-item { padding: 9px 10px; border-radius: 10px; }
+#temu-order-exporter-panel .temu-exporter-history-main strong { font-size: 10.5px; }
+#temu-order-exporter-panel .temu-exporter-history-main small { color: var(--zh-tx2); font-size: 8.5px; line-height: 1.35; }
+#temu-order-exporter-panel .temu-exporter-history-actions button { width: 30px; height: 30px; border-radius: 8px; }
+#temu-order-exporter-panel.is-minimized { width: 52px; height: 52px; right: 18px; bottom: 18px; border-radius: 50%; }
+#temu-order-exporter-panel.is-minimized .temu-exporter-header { width: 52px; height: 52px; min-height: 52px; }
+#temu-order-exporter-panel.is-minimized .temu-exporter-logo { width: 30px; height: 30px; flex-basis: 30px; }
+@media (max-width: 560px) {
+  #temu-order-exporter-panel { right: 12px; bottom: 12px; width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
+  #temu-order-exporter-panel .temu-exporter-body { max-height: calc(100vh - 90px); padding-inline: 12px; }
+  #temu-order-exporter-panel .temu-exporter-header { padding-inline: 13px; }
+  #temu-order-exporter-panel .temu-exporter-pipeline-stage small { display: block; font-size: 8px; }
+  #temu-order-exporter-panel .temu-exporter-recovery { align-items: center; }
+}
+@media (max-width: 360px) {
+  #temu-order-exporter-panel { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
+  #temu-order-exporter-panel .temu-exporter-header { height: 60px; min-height: 60px; padding-inline: 11px; }
+  #temu-order-exporter-panel .temu-exporter-brand strong { font-size: 13px; }
+  #temu-order-exporter-panel .temu-exporter-toolbar button { width: 30px; height: 30px; }
+  #temu-order-exporter-panel .temu-exporter-body { padding: 11px; }
+  #temu-order-exporter-panel .temu-exporter-pipeline-stage { padding-inline: 3px; font-size: 8px; }
+  #temu-order-exporter-panel .temu-exporter-pipeline-stage small { font-size: 7.5px; }
+  #temu-order-exporter-panel .temu-exporter-recovery { align-items: stretch; flex-direction: column; }
+  #temu-order-exporter-panel .temu-exporter-recovery button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #temu-order-exporter-panel *, #temu-order-exporter-panel *::before, #temu-order-exporter-panel *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+
+#temu-order-exporter-panel .temu-exporter-metric-icon.notes { color: var(--zh-yellow); border-color: var(--zh-yellow-bd); background: var(--zh-yellow-soft); }
