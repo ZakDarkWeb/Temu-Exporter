@@ -1,45 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "Temu Order Tab Exporter",
-  "version": "8.8.7",
-
-  "description": "Remember selected Temu orders, match them after labels move to Shipped, and copy the exact nine-column sheet data to the clipboard.",
-  "permissions": [
-    "tabs",
-    "scripting",
-    "activeTab",
-    "storage",
-    "clipboardWrite"
-  ],
-  "host_permissions": [
-    "https://seller.temu.com/*"
-  ],
+  "name": "Temu Order Exporter",
+  "version": "2.7.0",
+  "description": "Fast, resilient Temu Seller order extraction with native Excel XLSX export.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://seller.temu.com/*"],
   "background": {
-    "service_worker": "background.js",
-    "type": "classic"
+    "service_worker": "worker.js"
   },
   "content_scripts": [
     {
       "matches": ["https://seller.temu.com/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle",
-      "all_frames": false
+      "css": ["content.css"],
+      "js": ["xlsx.js", "content.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "Temu Order Exporter",
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16":  "icons/icon16.png",
-      "32":  "icons/icon32.png",
-      "48":  "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16":  "icons/icon16.png",
-    "32":  "icons/icon32.png",
-    "48":  "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "default_title": "Temu Order Exporter 2.7"
   }
 }

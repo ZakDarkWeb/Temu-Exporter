@@ -1,831 +1,705 @@
-// ═══════════════════════════════════════════════════════════════════════════════
-// Temu Order Exporter — Content Script v8.8.6
-// Uses Shadow DOM for full CSS isolation from Temu page styles
-// ═══════════════════════════════════════════════════════════════════════════════
-
-(function () {
+(() => {
   'use strict';
 
-  const PANEL_ID = '__temu_exporter_host__';
+  const STATE_KEY = 'temuOrderExporterStateV7';
+  const BULK_PATH = '/buy-shipping-bulk-details.html';
+  const DETAIL_PATH = '/order-detail.html';
+  const PANEL_ID = 'temu-order-exporter-panel';
+  const EXPORT_COLUMNS = [
+    'Shipping Date',
+    'Order Date',
+    'Tracking Number',
+    'Order No',
+    'Customer Name',
+    'Product Details',
+    'Qty (No)',
+    'Est. Revenue',
+    'Shipping Cost'
+  ];
+  const TRACKING_RE = /\b(?:1Z[0-9A-Z]{8,}|GFUS[0-9A-Z]{8,}|[A-Z]{2,}\d{8,})\b/i;
+  const AMOUNT_RE = /[$€£]\s?[\d,]+(?:\.\d{1,2})?/;
+  const UI_KEY = 'temuOrderExporterUiV1';
+  const HISTORY_KEY = 'temuOrderExporterHistoryV1';
+  const HISTORY_LIMIT = 20;
 
-  // ── Prevent double-injection ───────────────────────────────────────────────
-  if (document.getElementById(PANEL_ID)) return;
-  if (!window.location.hostname.includes('seller.temu.com')) return;
+  let state = defaultState();
+  let panel = null;
+  let logBox = null;
+  let progressBox = null;
+  let buttons = {};
+  let statusChip = null;
+  let statusTitle = null;
+  let statusDetail = null;
+  let progressFill = null;
+  let progressPercent = null;
+  let metrics = {};
+  let uiPrefs = { minimized: false, motion: true, saveHistory: true };
+  let historyEntries = [];
+  let lastHistoryRunId = null;
+  let settingsDrawer = null;
+  let historyDrawer = null;
+  let detailReported = false;
+  let bootstrapStoreCache;
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  let running     = false;
-  let minimized   = false;
-  let dragging    = false;
-  let dragOffX    = 0, dragOffY = 0;
-
-  // ── Today's date range ────────────────────────────────────────────────────
-  function getTodayRange() {
-    const now  = new Date();
-    const from = new Date(now); from.setHours(0, 0, 0, 0);
-    const to   = new Date(now); to.setHours(23, 59, 59, 999);
-    return { fromDate: from.toISOString(), toDate: to.toISOString() };
-  }
-
-  // ── URL-based page check (zero DOM overhead) ──────────────────────────────
-  function isOnOrdersPage() {
-    const url = window.location.href;
-    return url.includes('seller.temu.com') &&
-      (url.includes('order') || url.includes('manage') || url.includes('shipped'));
-  }
-
-  // ── CSS (runs inside Shadow DOM — completely isolated) ────────────────────
-  const CSS = `
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap');
-
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :host {
-      all: initial;
-      position: fixed !important;
-      bottom: 28px !important;
-      right: 28px !important;
-      z-index: 2147483647 !important;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    /* ── CARD ───────────────────────────────────────────────── */
-    .card {
-      background: #0d1117;
-      border: 1px solid rgba(0, 212, 170, 0.25);
-      border-radius: 16px;
-      width: 300px;
-      max-height: 620px;
-      overflow-y: auto;
-      overflow-x: hidden;
-      contain: paint;  /* clips ALL child visual overflow — glows, shadows, animations */
-      box-shadow:
-        0 0 0 1px rgba(0,212,170,0.07),
-        0 12px 40px rgba(0,0,0,0.85),
-        0 0 60px rgba(0,212,170,0.05),
-        inset 0 1px 0 rgba(255,255,255,0.04);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      -webkit-font-smoothing: antialiased;
-      transition: width 0.25s ease, max-height 0.3s ease, border-radius 0.25s ease;
-    }
-
-    /* ── MINIMIZED ─────────────────────────────────────────── */
-    /* 'minimized' class is on .card itself, so use .card.minimized selectors */
-    .card.minimized {
-      width: 44px; height: 44px; min-height: 44px; max-height: 44px;
-      border-radius: 50%; overflow: hidden; overflow-y: hidden;
-      border-color: rgba(0,212,170,0.55);
-      box-shadow: 0 4px 24px rgba(0,0,0,0.8), 0 0 28px rgba(0,212,170,0.22);
-      cursor: pointer;
-    }
-    .card.minimized .body,
-    .card.minimized .title-wrap,
-    .card.minimized .actions,
-    .card.minimized .header-line { display: none !important; }
-    .card.minimized .header {
-      width: 44px; height: 44px; min-height: 44px; padding: 0;
-      justify-content: center; cursor: pointer;
-    }
-    .card.minimized .logo {
-      width: 26px; height: 26px; border-radius: 50%;
-      background: rgba(0,212,170,0.12);
-      border-color: rgba(0,212,170,0.4);
-    }
-    .card.minimized .logo svg { width: 16px; height: 16px; }
-
-    /* ── HEADER ─────────────────────────────────────────────── */
-    .header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 11px 12px 10px;
-      cursor: grab; position: relative;
-    }
-    .header:active { cursor: grabbing; }
-    .header-line {
-      position: absolute; bottom: 0; left: 12px; right: 12px;
-      height: 1px;
-      background: linear-gradient(90deg, rgba(0,212,170,0.5) 0%, transparent 80%);
-    }
-    .logo {
-      width: 26px; height: 26px; border-radius: 7px;
-      background: linear-gradient(135deg, rgba(0,212,170,0.15), rgba(0,184,148,0.08));
-      border: 1px solid rgba(0,212,170,0.28);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 13px; flex-shrink: 0; line-height: 1;
-    }
-    .title-wrap { flex: 1; min-width: 0; }
-    .title {
-      font-size: 12px; font-weight: 800; color: #f0f6ff;
-      letter-spacing: -0.3px; line-height: 1;
-      white-space: nowrap;
-    }
-    .version { font-size: 8px; font-weight: 500; color: #2d3f52; margin-top: 2px; }
-    .actions { display: flex; gap: 3px; }
-    .icon-btn {
-      all: unset;
-      width: 20px; height: 20px; border-radius: 5px;
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.07);
-      color: #4a5568; font-size: 13px; font-weight: 700;
-      cursor: pointer; font-family: inherit;
-      display: flex; align-items: center; justify-content: center;
-      transition: background 0.15s, color 0.15s; line-height: 1;
-    }
-    .icon-btn:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
-
-    /* ── BODY ────────────────────────────────────────────────── */
-    .body { padding: 11px 11px 10px; display: flex; flex-direction: column; gap: 7px; }
-
-    /* ── STATUS PILL ────────────────────────────────────────── */
-    .status-pill {
-      display: flex; align-items: center; gap: 6px;
-      padding: 5px 8px; border-radius: 8px;
-      font-size: 10px; font-weight: 600; font-family: inherit;
-      transition: all 0.25s;
-    }
-    .status-dot {
-      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-    }
-    .s-idle   { background: rgba(255,255,255,0.03); color: #4a5568; }
-    .s-idle   .status-dot { background: #2d3748; }
-    .s-ready  { background: rgba(0,212,170,0.08); color: #00d4aa; }
-    .s-ready  .status-dot { background: #00d4aa; box-shadow: 0 0 8px rgba(0,212,170,0.9); animation: dot-pulse 2s ease-in-out infinite; }
-    .s-running{ background: rgba(96,165,250,0.08); color: #93c5fd; }
-    .s-running .status-dot { background: #60a5fa; box-shadow: 0 0 8px rgba(96,165,250,0.9); animation: dot-pulse 0.9s ease-in-out infinite; }
-    .s-done   { background: rgba(0,212,170,0.1);  color: #00d4aa; }
-    .s-done   .status-dot { background: #00d4aa; }
-    .s-error  { background: rgba(248,113,113,0.08); color: #fca5a5; }
-    .s-error  .status-dot { background: #f87171; }
-    @keyframes dot-pulse {
-      0%,100% { opacity:1; transform:scale(1); }
-      50%     { opacity:0.4; transform:scale(0.75); }
-    }
-
-    /* ── BUTTONS ─────────────────────────────────────────────── */
-    .btn {
-      all: unset;
-      box-sizing: border-box; /* CRITICAL: all:unset resets box-sizing → padding causes overflow */
-      -webkit-appearance: none; /* restore button click behavior */
-      display: flex; align-items: center; justify-content: center; gap: 7px;
-      width: 100%; height: 36px; padding: 0 12px;
-      border-radius: 10px; cursor: pointer;
-      font-size: 11px; font-weight: 800; font-family: inherit;
-      letter-spacing: 0.05px; white-space: nowrap;
-      position: relative; overflow: hidden;
-      transition: transform 0.15s ease, box-shadow 0.15s ease;
-    }
-    /* Shimmer sweep */
-    .btn::after {
-      content: '';
-      position: absolute; top: 0; left: -70%; width: 45%; height: 100%;
-      background: linear-gradient(105deg, transparent 0%, rgba(255,255,255,0.18) 50%, transparent 100%);
-      animation: sweep 3.5s ease-in-out infinite;
-    }
-    @keyframes sweep { 0%{left:-70%} 45%,100%{left:120%} }
-
-    .btn-primary {
-      background: linear-gradient(130deg, #00d4aa 0%, #00ba96 55%, #00a882 100%);
-      color: #00170f;
-      box-shadow: 0 0 8px rgba(0,212,170,0.2), 0 3px 10px rgba(0,0,0,0.4);
-    }
-    .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 0 14px rgba(0,212,170,0.3), 0 5px 16px rgba(0,0,0,0.45);
-    }
-    .btn-primary:active { transform: scale(0.97); }
-
-    .btn-outline {
-      background: rgba(0,212,170,0.06);
-      border: 1px solid rgba(0,212,170,0.24);
-      color: #00d4aa;
-    }
-    .btn-outline:hover {
-      background: rgba(0,212,170,0.12);
-      border-color: rgba(0,212,170,0.45);
-      transform: translateY(-1px);
-    }
-    .btn-outline:active { transform: scale(0.97); }
-
-    .btn-cancel {
-      all: unset;
-      box-sizing: border-box;      /* fix: all:unset resets to content-box → overflow */
-      -webkit-appearance: none;    /* fix: restore proper button click behavior */
-      display: flex; align-items: center; justify-content: center; gap: 5px;
-      width: 100%; height: 30px; padding: 0 10px;
-      border-radius: 8px; cursor: pointer;
-      font-size: 10px; font-weight: 700; font-family: inherit;
-      background: rgba(239,68,68,0.07);
-      border: 1px solid rgba(239,68,68,0.22);
-      color: #fca5a5;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .btn-cancel:hover { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.4); }
-
-    .btn:disabled, .btn[disabled] {
-      opacity: 0.35; cursor: not-allowed;
-      transform: none !important; box-shadow: none !important;
-    }
-    .btn[disabled]::after { display: none; }
-
-    /* ── PROGRESS CARD ───────────────────────────────────────── */
-    .progress-card {
-      background: rgba(255,255,255,0.025);
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 10px; padding: 9px 10px 8px;
-      display: flex; flex-direction: column; gap: 7px;
-    }
-    .progress-row {
-      display: flex; align-items: center; gap: 7px;
-    }
-    .spinner {
-      width: 11px; height: 11px; flex-shrink: 0;
-      border: 2px solid rgba(96,165,250,0.18);
-      border-top-color: #60a5fa;
-      border-radius: 50%;
-      animation: spin 0.65s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .progress-label {
-      flex: 1; font-size: 10px; font-weight: 700; font-family: inherit;
-      color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .progress-pct {
-      font-size: 10px; font-weight: 900; font-family: inherit;
-      color: #00d4aa; font-variant-numeric: tabular-nums; flex-shrink: 0;
-    }
-    .progress-track {
-      height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;
-    }
-    .progress-bar {
-      height: 100%; border-radius: 2px;
-      background: linear-gradient(90deg, #00d4aa, #60a5fa);
-      box-shadow: 0 0 10px rgba(0,212,170,0.65);
-      transition: width 0.45s cubic-bezier(0.4,0,0.2,1);
-      width: 0%;
-    }
-    .progress-sub {
-      font-size: 9px; font-weight: 600; font-family: inherit; color: #374151;
-    }
-
-    /* ── RESULT TOAST ───────────────────────────────────────── */
-    .result-toast {
-      background: rgba(0,212,170,0.08);
-      border: 1px solid rgba(0,212,170,0.2);
-      border-radius: 8px; padding: 7px 9px;
-      font-size: 10px; font-weight: 700; font-family: inherit;
-      color: #00d4aa; text-align: center;
-      animation: toast-in 0.3s ease;
-    }
-    @keyframes toast-in {
-      from { opacity:0; transform:translateY(5px); }
-      to   { opacity:1; transform:none; }
-    }
-
-    /* ── PRIMARY WORKFLOW ─────────────────────────────────────── */
-    .selection-card {
-      background: rgba(96,165,250,0.055);
-      border: 1px solid rgba(96,165,250,0.18);
-      border-radius: 10px; padding: 9px 10px;
-      display: flex; flex-direction: column; gap: 7px;
-    }
-    .selection-title { display:flex; align-items:center; justify-content:space-between; gap:6px; }
-    .selection-title strong { color:#dbeafe; font-size:10px; font-weight:800; }
-    .selection-tab { color:#64748b; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.35px; }
-    .selection-count { color:#60a5fa; font-size:18px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
-    .selection-label { color:#94a3b8; font-size:9px; font-weight:600; }
-    .selection-stats { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
-    .selection-stat { background:rgba(255,255,255,.025); border-radius:7px; padding:6px 7px; min-width:0; }
-    .selection-stat b { display:block; color:#f1f5f9; font-size:12px; line-height:1; font-variant-numeric:tabular-nums; }
-    .selection-stat span { display:block; color:#64748b; font-size:8px; font-weight:700; margin-top:3px; }
-    .selection-actions { display:flex; gap:5px; }
-    .selection-actions .btn { height:29px; padding:0 6px; font-size:9px; border-radius:7px; }
-    .selection-actions .btn-clear { flex:0 0 29px; padding:0; color:#fca5a5; border-color:rgba(248,113,113,.25); background:rgba(248,113,113,.06); }
-    .selection-actions .btn-clear:hover { background:rgba(248,113,113,.14); }
-    .selection-hint { color:#64748b; font-size:8px; line-height:1.35; }
-    .tsv-card { background:rgba(0,212,170,.055); border:1px solid rgba(0,212,170,.18); border-radius:9px; padding:8px; }
-    .tsv-card textarea { width:100%; height:48px; resize:none; border:1px solid rgba(255,255,255,.08); border-radius:6px; background:#080c12; color:#94a3b8; padding:5px; font:8px/1.3 monospace; outline:none; }
-    .tsv-copy { margin-top:5px; height:27px; font-size:9px; }
-
-    /* ── DRAG DOTS ───────────────────────────────────────────── */
-    .drag-dots {
-      display: flex; justify-content: center; gap: 4px; padding-top: 1px;
-    }
-    .drag-dot {
-      width: 3px; height: 3px; border-radius: 50%; background: #1a2537;
-    }
-  `;
-
-  // ── HTML Template ─────────────────────────────────────────────────────────
-  const HTML = `
-      <div class="card">
-      <div class="header" id="hdr">
-        <div class="logo">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2L7 8H10V13H14V8H17L12 2Z" fill="#00d4aa"/>
-            <rect x="4" y="15" width="16" height="1.5" rx="0.5" fill="#00d4aa"/>
-            <rect x="4" y="18.5" width="16" height="1.5" rx="0.5" fill="#00d4aa"/>
-            <rect x="4" y="22" width="16" height="1.5" rx="0.5" fill="#00d4aa"/>
-            <rect x="4" y="15" width="1.5" height="8.5" rx="0.5" fill="#00d4aa"/>
-            <rect x="11.25" y="15" width="1.5" height="8.5" rx="0.5" fill="#00d4aa"/>
-            <rect x="18.5" y="15" width="1.5" height="8.5" rx="0.5" fill="#00d4aa"/>
-          </svg>
-        </div>
-        <div class="title-wrap">
-          <div class="title">Temu Exporter</div>
-          <div class="version">v8.8.7 · Selection Memory</div>
-        </div>
-        <div class="actions">
-          <button class="icon-btn" id="minBtn">—</button>
-        </div>
-        <div class="header-line"></div>
-      </div>
-      <div class="body">
-        <div class="status-pill s-ready" id="statusPill">
-          <span class="status-dot"></span>
-          <span id="statusTxt">Ready to export</span>
-        </div>
-
-        <div class="selection-card" id="selectionCard">
-          <div class="selection-title">
-            <strong>Bulk Label Workflow</strong>
-            <span class="selection-tab" id="selectionTab">Unshipped</span>
-          </div>
-          <div><span class="selection-count" id="selectedCount">0</span> <span class="selection-label">orders selected</span></div>
-          <div class="selection-stats">
-            <div class="selection-stat"><b id="matchedCount">0</b><span>Shipped / matched</span></div>
-            <div class="selection-stat"><b id="pendingCount">0</b><span>Pending</span></div>
-          </div>
-          <div class="selection-actions">
-            <button class="btn btn-outline" id="btnRefreshShipped">Refresh Shipped</button>
-            <button class="btn btn-primary" id="btnExportSelected">Export Sheet</button>
-            <button class="btn btn-clear" id="btnClearSelection" title="Clear saved selection">×</button>
-          </div>
-          <div class="selection-hint" id="selectionHint">Select orders on Unshipped. The selection persists while you buy labels.</div>
-        </div>
-
-        <div class="tsv-card" id="tsvCard" style="display:none;">
-          <div class="selection-title"><strong>Sheet data ready</strong><span class="selection-tab" id="tsvCount">0 rows</span></div>
-          <textarea id="tsvText" readonly></textarea>
-          <button class="btn btn-outline tsv-copy" id="btnCopySelected">Copy to Clipboard</button>
-        </div>
-
-
-        <div class="progress-card" id="progressCard" style="display:none;">
-          <div class="progress-row">
-            <div class="spinner"></div>
-            <span class="progress-label" id="progLabel">Scanning...</span>
-            <span class="progress-pct" id="progPct">0%</span>
-          </div>
-          <div class="progress-track"><div class="progress-bar" id="progBar"></div></div>
-          <div class="progress-sub" id="progSub"></div>
-          <button class="btn-cancel" id="btnCancel">✕ Cancel Export</button>
-        </div>
-
-        <div class="result-toast" id="resultToast" style="display:none;"></div>
-        <div class="drag-dots">
-          <span class="drag-dot"></span><span class="drag-dot"></span><span class="drag-dot"></span>
-          <span class="drag-dot"></span><span class="drag-dot"></span><span class="drag-dot"></span>
-        </div>
-      </div>
-    </div>
-  `;
-
-  // ── Build host + shadow root ───────────────────────────────────────────────
-  const host = document.createElement('div');
-  host.id = PANEL_ID;
-  // Host element needs fixed positioning set inline (before shadow attaches)
-  Object.assign(host.style, {
-    position: 'fixed', bottom: '28px', right: '28px',
-    zIndex: '2147483647', userSelect: 'none', lineHeight: 'normal'
-  });
-
-  const shadow = host.attachShadow({ mode: 'open' });
-
-  const styleEl = document.createElement('style');
-  styleEl.textContent = CSS;
-  shadow.appendChild(styleEl);
-
-  const wrapper = document.createElement('div');
-  wrapper.innerHTML = HTML;
-  shadow.appendChild(wrapper);
-
-  document.body.appendChild(host);
-
-  // ── Shadow DOM element helpers ────────────────────────────────────────────
-  const $ = (id) => shadow.getElementById(id);
-
-  // ── UI state functions ────────────────────────────────────────────────────
-  function setStatus(text, cls) {
-    const pill = $('statusPill');
-    const txt  = $('statusTxt');
-    if (!pill) return;
-    pill.className = 'status-pill ' + (cls || 's-idle');
-    if (txt) txt.textContent = text;
-  }
-
-  function setButtons(disabled) {
-    [$('btnRefreshShipped'), $('btnExportSelected'), $('btnClearSelection')].forEach(b => {
-      if (b) b.disabled = disabled;
-    });
-  }
-
-  function showProgress(show) {
-    const card = $('progressCard');
-    if (card) card.style.display = show ? 'flex' : 'none';
-    if (!show) updateProgress(0, '', '');
-  }
-
-  function updateProgress(pct, label, sub) {
-    const bar   = $('progBar');
-    const lbl   = $('progLabel');
-    const pctEl = $('progPct');
-    const subEl = $('progSub');
-    if (bar)   bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
-    if (lbl)   lbl.textContent = label || '';
-    if (pctEl) pctEl.textContent = Math.round(pct) + '%';
-    if (subEl) subEl.textContent = sub || '';
-  }
-
-  function showResult(text) {
-    const el = $('resultToast');
-    if (!el) return;
-    el.textContent = text;
-    el.style.display = 'block';
-    setTimeout(() => { el.style.display = 'none'; }, 6000);
-  }
-
-  // ── Persistent bulk-label selection workflow ──────────────────────────────
-  const SELECTED_ORDERS_KEY = 'temuSelectedOrders_v2';
-  const SELECTED_SHIPPED_KEY = 'temuSelectedShipped_v1';
-  let workflowBusy = false;
-  let lastWorkflowRows = [];
-  let lastWorkflowHistoryId = null;
-
-  function workflowMode() {
-    const params = new URLSearchParams(window.location.search);
-    const active = params.get('activeTab');
-    if (active === '2') return 'unshipped';
-    if (active === '3' || active === '4') return 'shipped';
-    const url = window.location.href.toLowerCase();
-    if (url.includes('shipped')) return 'shipped';
-    if (url.includes('unshipped')) return 'unshipped';
-    return 'orders';
-  }
-
-  function parseVisibleSelection() {
-    const rows = Array.from(document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]'));
-    return rows.map(row => {
-      const text = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
-      const orderNumber = (text.match(/PO-\d+-\d{8,}/) || [])[0] || '';
-      const packageId = (text.match(/PK-[A-Za-z0-9-]+/) || [])[0] || '';
-      const trackingNumber = ((text.match(/Tracking number:?\s*([A-Z0-9-]{6,})/i) || [])[1] || '');
-      const checkbox = row.querySelector('[data-testid="beast-core-checkbox"]');
-      const selected = checkbox && (checkbox.getAttribute('data-checked') === 'true' || checkbox.getAttribute('aria-checked') === 'true' || checkbox.querySelector('input')?.checked);
-      return { orderNumber, packageId, trackingNumber, selected: !!selected };
-    }).filter(row => row.orderNumber);
-  }
-
-  function identityOf(row) { return [row.orderNumber || '', row.packageId || '', row.trackingNumber || ''].filter(Boolean).join('|'); }
-  function orderKey(row) { return row.orderNumber || identityOf(row); }
-  function sourceSet(item) {
-    const values = item?.selectionSources || (item?.selectionSource ? [item.selectionSource] : []);
-    return new Set(values.filter(Boolean));
-  }
-  function isSelectedMatch(row, selectedOrders) {
-    const selected = selectedOrders.find(item => item.orderNumber === row.orderNumber);
-    if (!selected) return false;
-    const packageMatches = !selected.packageId || !row.packageId || selected.packageId === row.packageId;
-    const trackingMatches = !selected.trackingNumber || !row.trackingNumber || selected.trackingNumber === row.trackingNumber;
-    return packageMatches && trackingMatches;
-  }
-
-  async function readWorkflowState() {
-    const data = await chrome.storage.local.get([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
+  function defaultState() {
     return {
-      selected: data[SELECTED_ORDERS_KEY] || { updatedAt: 0, orders: {} },
-      shipped: data[SELECTED_SHIPPED_KEY] || { matchedCount: 0, pendingCount: 0, rows: [] }
+      version: 7,
+      status: 'idle',
+      sourceUrl: '',
+      sourceTabId: null,
+      rows: [],
+      nextIndex: 0,
+      retryQueue: [],
+      inFlight: [],
+      attempts: {},
+      records: [],
+      errors: [],
+      updatedAt: null
     };
   }
 
-  async function refreshWorkflowSummary() {
-    const state = await readWorkflowState();
-    const selected = Object.values(state.selected.orders || {});
-    const matchedRows = (state.shipped.rows || []).filter(row => isSelectedMatch(row, selected));
-    const matched = matchedRows.length;
-    const pending = selected.length ? Math.max(0, selected.length - matched) : 0;
-    if ($('selectedCount')) $('selectedCount').textContent = selected.length;
-    if ($('matchedCount')) $('matchedCount').textContent = matched;
-    if ($('pendingCount')) $('pendingCount').textContent = pending;
-    const mode = workflowMode();
-    if ($('selectionTab')) $('selectionTab').textContent = mode === 'shipped' ? 'Shipped' : mode === 'unshipped' ? 'Unshipped' : 'Orders';
-    if ($('selectionHint')) $('selectionHint').textContent = mode === 'unshipped'
-      ? 'Selections are saved automatically while you buy labels.'
-      : mode === 'shipped' ? 'Selected Shipped rows are added and ready for Sheets export.' : 'Open Unshipped or Shipped to use this workflow.';
-    if ($('btnRefreshShipped')) $('btnRefreshShipped').disabled = workflowBusy;
-    if ($('btnExportSelected')) $('btnExportSelected').disabled = workflowBusy || matched === 0;
-    lastWorkflowRows = matchedRows;
-  }
-
-  async function persistVisibleSelection() {
-    const mode = workflowMode();
-    if (mode !== 'unshipped' && mode !== 'shipped') return;
-    const visible = parseVisibleSelection();
-    if (!visible.length) return;
-    const data = await chrome.storage.local.get([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
-    const current = data[SELECTED_ORDERS_KEY] || { updatedAt: 0, orders: {} };
-    const orders = { ...(current.orders || {}) };
-    const shippedState = data[SELECTED_SHIPPED_KEY] || { updatedAt: 0, rows: [] };
-    const shippedRows = new Map((shippedState.rows || []).map(row => [orderKey(row), row]));
-    const source = mode === 'shipped' ? 'shipped' : 'unshipped';
-
-    visible.forEach(row => {
-      const identity = identityOf(row);
-      if (!identity) return;
-      const key = Object.keys(orders).find(existingKey => orders[existingKey]?.orderNumber === row.orderNumber) || identity;
-      const existing = orders[key] || { orderNumber: row.orderNumber, packageId: row.packageId, trackingNumber: row.trackingNumber, selectedAt: Date.now() };
-      const sources = sourceSet(existing);
-      if (row.selected) {
-        sources.add(source);
-        orders[key] = { ...existing, orderNumber: row.orderNumber, packageId: row.packageId, trackingNumber: row.trackingNumber, selectionSources: [...sources] };
-        if (mode === 'shipped') shippedRows.set(orderKey(row), { ...row, selectedAt: existing.selectedAt });
-      } else if (orders[key]) {
-        sources.delete(source);
-        if (sources.size) orders[key] = { ...existing, selectionSources: [...sources] };
-        else {
-          delete orders[key];
-          shippedRows.delete(orderKey(row));
-        }
-        if (mode === 'shipped') shippedRows.delete(orderKey(row));
-      }
-    });
-
-    const selected = Object.values(orders);
-    const matchedRows = [...shippedRows.values()].filter(row => isSelectedMatch(row, selected));
-    await chrome.storage.local.set({
-      [SELECTED_ORDERS_KEY]: { updatedAt: Date.now(), orders },
-      [SELECTED_SHIPPED_KEY]: {
-        ...shippedState,
-        updatedAt: Date.now(),
-        selectedCount: selected.length,
-        matchedCount: matchedRows.length,
-        pendingCount: Math.max(0, selected.length - matchedRows.length),
-        rows: matchedRows
-      }
-    });
-    await refreshWorkflowSummary();
-  }
-
-  async function clearWorkflowSelection() {
-    await chrome.storage.local.remove([SELECTED_ORDERS_KEY, SELECTED_SHIPPED_KEY]);
-    lastWorkflowRows = [];
-    if ($('tsvCard')) $('tsvCard').style.display = 'none';
-    await refreshWorkflowSummary();
-    setStatus('Saved selection cleared', 's-done');
-    setTimeout(() => setStatus('Ready to export', 's-ready'), 2500);
-  }
-
-  function copyTextWithFallback(text) {
-    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).catch(() => copyTextFallback(text));
-    return copyTextFallback(text);
-  }
-  function copyTextFallback(text) {
-    const area = document.createElement('textarea');
-    area.value = text; area.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-    document.body.appendChild(area); area.focus(); area.select();
-    let ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
-    area.remove(); return ok ? Promise.resolve() : Promise.reject(new Error('Clipboard permission denied'));
-  }
-
-  function showSelectedLabelRows(msg) {
-    lastWorkflowRows = msg.rows || [];
-    lastWorkflowHistoryId = msg.historyId || null;
-    running = false;
-    showProgress(false);
-    if ($('tsvText')) $('tsvText').value = msg.tsv || '';
-    if ($('tsvCount')) $('tsvCount').textContent = `${lastWorkflowRows.length} rows`;
-    if ($('tsvCard')) $('tsvCard').style.display = 'block';
-    workflowBusy = false;
-    setStatus(`${lastWorkflowRows.length} rows ready for Sheets`, 's-done');
-    refreshWorkflowSummary();
-  }
-
-  async function refreshSelectedShipped() {
-    if (workflowBusy) return;
-    workflowBusy = true;
-    await refreshWorkflowSummary();
-    showProgress(true); setStatus('Scanning Shipped orders...', 's-running'); updateProgress(5, 'Scanning Shipped pages...', '');
-    chrome.runtime.sendMessage({ type: 'refreshSelectedShipped' });
-  }
-
-  async function exportSelectedLabelSheets() {
-    if (workflowBusy) return;
-    const state = await readWorkflowState();
-    const selected = Object.values(state.selected.orders || {});
-    const rows = (state.shipped.rows || lastWorkflowRows).filter(row => isSelectedMatch(row, selected));
-    if (!rows.length) { setStatus('Select Shipped orders or click Refresh Shipped first', 's-error'); return; }
-    workflowBusy = true;
-    showProgress(true); setStatus('Extracting selected orders...', 's-running'); updateProgress(10, 'Opening order details...', `${rows.length} matched orders`);
-    chrome.runtime.sendMessage({ type: 'exportSelectedLabelSheets', rows });
-  }
-
-  // ── Start export ──────────────────────────────────────────────────────────
-  function startExport(sheetsMode) {
-    if (running) return;
-    running = true;
-    setButtons(true);
-    showProgress(true);
-    const { fromDate, toDate } = getTodayRange();
-    setStatus('Scanning pages...', 's-running');
-    updateProgress(5, 'Initializing...', '');
-    chrome.runtime.sendMessage({
-      type: sheetsMode ? 'quickSheetsSync' : 'quickExport',
-      fromDate, toDate
-    });
-  }
-
-  function cancelExport() {
-    // Reset UI immediately — don't wait for background response
-    running = false;
-    setButtons(false);
-    showProgress(false);
-    setStatus('Cancelling...', 's-running');
-
-    // Send cancel to background — try-catch in case service worker is sleeping
+  async function loadUiData() {
     try {
-      chrome.runtime.sendMessage({ type: 'cancelExport' }, () => {
-        if (chrome.runtime.lastError) {
-          console.warn('[Temu Exporter] Cancel message error:', chrome.runtime.lastError.message);
-        }
-        setStatus('Export cancelled', 's-error');
-        setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
-      });
-    } catch (err) {
-      console.warn('[Temu Exporter] cancelExport failed:', err);
-      setStatus('Export cancelled', 's-error');
-      setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
+      const stored = await chrome.storage.local.get([UI_KEY, HISTORY_KEY]);
+      uiPrefs = { ...uiPrefs, ...(stored[UI_KEY] || {}) };
+      historyEntries = Array.isArray(stored[HISTORY_KEY]) ? stored[HISTORY_KEY].slice(0, HISTORY_LIMIT) : [];
+    } catch (_) {
+      uiPrefs = { ...uiPrefs };
+      historyEntries = [];
     }
   }
 
-  // ── Message listener ──────────────────────────────────────────────────────
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (!msg) return;
-    if (msg.type === 'autoProgress') {
-      const { stage, page, totalPages, scraped } = msg;
-      const pct = totalPages > 0 ? (page / totalPages) * 85 : 0;
-      if (stage === 'navigating') {
-        updateProgress(pct + 5, `Scanning page ${page} / ${totalPages || '?'}`, `${scraped || 0} orders found so far`);
-      } else {
-        updateProgress(pct + 10, `Extracting orders...`, `${scraped || 0} orders collected`);
-      }
-    }
-    if (msg.type === 'autoDone' || msg.type === 'done') {
-      running = false; setButtons(false); showProgress(false);
-      const count = msg.ordersFound || 0;
-      updateProgress(100, 'Complete!', '');
-      setStatus(`Done! ${count} orders exported`, 's-done');
-      showResult(`✅ ${count} orders exported!`);
-      setTimeout(() => setStatus('Ready to export', 's-ready'), 7000);
-    }
-    if (msg.type === 'noData') {
-      running = false; setButtons(false); showProgress(false);
-      setStatus('No orders found in range', 's-error');
-      setTimeout(() => setStatus('Ready to export', 's-ready'), 4000);
-    }
-    if (msg.type === 'error') {
-      running = false; setButtons(false); showProgress(false);
-      setStatus((msg.message || 'Error').slice(0, 48), 's-error');
-      setTimeout(() => setStatus('Ready to export', 's-ready'), 5000);
-    }
-    if (msg.type === 'cancelled') {
-      running = false; workflowBusy = false; setButtons(false); showProgress(false);
-      setStatus('Cancelled', 's-error');
-      setTimeout(() => setStatus('Ready to export', 's-ready'), 3000);
-    }
-    if (msg.type === 'selectedShippedProgress') {
-      const total = Number(msg.total || 0);
-      const current = Number(msg.current || 0);
-      updateProgress(total ? Math.min(92, 10 + (current / total) * 75) : 20, msg.message || 'Scanning Shipped pages...', `${current} matched / ${total} selected`);
-    }
-    if (msg.type === 'selectedShippedReady') {
-      workflowBusy = false; running = false; showProgress(false); setButtons(false);
-      if ($('selectedCount')) $('selectedCount').textContent = msg.selectedCount || 0;
-      if ($('matchedCount')) $('matchedCount').textContent = msg.matchedCount || 0;
-      if ($('pendingCount')) $('pendingCount').textContent = msg.pendingCount || 0;
-      lastWorkflowRows = msg.rows || [];
-      setStatus(`${msg.matchedCount || 0} Shipped orders matched`, 's-done');
-      showResult(`${msg.matchedCount || 0} matched · ${msg.pendingCount || 0} pending`);
-      refreshWorkflowSummary();
-    }
-    if (msg.type === 'selectedLabelRowsReady') showSelectedLabelRows(msg);
-    if (msg.type === 'selectedLabelFileDownloaded') {
-      workflowBusy = false;
-      setStatus(`${String(msg.format || 'file').toUpperCase()} downloaded`, 's-done');
-    }
-    if (msg.type === 'selectedLabelDownloadError') {
-      workflowBusy = false;
-      setStatus((msg.message || 'Download failed').slice(0, 64), 's-error');
-    }
-    if (msg.type === 'selectedShippedError' || msg.type === 'selectedLabelExportError') {
-      workflowBusy = false; running = false; showProgress(false); setButtons(false);
-      setStatus((msg.message || 'Workflow failed').slice(0, 48), 's-error');
-    }
-  });
-
-  // ── Dragging (on host element directly) ──────────────────────────────────
-  const hdr = $('hdr');
-  if (hdr) {
-    hdr.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.icon-btn')) return;
-      dragging = true;
-      const rect = host.getBoundingClientRect();
-      dragOffX = e.clientX - rect.left;
-      dragOffY = e.clientY - rect.top;
-      host.style.transition = 'none';
-    });
-  }
-  document.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    let x = Math.max(0, Math.min(window.innerWidth  - host.offsetWidth,  e.clientX - dragOffX));
-    let y = Math.max(0, Math.min(window.innerHeight - host.offsetHeight, e.clientY - dragOffY));
-    host.style.right = 'auto'; host.style.bottom = 'auto';
-    host.style.left  = x + 'px'; host.style.top = y + 'px';
-  });
-  document.addEventListener('mouseup', () => { dragging = false; host.style.transition = ''; });
-
-  // ── Minimize ──────────────────────────────────────────────────────────────
-  const cardEl = wrapper.firstElementChild; // the .card div
-
-  function setMinimized(val) {
-    minimized = val;
-    cardEl.classList.toggle('minimized', minimized);
-    const mb = $('minBtn');
-    if (mb) mb.textContent = minimized ? '+' : '—';
+  async function saveUiPrefs() {
+    try { await chrome.storage.local.set({ [UI_KEY]: uiPrefs }); } catch (_) { /* local preference is optional */ }
   }
 
-  // ── ALL button events via single shadow-root delegation ───────────────────
-  // Using delegation on shadow root is more reliable than individual listeners
-  // in Shadow DOM — catches clicks even through composed event paths
-  shadow.addEventListener('click', (e) => {
-    // Find the actual button that was clicked (handle clicks on child elements too)
-    const btn = e.target.closest('button');
-    if (!btn) {
-      // Click on card background: expand if minimized
-      if (minimized) setMinimized(false);
+  async function saveHistoryEntry() {
+    if (!uiPrefs.saveHistory || !state.records.length || !state.runId || (lastHistoryRunId === state.runId && state.status !== 'complete')) return;
+    const cleanRecords = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
+    const entry = {
+      id: `run-${state.runId}`,
+      runId: state.runId,
+      createdAt: new Date().toISOString(),
+      orders: state.rows.length,
+      rows: cleanRecords.length,
+      errors: state.errors.length,
+      records: cleanRecords,
+      errorsData: state.errors
+    };
+    historyEntries = [entry, ...historyEntries.filter(item => item.id !== entry.id)].slice(0, HISTORY_LIMIT);
+    lastHistoryRunId = state.runId;
+    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); } catch (_) { /* history is best effort */ }
+    renderHistory();
+  }
+
+  function historyDate(value) {
+    try { return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch (_) { return value || ''; }
+  }
+
+  function downloadRecords(records, errors, message = 'Downloaded the Excel workbook.') {
+    window.TemuXlsx.downloadWorkbook(records || [], errors || []);
+    log(message);
+  }
+
+  function renderHistory() {
+    const list = panel?.querySelector('[data-role="history-list"]');
+    if (!list) return;
+    if (!historyEntries.length) {
+      list.innerHTML = '<div class="temu-exporter-empty-state"><span class="temu-exporter-empty-icon">▤</span><strong>No saved sheets yet</strong><small>Completed Excel exports will appear here.</small></div>';
       return;
     }
-
-    const id = btn.id;
-    e.stopPropagation(); // prevent Temu page handlers
-
-    if (id === 'minBtn') {
-      setMinimized(!minimized);
-    } else if (id === 'btnRefreshShipped') {
-      if (!minimized) refreshSelectedShipped();
-    } else if (id === 'btnExportSelected') {
-      if (!minimized) exportSelectedLabelSheets();
-    } else if (id === 'btnClearSelection') {
-      if (!minimized) clearWorkflowSelection();
-    } else if (id === 'btnCopySelected') {
-      const text = $('tsvText')?.value || '';
-      copyTextWithFallback(text).then(() => {
-        setStatus('Copied — paste into your sheet', 's-done');
-        showResult('Copied to clipboard');
-      }).catch(() => setStatus('Copy blocked — use the text box', 's-error'));
-    } else if (id === 'btnCancel') {
-      // Visual flash to confirm click registered
-      btn.style.background = 'rgba(239,68,68,0.25)';
-      setTimeout(() => { btn.style.background = ''; }, 200);
-      cancelExport();
-    }
-  }, true); // useCapture:true — fires before any other handler
-
-  // ── Selection persistence watcher ─────────────────────────────────────────
-  let selectionSaveTimer = null;
-  function scheduleSelectionSave() {
-    clearTimeout(selectionSaveTimer);
-    selectionSaveTimer = setTimeout(() => persistVisibleSelection().catch(() => {}), 350);
+    list.innerHTML = historyEntries.map(entry => `
+      <div class="temu-exporter-history-item" data-history-id="${String(entry.id).replace(/[^a-zA-Z0-9_-]/g, '')}">
+        <div class="temu-exporter-history-main"><span class="temu-exporter-history-icon">▤</span><div><strong>${historyDate(entry.createdAt)}</strong><small>${entry.orders} orders · ${entry.rows} rows · ${entry.errors} errors</small></div></div>
+        <div class="temu-exporter-history-actions"><button type="button" data-history-action="download" title="Download this sheet" aria-label="Download this sheet">↓</button><button type="button" data-history-action="delete" title="Delete this history item" aria-label="Delete this history item">×</button></div>
+      </div>`).join('');
   }
-  document.addEventListener('click', scheduleSelectionSave, true);
-  const tableObserver = new MutationObserver(() => {
-    if (workflowMode() === 'unshipped') scheduleSelectionSave();
-  });
-  tableObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-checked', 'aria-checked', 'class'] });
-  setInterval(() => refreshWorkflowSummary().catch(() => {}), 2500);
-  refreshWorkflowSummary().catch(() => {});
 
-  // ── SPA navigation watcher (URL-based, 3s poll) ───────────────────────────
-  let _lastUrl = window.location.href;
-  setInterval(() => {
-    const cur = window.location.href;
-    if (cur === _lastUrl) return;
-    _lastUrl = cur;
-    host.style.display = isOnOrdersPage() ? '' : 'none';
-    refreshWorkflowSummary().catch(() => {});
-    if (isOnOrdersPage() && !running && !workflowBusy) setStatus('Ready to export', 's-ready');
-  }, 3000);
+  async function deleteHistoryEntry(id) {
+    historyEntries = historyEntries.filter(entry => entry.id !== id);
+    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); } catch (_) { /* best effort */ }
+    renderHistory();
+    log('History item deleted.');
+  }
 
-  // Initial visibility
-  if (!isOnOrdersPage()) host.style.display = 'none';
+  async function clearHistory() {
+    historyEntries = [];
+    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); } catch (_) { /* best effort */ }
+    renderHistory();
+    log('Sheet history cleared.');
+  }
 
+  function closeDrawers() {
+    settingsDrawer?.classList.remove('is-open');
+    historyDrawer?.classList.remove('is-open');
+    panel?.classList.remove('drawer-open');
+    panel?.querySelector('[data-action="settings"]')?.setAttribute('aria-expanded', 'false');
+    panel?.querySelector('[data-action="history"]')?.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleDrawer(drawer) {
+    const target = drawer === 'settings' ? settingsDrawer : historyDrawer;
+    const shouldOpen = !target?.classList.contains('is-open');
+    closeDrawers();
+    if (shouldOpen) {
+      target?.classList.add('is-open');
+      panel?.classList.add('drawer-open');
+      panel?.querySelector(`[data-action="${drawer}"]`)?.setAttribute('aria-expanded', 'true');
+      if (drawer === 'history') renderHistory();
+    }
+  }
+
+  async function setMinimized(value) {
+    uiPrefs.minimized = Boolean(value);
+    panel?.classList.toggle('is-minimized', uiPrefs.minimized);
+    updatePanel();
+    await saveUiPrefs();
+  }
+
+  function normalize(value) {
+    return String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function textOf(element) {
+    return normalize(element?.innerText || element?.textContent || '');
+  }
+
+  function dateOnly(value) {
+    const text = normalize(value);
+    if (!text) return '';
+    const monthDate = text.match(/^(.+?,\s*\d{4})/);
+    if (monthDate) return monthDate[1].trim();
+    const isoDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoDate) return isoDate[1];
+    const beforeTime = text.match(/^(.+?)(?=,?\s+\d{1,2}:\d{2}\s*(?:am|pm)?\b)/i);
+    return beforeTime ? beforeTime[1].replace(/,\s*$/, '').trim() : text;
+  }
+
+  function cleanProductTitle(value) {
+    let title = normalize(value);
+    let previous = '';
+    while (title && title !== previous) {
+      previous = title;
+      title = title.replace(/\s*(?:\([^()]*\)|\{[^{}]*\}|\[[^\[\]]*\])\s*$/, '').trim();
+    }
+    return title.replace(/\s{2,}/g, ' ');
+  }
+
+  function moneyNumber(value) {
+    const cleaned = normalize(value).replace(/[^0-9.-]/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.') return null;
+    const number = Number(cleaned);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function moneyText(value) {
+    return value === null || value === undefined || !Number.isFinite(value) ? '' : `$${value.toFixed(2)}`;
+  }
+
+  function allocateMoney(totalText, basisValues) {
+    const total = moneyNumber(totalText);
+    if (total === null || !basisValues.length) return basisValues.map(() => '');
+    const weights = basisValues.map(value => Number.isFinite(value) && value > 0 ? value : 1);
+    const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+    let allocated = 0;
+    return weights.map((weight, index) => {
+      const value = index === weights.length - 1 ? total - allocated : Math.round((total * weight / weightTotal) * 100) / 100;
+      allocated += value;
+      return moneyText(value);
+    });
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function sendMessage(message) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, response => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve(response || {});
+      });
+    });
+  }
+
+  async function getCurrentState() {
+    try {
+      const response = await sendMessage({ type: 'TEMU_GET_STATE' });
+      state = { ...defaultState(), ...(response.state || {}) };
+    } catch (_) {
+      const result = await chrome.storage.local.get(STATE_KEY);
+      state = { ...defaultState(), ...(result[STATE_KEY] || {}) };
+    }
+    updatePanel();
+    return state;
+  }
+
+  function exactTextElements(label, root = document) {
+    return [...root.querySelectorAll('div,span,th,td')].filter(element => normalize(element.textContent) === label);
+  }
+
+  function findSiblingValue(label, root = document, pattern = null) {
+    for (const labelElement of exactTextElements(label, root)) {
+      let ancestor = labelElement.parentElement;
+      for (let level = 0; ancestor && level < 5; level += 1, ancestor = ancestor.parentElement) {
+        const candidates = [...ancestor.children]
+          .filter(child => child !== labelElement && !child.contains(labelElement))
+          .map(textOf)
+          .filter(value => value && value !== label);
+        const matching = pattern ? candidates.find(value => pattern.test(value)) : candidates[0];
+        if (matching) return matching;
+      }
+    }
+    return '';
+  }
+
+  function valueFromHeading(headingLabel, valueLabel, root = document, pattern = null) {
+    for (const heading of exactTextElements(headingLabel, root)) {
+      let ancestor = heading.parentElement;
+      for (let level = 0; ancestor && level < 10; level += 1, ancestor = ancestor.parentElement) {
+        if (!normalize(textOf(ancestor)).includes(valueLabel)) continue;
+        const value = findSiblingValue(valueLabel, ancestor, pattern);
+        if (value) return value;
+      }
+    }
+    return '';
+  }
+
+  function topRightEstimatedRevenue(root = document) {
+    return valueFromHeading('Sales proceeds', 'Estimated revenue', root, AMOUNT_RE)
+      || findSiblingValue('Estimated revenue', root, AMOUNT_RE)
+      || valueAfterLabel('Estimated revenue', root, /([$€£]\s?[\d,]+(?:\.\d{1,2})?)/);
+  }
+
+  function valueAfterLabel(label, root = document, pattern = null) {
+    const content = textOf(root);
+    const start = content.toLowerCase().indexOf(label.toLowerCase());
+    if (start < 0) return '';
+    const after = content.slice(start + label.length).trim();
+    if (pattern) {
+      const match = after.match(pattern);
+      return match ? (match[1] || match[0]).trim() : '';
+    }
+    return after.split(/\s{2,}|\b(?:Courier|Tracking number|Shipping from|Dimensions|Package weight|Order status history)\b/i)[0].trim();
+  }
+
+  function findPackageContainer(packageId) {
+    if (!packageId) return document;
+    const matches = [...document.querySelectorAll('div,span')]
+      .filter(element => normalize(element.textContent) === packageId);
+    for (const match of matches) {
+      let ancestor = match;
+      for (let level = 0; ancestor && level < 12; level += 1, ancestor = ancestor.parentElement) {
+        const content = textOf(ancestor);
+        if (content.includes(packageId) && /Tracking number/i.test(content) && /Est\. total shipping cost/i.test(content)) return ancestor;
+      }
+    }
+    return document;
+  }
+
+  function parseProductsFromDom() {
+    const rows = [...document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]')]
+      .filter(candidate => candidate.querySelectorAll('td').length >= 3);
+    const fallbackRows = rows.length ? rows : [...document.querySelectorAll('table')]
+      .flatMap(table => [...table.querySelectorAll('tr')])
+      .filter(candidate => candidate.querySelectorAll('td').length >= 3);
+    return fallbackRows.map(row => {
+      const cells = [...row.querySelectorAll('td')];
+      const rawProduct = normalize(textOf(cells[1]));
+      const beforeIdentifiers = rawProduct.split(/\b(?:Goods ID|SKU ID|Order item ID)\s*:/i)[0].trim() || rawProduct;
+      const quantityText = normalize(textOf(cells[2]));
+      const quantity = quantityText.match(/(\d+)\s+shipped\b/i)?.[1] || quantityText.match(/(\d+)\s+item/i)?.[1] || quantityText.match(/\d+/)?.[0] || '';
+      const proceedsText = normalize(textOf(cells[5]));
+      const revenueMatches = proceedsText.match(/[$€£]\s?[\d,]+(?:\.\d{1,2})?/g) || [];
+      const lineRevenue = revenueMatches.length ? revenueMatches[revenueMatches.length - 1] : '';
+      return { productDetails: cleanProductTitle(beforeIdentifiers), quantity, lineRevenue };
+    }).filter(product => product.productDetails || product.quantity);
+  }
+
+  function parseOrderNumberFromDom() {
+    const match = textOf(document.body).match(/Order ID\s*:?\s*([A-Z0-9-]+)/i);
+    return match?.[1] || new URL(location.href).searchParams.get('parent_order_sn') || '';
+  }
+
+  function parseDetailRecordsFromDom(active) {
+    const packageRoot = findPackageContainer(active?.packageId || '');
+    const products = parseProductsFromDom();
+    const orderRevenue = topRightEstimatedRevenue(document);
+    const shippingCost = findSiblingValue('Est. total shipping cost', packageRoot, AMOUNT_RE) || valueAfterLabel('Est. total shipping cost', packageRoot, /([$€£]\s?[\d,]+(?:\.\d{1,2})?)/);
+    const firstRevenue = orderRevenue || products[0]?.lineRevenue || '';
+    const firstShippingCost = shippingCost || '';
+    const common = {
+      'Shipping Date': dateOnly(findSiblingValue('Shipment confirmed at', packageRoot) || valueAfterLabel('Shipment confirmed at', packageRoot, /^(.*?)(?=\s+Courier\b|$)/i)),
+      'Order Date': dateOnly(findSiblingValue('Purchase date') || valueAfterLabel('Purchase date', document, /^(.*?)(?=\s+Shipping service\b|$)/i)),
+      'Tracking Number': valueAfterLabel('Tracking number', packageRoot, TRACKING_RE) || '',
+      'Order No': parseOrderNumberFromDom() || active?.orderNo || '',
+      'Customer Name': findSiblingValue('Recipient name')
+    };
+    return products.map((product, index) => ({
+      ...common,
+      'Product Details': cleanProductTitle(product.productDetails),
+      'Qty (No)': product.quantity,
+      'Est. Revenue': index === 0 ? firstRevenue : '',
+      'Shipping Cost': index === 0 ? firstShippingCost : ''
+    }));
+  }
+
+  function getActiveDetailMeta() {
+    const raw = location.hash.startsWith('#temu-exporter=') ? location.hash.slice('#temu-exporter='.length) : '';
+    if (!raw) return null;
+    try { return JSON.parse(decodeURIComponent(raw)); } catch (_) { return null; }
+  }
+
+  function getPageBootstrapStore() {
+    if (bootstrapStoreCache !== undefined) return bootstrapStoreCache;
+    if (window.rawData?.store) {
+      bootstrapStoreCache = window.rawData.store;
+      return bootstrapStoreCache;
+    }
+    for (const script of [...document.scripts]) {
+      const source = script.textContent || '';
+      const marker = 'window.rawData';
+      const markerIndex = source.indexOf(marker);
+      if (markerIndex < 0) continue;
+      const equalsIndex = source.indexOf('=', markerIndex + marker.length);
+      const braceStart = source.indexOf('{', equalsIndex);
+      if (equalsIndex < 0 || braceStart < 0) continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = braceStart; index < source.length; index += 1) {
+        const character = source[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character.charCodeAt(0) === 92) escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }
+        if (character === '"') { inString = true; continue; }
+        if (character === '{') depth += 1;
+        else if (character === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            try {
+              bootstrapStoreCache = JSON.parse(source.slice(braceStart, index + 1)).store || null;
+              return bootstrapStoreCache;
+            } catch (_) { break; }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function getStructuredRecords(active) {
+    const store = getPageBootstrapStore();
+    if (!store) return null;
+    const parent = store.parentOrderMap || {};
+    const shipping = store.shippingInfo || {};
+    const orders = Array.isArray(store.orderList) ? store.orderList : [];
+    if (!orders.length) return null;
+    const packages = Array.isArray(parent.localPackageInfoList) ? parent.localPackageInfoList : [];
+    const entries = orders.map((order, index) => {
+      const orderPackage = Array.isArray(order.orderPackageInfoList) ? order.orderPackageInfoList[0] || {} : {};
+      const packageSn = orderPackage.packageSn || order.packageSn || order.packageId || active?.packageId || '';
+      const packageData = packages.find(item => item.packageSn === packageSn) || packages.find(item => item.packageSn === active?.packageId) || packages[0] || {};
+      const interlines = Array.isArray(packageData.interlineInfoForAggregationInfo) ? packageData.interlineInfoForAggregationInfo : [];
+      const interline = interlines.find(item => item.packageSn === packageSn || item.trackingNumber === packageData.trackingNumber) || interlines[0] || {};
+      const basePrice = moneyNumber(order.estimatedIncome || order.orderRetailPrice || order.goodsRetailPrice || order.goodsBasePrice);
+      return { order, index, orderPackage, packageSn, packageData, interline, basePrice };
+    });
+    const parentRevenue = normalize(parent.estimatedIncomeTotal || '');
+    const packageGroups = new Map();
+    entries.forEach((entry, index) => {
+      const key = entry.packageSn || `__package_${index}`;
+      if (!packageGroups.has(key)) packageGroups.set(key, []);
+      packageGroups.get(key).push(index);
+    });
+    let shippingTotalNumber = 0;
+    let shippingTotalFound = false;
+    for (const indexes of packageGroups.values()) {
+      const packageCost = entries[indexes[0]]?.interline?.estimatedAmount || entries[indexes[0]]?.packageData?.estimatedAmount || '';
+      const numericCost = moneyNumber(packageCost);
+      if (numericCost !== null) {
+        shippingTotalNumber += numericCost;
+        shippingTotalFound = true;
+      }
+    }
+    const shippingTotal = shippingTotalFound ? moneyText(shippingTotalNumber) : normalize(entries[0]?.interline?.estimatedAmount || entries[0]?.packageData?.estimatedAmount || '');
+    const orderNo = parent.parentOrderSn || active?.orderNo || '';
+    const records = entries.map((entry, index) => {
+      const order = entry.order;
+      const productName = normalize(order.goodsName || order.originalGoodsName || '');
+      const trackingNumber = normalize(entry.orderPackage?.trackingNumber || entry.packageData.trackingNumber || entry.interline.trackingNumber || '');
+      return {
+        'Shipping Date': dateOnly(entry.packageData.sendTimeStr || ''),
+        'Order Date': dateOnly(parent.localParentOrderTimeStr || ''),
+        'Tracking Number': trackingNumber,
+        'Order No': normalize(orderNo),
+        'Customer Name': normalize(shipping.receiptName || ''),
+        'Product Details': cleanProductTitle(productName),
+        'Qty (No)': order.quantity ?? order.fulfillmentQuantity ?? order.originQuantity ?? '',
+        'Est. Revenue': index === 0 ? (parentRevenue || normalize(order.estimatedIncome || '')) : '',
+        'Shipping Cost': index === 0 ? shippingTotal : ''
+      };
+    });
+    return { records, store };
+  }
+
+  function hasMinimumDetail(record) {
+    return Boolean(record && (record['Order No'] || record['Tracking Number']) && (record['Product Details'] || record['Qty (No)']));
+  }
+
+  function missingFields(record, rowIndex = 0) {
+    const allowedBlank = new Set(['Est. Revenue', 'Shipping Cost']);
+    return EXPORT_COLUMNS.filter(column => !normalize(record?.[column]) && (rowIndex === 0 || !allowedBlank.has(column)));
+  }
+
+  function allRecordsComplete(records) {
+    return records.length > 0 && records.every((record, index) => hasMinimumDetail(record) && missingFields(record, index).length === 0);
+  }
+
+  async function waitForDetailData(timeout = 30000) {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      if (getPageBootstrapStore()?.orderList?.length) return true;
+      if (/no-auth|login/i.test(location.pathname)) throw new Error('Temu opened a no-auth page.');
+      if (/no internet|network error|no connection/i.test(textOf(document.body))) throw new Error('Temu displayed a network error page.');
+      if (/Purchase date/i.test(textOf(document.body)) && /Order details/i.test(document.title)) return true;
+      await sleep(50);
+    }
+    throw new Error('Timed out waiting for structured order-detail data.');
+  }
+
+  async function processDetailPage() {
+    if (detailReported) return;
+    const active = getActiveDetailMeta();
+    if (!active) return;
+    detailReported = true;
+    try {
+      await waitForDetailData();
+      const structured = getStructuredRecords(active);
+      let records = structured?.records || [];
+      if (!allRecordsComplete(records)) {
+        const fallbackRecords = parseDetailRecordsFromDom(active);
+        if (allRecordsComplete(fallbackRecords)) records = fallbackRecords;
+      }
+      const missing = [...new Set(records.flatMap((record, index) => missingFields(record, index)))];
+      if (!allRecordsComplete(records)) throw new Error(`Order-detail data was incomplete after rendering. Missing: ${missing.join(', ') || 'unknown fields'}`);
+      await sendMessage({ type: 'TEMU_DETAIL_RESULT', records, missing: [] });
+    } catch (error) {
+      await sendMessage({ type: 'TEMU_DETAIL_ERROR', message: error?.message || String(error) });
+    }
+  }
+
+  function captureBulkRows() {
+    const rows = [...document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]')];
+    return rows.map((row, position) => {
+      const cells = [...row.querySelectorAll('td[data-testid="beast-core-table-td"], td')];
+      return {
+        position,
+        orderNo: normalize(textOf(cells[0])),
+        packageId: normalize(textOf(cells[1])),
+        trackingNumber: normalize(textOf(cells[8])),
+        shippingCost: normalize(textOf(cells[7]))
+      };
+    }).filter(row => row.orderNo || row.packageId);
+  }
+
+  function log(message, type = 'info') {
+    if (!logBox) return;
+    const line = document.createElement('div');
+    line.className = `temu-exporter-log-${type}`;
+    line.textContent = `${new Date().toLocaleTimeString()}  ${message}`;
+    logBox.appendChild(line);
+    while (logBox.children.length > 80) logBox.removeChild(logBox.firstChild);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function panelStats() {
+    const total = state.rows.length;
+    const done = new Set(state.records.map(record => record.__key || `${record['Order No'] || ''}::${record['Tracking Number'] || ''}`)).size;
+    const rows = state.records.length;
+    const failed = state.errors.length;
+    const active = state.inFlight.length;
+    const retried = Object.values(state.attempts || {}).filter(value => value > 1).length;
+    const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const status = state.status === 'running' ? 'Running' : state.status === 'paused' ? 'Paused' : state.status === 'complete' ? 'Complete' : 'Ready';
+    return { total, done, rows, failed, active, retried, percent, status };
+  }
+
+  function updatePanel() {
+    if (!panel) return;
+    const stats = panelStats();
+    const detail = stats.total ? `${stats.done} of ${stats.total} orders processed` : 'Open a Temu bulk-shipping page to begin';
+    const stateMessage = stats.status === 'running' ? 'Live extraction in progress' : stats.status === 'paused' ? 'Checkpoint saved — ready to resume' : stats.status === 'complete' ? 'Extraction complete — workbook ready' : 'Ready for a new extraction';
+    if (progressBox) progressBox.textContent = `${stats.status} — ${stats.done}/${stats.total || 0} orders — ${stats.rows} product rows — ${stats.active} active — ${stats.failed} errors — ${stats.retried} retried`;
+    if (statusChip) {
+      statusChip.textContent = stats.status;
+      statusChip.dataset.status = stats.status.toLowerCase();
+    }
+    if (statusTitle) statusTitle.textContent = stateMessage;
+    if (statusDetail) statusDetail.textContent = detail;
+    if (progressFill) progressFill.style.width = `${stats.percent}%`;
+    if (progressPercent) progressPercent.textContent = `${stats.percent}%`;
+    if (metrics.orders) metrics.orders.textContent = `${stats.done}/${stats.total || 0}`;
+    if (metrics.rows) metrics.rows.textContent = String(stats.rows);
+    if (metrics.errors) metrics.errors.textContent = String(stats.failed);
+    if (metrics.active) metrics.active.textContent = String(stats.active);
+    panel.dataset.status = stats.status.toLowerCase();
+    const minimizeButton = panel.querySelector('[data-action="minimize"]');
+    if (minimizeButton) {
+      minimizeButton.textContent = uiPrefs.minimized ? '+' : '−';
+      minimizeButton.title = uiPrefs.minimized ? 'Expand panel' : 'Minimize panel';
+      minimizeButton.setAttribute('aria-label', uiPrefs.minimized ? 'Expand panel' : 'Minimize panel');
+    }
+    if (buttons.start) buttons.start.innerHTML = `<span class="temu-exporter-button-icon" aria-hidden="true">${state.status === 'paused' ? '▶' : '↗'}</span><span>${state.status === 'paused' ? 'Resume extraction' : 'Start extraction'}</span>`;
+    if (buttons.pause) buttons.pause.disabled = state.status !== 'running';
+    if (buttons.stop) buttons.stop.disabled = state.status === 'idle' && !state.records.length;
+    if (buttons.download) buttons.download.disabled = !state.records.length;
+  }
+
+  function createPanel() {
+    if (document.getElementById(PANEL_ID)) return;
+    panel = document.createElement('section');
+    panel.id = PANEL_ID;
+    panel.setAttribute('aria-label', 'Temu Order Exporter');
+    panel.innerHTML = `
+      <div class="temu-exporter-header">
+        <div class="temu-exporter-brand"><div class="temu-exporter-logo" aria-hidden="true"><span>TO</span></div><div class="temu-exporter-brand-copy"><strong>Temu Order Exporter</strong><small>Seller workflow assistant</small></div></div>
+        <div class="temu-exporter-toolbar">
+          <button type="button" data-action="history" title="Sheet history" aria-label="Open sheet history" aria-expanded="false">▤</button>
+          <button type="button" data-action="settings" title="Settings" aria-label="Open settings" aria-expanded="false">⚙</button>
+          <button type="button" data-action="minimize" title="Minimize panel" aria-label="Minimize panel">−</button>
+        </div>
+      </div>
+      <div class="temu-exporter-body" data-role="panel-body">
+        <div class="temu-exporter-status-card">
+          <div class="temu-exporter-status-top"><div class="temu-exporter-status-orbit" aria-hidden="true"><span></span></div><div class="temu-exporter-status-copy"><strong data-role="status-title">Ready for a new extraction</strong><span data-role="status-detail">Open a Temu bulk-shipping page to begin</span></div><span class="temu-exporter-status-chip" data-role="status-chip">Ready</span></div>
+          <div class="temu-exporter-progress-track" aria-label="Extraction progress"><span data-role="progress-fill"></span></div>
+          <div class="temu-exporter-progress-meta"><span data-role="progress"></span><strong data-role="progress-percent">0%</strong></div>
+        </div>
+        <div class="temu-exporter-metrics" aria-label="Extraction statistics">
+          <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon orders" aria-hidden="true">↗</span><div><strong data-metric="orders">0/0</strong><small>Orders</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon rows" aria-hidden="true">▦</span><div><strong data-metric="rows">0</strong><small>Product rows</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon active" aria-hidden="true">◌</span><div><strong data-metric="active">0</strong><small>Active tabs</small></div></div><div class="temu-exporter-metric"><span class="temu-exporter-metric-icon errors" aria-hidden="true">!</span><div><strong data-metric="errors">0</strong><small>Errors</small></div></div>
+        </div>
+        <div class="temu-exporter-actions"><button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">↗</span><span>Start extraction</span></button><button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">↓</span><span>Download Excel</span></button><button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">Ⅱ</span><span>Pause</span></button><button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">×</span><span>Stop / clear</span></button></div>
+        <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v2.7.0</span></div>
+      </div>
+      <aside class="temu-exporter-drawer" data-role="settings-drawer" aria-label="Settings"><div class="temu-exporter-drawer-head"><div><strong>Settings</strong><small>Personalize your workspace</small></div><button type="button" data-action="close-settings" aria-label="Close settings">×</button></div><div class="temu-exporter-setting-row"><div><strong>Save sheet history</strong><small>Keep the last 20 sessions locally</small></div><label class="temu-exporter-switch"><input type="checkbox" data-setting="saveHistory"><span></span></label></div><div class="temu-exporter-setting-row"><div><strong>Motion effects</strong><small>Use subtle neon status animations</small></div><label class="temu-exporter-switch"><input type="checkbox" data-setting="motion"><span></span></label></div><div class="temu-exporter-setting-note">Data stays in this browser. Nothing is uploaded.</div></aside>
+      <aside class="temu-exporter-drawer" data-role="history-drawer" aria-label="Sheet history"><div class="temu-exporter-drawer-head"><div><strong>Sheet history</strong><small>Last 20 exports stored locally</small></div><button type="button" data-action="close-history" aria-label="Close history">×</button></div><div class="temu-exporter-history-list" data-role="history-list"></div><button type="button" class="temu-exporter-clear-history" data-action="clear-history">Clear all history</button></aside>
+    `;
+    document.documentElement.appendChild(panel);
+    progressBox = panel.querySelector('[data-role="progress"]');
+    logBox = panel.querySelector('[data-role="log"]');
+    settingsDrawer = panel.querySelector('[data-role="settings-drawer"]');
+    historyDrawer = panel.querySelector('[data-role="history-drawer"]');
+    statusChip = panel.querySelector('[data-role="status-chip"]');
+    statusTitle = panel.querySelector('[data-role="status-title"]');
+    statusDetail = panel.querySelector('[data-role="status-detail"]');
+    progressFill = panel.querySelector('[data-role="progress-fill"]');
+    progressPercent = panel.querySelector('[data-role="progress-percent"]');
+    metrics = {
+      orders: panel.querySelector('[data-metric="orders"]'),
+      rows: panel.querySelector('[data-metric="rows"]'),
+      active: panel.querySelector('[data-metric="active"]'),
+      errors: panel.querySelector('[data-metric="errors"]')
+    };
+    buttons = {
+      start: panel.querySelector('[data-action="start"]'),
+      pause: panel.querySelector('[data-action="pause"]'),
+      stop: panel.querySelector('[data-action="stop"]'),
+      download: panel.querySelector('[data-action="download"]')
+    };
+    buttons.start.addEventListener('click', startJob);
+    buttons.pause.addEventListener('click', pauseJob);
+    buttons.stop.addEventListener('click', stopJob);
+    buttons.download.addEventListener('click', async () => {
+      await saveHistoryEntry();
+      const records = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
+      downloadRecords(records, state.errors, `Downloaded ${records.length} records as an Excel workbook.`);
+    });
+    panel.querySelector('[data-action="history"]').addEventListener('click', () => toggleDrawer('history'));
+    panel.querySelector('[data-action="settings"]').addEventListener('click', () => toggleDrawer('settings'));
+    panel.querySelector('[data-action="minimize"]').addEventListener('click', () => setMinimized(!uiPrefs.minimized));
+    panel.querySelector('[data-action="close-settings"]').addEventListener('click', closeDrawers);
+    panel.querySelector('[data-action="close-history"]').addEventListener('click', closeDrawers);
+    panel.querySelector('[data-action="clear-history"]').addEventListener('click', clearHistory);
+    panel.querySelector('[data-role="history-list"]').addEventListener('click', event => {
+      const actionButton = event.target.closest('[data-history-action]');
+      const item = event.target.closest('[data-history-id]');
+      if (!actionButton || !item) return;
+      const entry = historyEntries.find(candidate => candidate.id.replace(/[^a-zA-Z0-9_-]/g, '') === item.dataset.historyId);
+      if (!entry) return;
+      if (actionButton.dataset.historyAction === 'download') downloadRecords(entry.records, entry.errorsData, 'Downloaded the selected historical workbook.');
+      if (actionButton.dataset.historyAction === 'delete') deleteHistoryEntry(entry.id);
+    });
+    panel.querySelectorAll('[data-setting]').forEach(input => input.addEventListener('change', async event => {
+      uiPrefs[event.target.dataset.setting] = event.target.checked;
+      panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
+      await saveUiPrefs();
+      log(`${event.target.dataset.setting === 'motion' ? 'Motion effects' : 'Sheet history'} ${event.target.checked ? 'enabled' : 'disabled'}.`);
+    }));
+    panel.querySelector('[data-setting="saveHistory"]').checked = uiPrefs.saveHistory;
+    panel.querySelector('[data-setting="motion"]').checked = uiPrefs.motion;
+    panel.classList.toggle('is-minimized', uiPrefs.minimized);
+    panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
+    renderHistory();
+    chrome.runtime.onMessage.addListener(message => {
+      if (message?.type === 'TEMU_STATE_UPDATE') {
+        state = { ...defaultState(), ...(message.state || {}) };
+        updatePanel();
+        if (state.status === 'complete') {
+          log(`Finished: ${state.records.length} records, ${state.errors.length} errors.`);
+          saveHistoryEntry();
+        }
+      }
+    });
+    updatePanel();
+  }
+
+  async function startJob() {
+    const rows = captureBulkRows();
+    if (!rows.length) {
+      log('No rendered order rows found. Wait for the table and reload the page.', 'error');
+      return;
+    }
+    const response = await sendMessage({ type: 'TEMU_START_JOB', sourceUrl: location.href, rows });
+    state = { ...defaultState(), ...(response.state || {}) };
+    updatePanel();
+    log(`Started ${rows.length} orders with two background detail tabs.`);
+  }
+
+  async function pauseJob() {
+    const response = await sendMessage({ type: 'TEMU_PAUSE_JOB' });
+    state = { ...defaultState(), ...(response.state || {}) };
+    updatePanel();
+    log('Paused. Current checkpoint is preserved.');
+  }
+
+  async function stopJob() {
+    const response = await sendMessage({ type: 'TEMU_STOP_JOB' });
+    state = { ...defaultState(), ...(response.state || {}) };
+    if (logBox) logBox.textContent = '';
+    updatePanel();
+    log('Stopped and cleared the saved batch.');
+  }
+
+  async function init() {
+    if (location.pathname === BULK_PATH) {
+      await loadUiData();
+      createPanel();
+      await getCurrentState();
+      if (state.status === 'running') log(`Batch active: ${state.records.length}/${state.rows.length} completed.`);
+      else if (state.status === 'complete') {
+        log(`Previous batch complete: ${state.records.length} records ready.`);
+        saveHistoryEntry();
+      }
+      return;
+    }
+    if (location.pathname === DETAIL_PATH) await processDetailPage();
+  }
+
+  init().catch(error => console.error('[Temu Order Exporter]', error));
 })();
-
-// ═══════════════════════════════════════════════════════════════════════════════
