@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Temu Order Exporter",
+  "version": "4.0.0",
+  "description": "Professional Temu Seller order extractor — in-page card with automations, auto-export, auto-retry, and a full History & Tools workspace.",
+  "permissions": [
+    "alarms",
+    "notifications",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://seller.temu.com/*"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://seller.temu.com/*"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "js": [
+        "xlsx.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Open Temu Exporter panel",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["https://seller.temu.com/*"]
+    }
+  ]
+}
+
+

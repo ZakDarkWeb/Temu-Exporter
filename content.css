@@ -1,0 +1,901 @@
+/*
+  Temu Order Exporter — Professional Card v4.0
+  Electric Cyan · Glassmorphism · SVG Icons · Micro-animations
+  Glowing Rotating Border inspired by CodeByGaurav
+*/
+
+/* ── CSS @property for animated angle ──────────────────────── */
+@property --te-rotate {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* ── Design Tokens ─────────────────────────────────────────── */
+#temu-order-exporter-panel {
+  --te-bg:           #04101e;
+  --te-surface:      #081828;
+  --te-surface-2:    #0c1f34;
+  --te-surface-3:    #10283f;
+  --te-border:       rgba(120, 190, 215, .22);
+  --te-border-s:     rgba(0, 229, 255, .50);
+  --te-text:         #f2fcff;
+  --te-text-2:       #c8e8f0;
+  --te-muted:        #8ab4c2;
+  --te-dim:          #557080;
+  --te-cyan:         #00e5ff;
+  --te-cyan-2:       #67e8f9;
+  --te-cyan-soft:    rgba(0, 229, 255, .11);
+  --te-green:        #34d399;
+  --te-green-soft:   rgba(52, 211, 153, .12);
+  --te-amber:        #fbbf24;
+  --te-amber-soft:   rgba(251, 191, 36, .12);
+  --te-red:          #f87171;
+  --te-red-soft:     rgba(248, 113, 113, .12);
+  --te-blue:         #60a5fa;
+  --te-blue-soft:    rgba(96, 165, 250, .12);
+  --te-shadow:       0 22px 60px rgba(0,0,0,.62), 0 0 0 1px rgba(0,229,255,.07);
+  --te-shadow-soft:  0 8px 28px rgba(0,0,0,.32);
+  --te-radius:       17px;
+  --te-radius-sm:    10px;
+  --te-fast:         130ms cubic-bezier(.2,.8,.2,1);
+  --te-norm:         220ms cubic-bezier(.2,.8,.2,1);
+  --te-spring:       440ms cubic-bezier(.2,1.3,.4,1);
+
+  --te-rotate: 0deg;
+
+  position: fixed;
+  z-index: 2147483647;
+  right: 18px;
+  bottom: 18px;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(800px, calc(100vh - 24px));
+  box-sizing: border-box;
+  overflow: hidden;
+  contain: layout paint;
+  color: var(--te-text);
+
+  /* ── Multi-color rotating border — Google-style ────────────── */
+  /* Solid colors = visible on white page AND dark page       */
+  border: 4px solid transparent;
+  background:
+    linear-gradient(160deg, #060f1e 0%, #04101e 55%, #060e1c 100%) padding-box,
+    conic-gradient(
+      from var(--te-rotate),
+      #EA4335 0deg,
+      #EA4335 15deg,
+      #FBBC05 90deg,
+      #FBBC05 105deg,
+      #34A853 180deg,
+      #34A853 195deg,
+      #4285F4 270deg,
+      #4285F4 285deg,
+      #EA4335 360deg
+    ) border-box;
+  /* Soft multi-color glow */
+  box-shadow:
+    0 22px 60px rgba(0,0,0,.62),
+    0 0 18px rgba(234,67,53,.22),
+    0 0 18px rgba(66,133,244,.22);
+
+  border-radius: var(--te-radius);
+  font: 13px/1.45 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+  animation: te-panel-in .38s cubic-bezier(.2,.9,.3,1) both, te-border-rotate 4s linear infinite;
+  transition: box-shadow var(--te-norm), transform var(--te-norm), width var(--te-norm);
+}
+
+/* ── Entry Animation ────────────────────────────────────────── */
+@keyframes te-panel-in {
+  from { opacity: 0; transform: translateY(14px) scale(.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes te-orbit-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes te-border-rotate {
+  0%   { --te-rotate: 0deg; }
+  100% { --te-rotate: 360deg; }
+}
+
+@keyframes te-pulse-ring {
+  0%,100% { box-shadow: 0 0 0 0   rgba(0,229,255,.40); }
+  50%      { box-shadow: 0 0 0 6px rgba(0,229,255,.00); }
+}
+
+@keyframes te-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@keyframes te-bump {
+  0%  { transform: scale(1); }
+  45% { transform: scale(1.18); }
+  100%{ transform: scale(1); }
+}
+
+@keyframes te-dot-pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50%      { opacity:.55; transform:scale(.78); }
+}
+
+@keyframes te-slide-down {
+  from { opacity:0; transform:translateY(-6px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+/* ── Box Reset ──────────────────────────────────────────────── */
+#temu-order-exporter-panel *,
+#temu-order-exporter-panel *::before,
+#temu-order-exporter-panel *::after { box-sizing: border-box; }
+
+/* ── Ambient Overlay ────────────────────────────────────────── */
+#temu-order-exporter-panel::before {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  opacity: .55;
+  background:
+    radial-gradient(circle at 6% 0%, rgba(0,229,255,.13), transparent 32%),
+    linear-gradient(rgba(0,229,255,.042) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,255,.042) 1px, transparent 1px);
+  background-size: auto, 22px 22px, 22px 22px;
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,.4) 60%, transparent 100%);
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+#temu-order-exporter-panel ::-webkit-scrollbar { width:4px; height:4px; }
+#temu-order-exporter-panel ::-webkit-scrollbar-track { background:transparent; }
+#temu-order-exporter-panel ::-webkit-scrollbar-thumb { background:rgba(120,190,215,.34); border-radius:99px; }
+#temu-order-exporter-panel ::-webkit-scrollbar-thumb:hover { background:var(--te-cyan); }
+#temu-order-exporter-panel ::selection { color:var(--te-text); background:var(--te-cyan-soft); }
+
+/* ── Header ─────────────────────────────────────────────────── */
+.temu-exporter-header {
+  position: relative; z-index: 1;
+  display: flex; min-height: 60px;
+  align-items: center; justify-content: space-between;
+  gap: 10px; padding: 10px 13px;
+  background: linear-gradient(145deg, rgba(8,24,42,.98), rgba(4,16,30,.98));
+  border-bottom: 1px solid rgba(120,190,215,.17);
+}
+.temu-exporter-header::after {
+  content: "";
+  position: absolute; right:14px; bottom:-1px; left:14px;
+  height:1px;
+  background: linear-gradient(90deg, transparent, rgba(0,229,255,.55), transparent);
+}
+
+/* ── Brand ──────────────────────────────────────────────────── */
+.temu-exporter-brand { display:flex; min-width:0; align-items:center; gap:9px; }
+.temu-exporter-brand-copy { min-width:0; }
+.temu-exporter-brand-copy strong {
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden; color:#fff;
+  font-size:13.5px; font-weight:800; letter-spacing:-.025em; line-height:1.12;
+}
+.temu-exporter-brand-copy small {
+  display:block; margin-top:2px; overflow:hidden;
+  color:#9fc3ce; font-size:8.5px; font-weight:600;
+  letter-spacing:.025em; text-overflow:ellipsis; white-space:nowrap;
+}
+
+/* ── Logo ───────────────────────────────────────────────────── */
+.temu-exporter-logo {
+  position: relative; display: grid;
+  width: 38px; height: 38px; flex: 0 0 38px;
+  place-items: center;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(0, 229, 255, 0.5);
+  box-shadow: 0 0 14px rgba(0,229,255,.35), inset 0 0 8px rgba(0,0,0,.4);
+}
+.temu-exporter-logo img.te-header-icon {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+.temu-exporter-logo svg { position: relative; z-index: 1; }
+
+/* ── Toolbar ────────────────────────────────────────────────── */
+.temu-exporter-toolbar { display:flex; align-items:center; gap:5px; }
+.temu-exporter-toolbar button {
+  display:inline-flex; min-width:32px; height:30px;
+  align-items:center; justify-content:center; gap:4px;
+  padding:0 8px;
+  color:var(--te-text-2);
+  background:rgba(12,31,52,.82);
+  border:1px solid rgba(120,190,215,.28);
+  border-radius:9px; cursor:pointer;
+  font:inherit; font-size:13px; line-height:1;
+  transition:color var(--te-fast), background var(--te-fast), border-color var(--te-fast), transform var(--te-fast), box-shadow var(--te-fast);
+}
+.temu-exporter-toolbar button:hover {
+  color:var(--te-cyan-2);
+  background:var(--te-cyan-soft);
+  border-color:var(--te-border-s);
+  box-shadow:0 0 18px rgba(0,229,255,.15);
+  transform:translateY(-1px);
+}
+.temu-exporter-toolbar button:active { transform:translateY(0); }
+.temu-exporter-tools-button { min-width:60px !important; }
+.temu-exporter-tools-button small { color:inherit; font-size:8px; font-weight:800; }
+
+/* ── Body ───────────────────────────────────────────────────── */
+.temu-exporter-body {
+  position:relative; z-index:1;
+  max-height: min(738px, calc(100vh - 84px));
+  min-height:0; overflow-y:auto;
+  overscroll-behavior:contain; scrollbar-gutter:stable;
+  padding:12px;
+}
+
+/* ── Status Card ────────────────────────────────────────────── */
+.temu-exporter-status-card {
+  position:relative; overflow:hidden;
+  padding:12px 12px 11px;
+  background:linear-gradient(145deg, rgba(10,32,54,.94), rgba(6,18,32,.97));
+  border:1px solid rgba(0,229,255,.26);
+  border-left:3px solid var(--te-cyan);
+  border-radius:13px;
+  box-shadow:var(--te-shadow-soft);
+  transition:border-color var(--te-norm), box-shadow var(--te-norm);
+}
+#temu-order-exporter-panel[data-status="complete"] .temu-exporter-status-card { border-color:rgba(52,211,153,.42); border-left-color:var(--te-green); }
+#temu-order-exporter-panel[data-status="paused"]   .temu-exporter-status-card { border-color:rgba(251,191,36,.42);  border-left-color:var(--te-amber); }
+#temu-order-exporter-panel[data-status="error"]    .temu-exporter-status-card { border-color:rgba(248,113,113,.42); border-left-color:var(--te-red); }
+
+/* Shimmer overlay when running */
+.temu-exporter-status-card::after {
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(110deg, transparent 30%, rgba(0,229,255,.04) 50%, transparent 70%);
+  background-size:200% 100%;
+  opacity:0; transition:opacity var(--te-norm);
+}
+#temu-order-exporter-panel[data-status="running"] .temu-exporter-status-card::after {
+  opacity:1;
+  animation:te-shimmer 2.2s linear infinite;
+}
+
+.temu-exporter-status-top,
+.temu-exporter-progress-meta,
+.temu-exporter-log-label,
+.temu-exporter-footer,
+.temu-exporter-drawer-head { display:flex; align-items:center; justify-content:space-between; }
+.temu-exporter-status-top { gap:9px; }
+
+/* ── Status Orbit ───────────────────────────────────────────── */
+.temu-exporter-status-orbit {
+  position:relative; display:grid;
+  width:32px; height:32px; flex:0 0 32px;
+  place-items:center;
+  background:var(--te-cyan-soft);
+  border:1px solid rgba(0,229,255,.44);
+  border-radius:50%;
+  transition:background var(--te-norm), border-color var(--te-norm), box-shadow var(--te-norm);
+}
+.temu-exporter-status-orbit::before,
+.temu-exporter-status-orbit::after { content:""; position:absolute; border:1px solid rgba(0,229,255,.18); border-radius:50%; }
+.temu-exporter-status-orbit::before { inset:5px; }
+.temu-exporter-status-orbit::after  { inset:11px; border-color:rgba(103,232,249,.28); }
+.temu-exporter-status-orbit span { width:6px; height:6px; background:var(--te-cyan); border-radius:50%; box-shadow:0 0 10px rgba(0,229,255,.95); }
+
+#temu-order-exporter-panel[data-status="running"] .temu-exporter-status-orbit {
+  animation:te-pulse-ring 1.8s ease infinite;
+  border-color:rgba(0,229,255,.7);
+  box-shadow:0 0 0 2px rgba(0,229,255,.12);
+}
+#temu-order-exporter-panel[data-status="complete"] .temu-exporter-status-orbit { background:var(--te-green-soft); border-color:rgba(52,211,153,.5); }
+#temu-order-exporter-panel[data-status="complete"] .temu-exporter-status-orbit span { background:var(--te-green); box-shadow:0 0 10px rgba(52,211,153,.8); }
+#temu-order-exporter-panel[data-status="paused"]   .temu-exporter-status-orbit { background:var(--te-amber-soft); border-color:rgba(251,191,36,.5); }
+#temu-order-exporter-panel[data-status="paused"]   .temu-exporter-status-orbit span { background:var(--te-amber); box-shadow:0 0 10px rgba(251,191,36,.8); }
+
+/* ── Status Copy ────────────────────────────────────────────── */
+.temu-exporter-status-copy { min-width:0; flex:1; }
+.temu-exporter-status-copy strong {
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden; color:#f8fdff;
+  font-size:12.5px; font-weight:800; letter-spacing:-.015em; line-height:1.18;
+}
+.temu-exporter-status-copy span {
+  display:block; margin-top:3px;
+  overflow:hidden; color:#a7c5cf;
+  font-size:9.5px; font-weight:500;
+  text-overflow:ellipsis; white-space:nowrap;
+}
+
+/* ── Status Chip — v5.0 Bigger Badge ──────────────────── */
+.temu-exporter-status-chip {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  color: #9ff7f3;
+  background: var(--te-cyan-soft);
+  border: 1.5px solid rgba(0,229,255,.5);
+  border-radius: 99px;
+  font-size: 8.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase;
+  box-shadow: 0 0 10px rgba(0,229,255,.2);
+  transition: background var(--te-norm), color var(--te-norm), border-color var(--te-norm), box-shadow var(--te-norm);
+}
+.temu-exporter-status-chip[data-status="running"]  { color: var(--te-cyan);  background: var(--te-cyan-soft);  border-color: rgba(0,229,255,.55); box-shadow: 0 0 14px rgba(0,229,255,.35); animation: te-dot-pulse 1.5s ease infinite; }
+.temu-exporter-status-chip[data-status="complete"] { color: var(--te-green); background: var(--te-green-soft); border-color: rgba(52,211,153,.55); box-shadow: 0 0 14px rgba(52,211,153,.3); }
+.temu-exporter-status-chip[data-status="paused"]   { color: var(--te-amber); background: var(--te-amber-soft); border-color: rgba(251,191,36,.55); }
+.temu-exporter-status-chip[data-status="error"]    { color: var(--te-red);   background: var(--te-red-soft);   border-color: rgba(248,113,113,.55); }
+
+/* ── Progress — v5.0 Bolder ─────────────────────────── */
+.temu-exporter-progress-track {
+  height: 10px; margin-top: 12px; overflow: hidden;
+  background: rgba(120,190,215,.13); border-radius: 99px;
+  border: 1px solid rgba(120,190,215,.1);
+}
+.temu-exporter-progress-track > span {
+  display: block; width: 0; height: 100%;
+  background: linear-gradient(90deg, #00b8d4, #67e8f9, #00e5ff);
+  border-radius: inherit;
+  box-shadow: 0 0 14px rgba(0,229,255,.7), 0 0 4px rgba(103,232,249,.5);
+  transition: width 380ms cubic-bezier(.2,.8,.2,1);
+  position: relative; overflow: hidden;
+}
+#temu-order-exporter-panel[data-status="running"] .temu-exporter-progress-track > span::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent 20%, rgba(255,255,255,.45) 50%, transparent 80%);
+  background-size: 200% 100%;
+  animation: te-shimmer 1.2s linear infinite;
+}
+.temu-exporter-progress-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; margin-top: 7px; color: #8eafbb; font-size: 8.5px; font-weight: 500;
+}
+.temu-exporter-progress-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #96b5c0; }
+.temu-exporter-progress-meta > strong { flex: 0 0 auto; color: #9ff7f3; font-size: 11px; font-weight: 900; }
+/* ETA slot */
+.temu-exporter-eta {
+  flex: 0 0 auto;
+  color: var(--te-muted);
+  font-size: 8px; font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--te-norm);
+}
+.temu-exporter-eta.visible { opacity: 1; }
+
+/* ── Divider ────────────────────────────────────────────────── */
+.temu-exporter-divider {
+  display:flex; align-items:center; gap:7px;
+  margin:12px 0 6px; color:#86a6b2;
+  font-size:7.5px; font-weight:900; letter-spacing:.18em; text-transform:uppercase;
+}
+.temu-exporter-divider::before,
+.temu-exporter-divider::after { content:""; height:1px; flex:1; background:linear-gradient(90deg,transparent,rgba(120,190,215,.22),transparent); }
+
+/* ── Pipeline ───────────────────────────────────────────────── */
+.temu-exporter-pipeline { display:flex; align-items:stretch; gap:4px; }
+.temu-exporter-pipeline-stage {
+  display:flex; min-width:0; flex:1;
+  flex-direction:column; align-items:center; gap:5px;
+  padding:8px 3px 7px;
+  color:#7f9faa;
+  background:rgba(8,24,42,.7);
+  border:1px solid rgba(120,190,215,.16);
+  border-radius:9px; text-align:center;
+  transition:color var(--te-fast), background var(--te-fast), border-color var(--te-fast), box-shadow var(--te-fast);
+}
+.temu-exporter-pipeline-stage strong { display:block; overflow:hidden; font-size:8.5px; font-weight:800; letter-spacing:-.01em; line-height:1.15; text-overflow:ellipsis; white-space:nowrap; }
+.temu-exporter-pipeline-stage small  { display:block; overflow:hidden; color:#9ab8c3; font-size:7.5px; font-weight:500; line-height:1.15; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Pipeline step icon */
+.temu-exporter-pipeline-number {
+  display:grid; width:20px; height:20px;
+  place-items:center;
+  color:var(--te-dim);
+  background:rgba(120,190,215,.07);
+  border:1px solid rgba(120,190,215,.24);
+  border-radius:50%; font-size:8px; font-weight:900;
+}
+.temu-exporter-pipeline-line { align-self:center; width:6px; height:1px; flex:0 0 6px; background:rgba(120,190,215,.22); }
+
+.temu-exporter-pipeline-stage[data-stage="active"] { color:#b9fbf7; background:var(--te-cyan-soft); border-color:rgba(0,229,255,.48); box-shadow:0 0 18px rgba(0,229,255,.1); }
+.temu-exporter-pipeline-stage[data-stage="active"] .temu-exporter-pipeline-number { color:var(--te-cyan-2); border-color:var(--te-cyan); }
+.temu-exporter-pipeline-stage[data-stage="complete"] { color:#75edb5; background:var(--te-green-soft); border-color:rgba(52,211,153,.38); }
+.temu-exporter-pipeline-stage[data-stage="complete"] .temu-exporter-pipeline-number { color:var(--te-green); border-color:rgba(52,211,153,.5); }
+.temu-exporter-pipeline-stage[data-stage="complete"] + .temu-exporter-pipeline-line { background:rgba(52,211,153,.48); }
+.temu-exporter-pipeline-stage[data-stage="paused"] { color:var(--te-amber); background:var(--te-amber-soft); border-color:rgba(251,191,36,.38); }
+
+/* ── Metrics — 2×2 Grid (all 4 always visible, no clipping) ── */
+.temu-exporter-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.temu-exporter-metric {
+  display: flex; min-width: 0; align-items: center; gap: 7px;
+  padding: 8px 10px;
+  background: rgba(8,24,42,.8);
+  border: 1px solid rgba(120,190,215,.2);
+  border-radius: 10px;
+  transition: background var(--te-fast), border-color var(--te-fast), transform var(--te-fast), box-shadow var(--te-fast);
+}
+.temu-exporter-metric:hover { background: rgba(14,40,66,.9); border-color: rgba(0,229,255,.38); box-shadow: 0 4px 14px rgba(0,0,0,.2); transform: translateY(-1px); }
+
+/* SVG metric icon container */
+.temu-exporter-metric-icon {
+  display:grid; width:22px; height:22px; flex:0 0 22px;
+  place-items:center;
+  color:var(--te-cyan);
+  background:var(--te-cyan-soft);
+  border:1px solid rgba(0,229,255,.28);
+  border-radius:7px;
+}
+.temu-exporter-metric-icon svg { width:12px; height:12px; }
+.temu-exporter-metric-icon.orders { color:var(--te-cyan-2); }
+.temu-exporter-metric-icon.rows   { color:var(--te-blue);   background:var(--te-blue-soft);   border-color:rgba(96,165,250,.28); }
+.temu-exporter-metric-icon.active { color:var(--te-green);  background:var(--te-green-soft);  border-color:rgba(52,211,153,.28); }
+.temu-exporter-metric-icon.errors { color:var(--te-red);    background:var(--te-red-soft);    border-color:rgba(248,113,113,.3); }
+.temu-exporter-metric-icon.notes  { color:var(--te-amber);  background:var(--te-amber-soft);  border-color:rgba(251,191,36,.3); }
+
+.temu-exporter-metric > div { min-width:0; flex:1; }
+.temu-exporter-metric strong {
+  display:block; color:#f7fdff;
+  font-size:14px; font-weight:900; font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em; line-height:1;
+}
+.temu-exporter-metric small {
+  display:block; margin-top:2px; overflow:hidden;
+  color:#9ab8c3; font-size:7px; font-weight:800;
+  letter-spacing:.05em; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap;
+}
+
+/* Count-up bump animation */
+.temu-metric-bump { animation:te-bump .3s cubic-bezier(.2,.9,.3,1) both; }
+
+/* ── Action Buttons ─────────────────────────────────────────── */
+.temu-exporter-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+.temu-exporter-actions button {
+  position:relative; display:inline-flex; min-width:0;
+  min-height:38px; align-items:center; justify-content:center;
+  gap:6px; overflow:hidden; padding:0 10px;
+  color:var(--te-text-2);
+  background:var(--te-surface-2);
+  border:1px solid rgba(120,190,215,.26);
+  border-radius:9px; cursor:pointer;
+  font:inherit; font-size:10.5px; font-weight:800;
+  transition:color var(--te-fast), background var(--te-fast), border-color var(--te-fast), box-shadow var(--te-fast), transform var(--te-fast), filter var(--te-fast);
+}
+.temu-exporter-actions button > * { position:relative; z-index:1; }
+.temu-exporter-actions button.primary,
+.temu-exporter-actions button.download { grid-column:1/-1; min-height:41px; color:#03131c; border-color:transparent; font-size:11.5px; font-weight:900; letter-spacing:-.005em; }
+.temu-exporter-actions button.primary  { background:linear-gradient(135deg,#00b8d4,#67e8f9); box-shadow:0 8px 22px rgba(0,229,255,.22); }
+.temu-exporter-actions button.download { color:#031e17; background:linear-gradient(135deg,#22c5b0,#6eebbe); box-shadow:0 8px 22px rgba(52,211,153,.18); }
+.temu-exporter-actions button.secondary:hover { color:var(--te-cyan-2); background:var(--te-cyan-soft); border-color:rgba(0,229,255,.5); box-shadow:0 7px 16px rgba(0,229,255,.1); }
+.temu-exporter-actions button.secondary.danger:hover { color:var(--te-red); background:var(--te-red-soft); border-color:rgba(248,113,113,.5); box-shadow:0 7px 16px rgba(248,113,113,.1); }
+.temu-exporter-actions button:not(:disabled):hover { transform:translateY(-1px); filter:brightness(1.05); }
+.temu-exporter-actions button:not(:disabled):active { transform:translateY(0); filter:brightness(.97); }
+.temu-exporter-actions button:disabled { cursor:not-allowed; opacity:.35; pointer-events:none; }
+
+/* Shimmer sweep on hover */
+.temu-exporter-actions button::after,
+.temu-exporter-recovery button::after {
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(110deg, transparent 20%, rgba(255,255,255,.22) 50%, transparent 80%);
+  opacity:0; transform:translateX(-70%);
+  transition:opacity var(--te-fast), transform 340ms ease;
+}
+.temu-exporter-actions button:not(:disabled):hover::after,
+.temu-exporter-recovery button:not(:disabled):hover::after { opacity:1; transform:translateX(70%); }
+
+/* Button icon */
+.temu-exporter-button-icon { display:inline-grid; width:16px; height:16px; flex:0 0 16px; place-items:center; }
+.temu-exporter-button-icon svg { width:14px; height:14px; }
+
+/* ── Recovery Banner ────────────────────────────────────────── */
+.temu-exporter-recovery {
+  display:flex; max-height:0; align-items:center; justify-content:space-between;
+  gap:8px; overflow:hidden; margin-top:0; padding:0 10px;
+  background:var(--te-red-soft);
+  border:1px solid transparent; border-radius:9px;
+  opacity:0; transform:translateY(-4px);
+  transition:max-height var(--te-norm), margin-top var(--te-norm), padding var(--te-norm), opacity var(--te-norm), transform var(--te-norm), border-color var(--te-norm);
+}
+.temu-exporter-recovery.is-visible { max-height:96px; margin-top:8px; padding-top:9px; padding-bottom:9px; border-color:rgba(248,113,113,.38); opacity:1; transform:translateY(0); }
+.temu-exporter-recovery strong { display:block; color:var(--te-text); font-size:9.5px; font-weight:850; letter-spacing:-.005em; }
+.temu-exporter-recovery small  { display:block; margin-top:2px; color:#a7c5cf; font-size:8.5px; font-weight:500; line-height:1.35; }
+.temu-exporter-recovery button {
+  position:relative; display:inline-flex; min-height:31px; flex:0 0 auto;
+  align-items:center; gap:5px; overflow:hidden; padding:0 9px;
+  color:var(--te-red); background:rgba(248,113,113,.09);
+  border:1px solid rgba(248,113,113,.38); border-radius:8px;
+  cursor:pointer; font:inherit; font-size:8.5px; font-weight:900; white-space:nowrap;
+}
+.temu-exporter-recovery button:hover { background:rgba(248,113,113,.18); }
+
+/* ── Automations Drawer ─────────────────────────────────────── */
+.temu-exporter-automations {
+  max-height:0; overflow:hidden;
+  opacity:0; transform:translateY(-4px);
+  transition:max-height var(--te-norm), opacity var(--te-norm), transform var(--te-norm), margin-top var(--te-norm);
+}
+.temu-exporter-automations.is-open {
+  max-height:240px; opacity:1; transform:translateY(0); margin-top:8px;
+}
+.temu-exporter-auto-panel {
+  padding:10px;
+  background:rgba(6,18,32,.92);
+  border:1px solid rgba(0,229,255,.2);
+  border-radius:11px;
+  animation:te-slide-down .2s var(--te-norm) both;
+}
+.temu-exporter-auto-title {
+  display:flex; align-items:center; gap:6px;
+  margin-bottom:8px; padding-bottom:7px;
+  border-bottom:1px solid rgba(120,190,215,.15);
+  color:#86a6b2; font-size:7.5px; font-weight:900; letter-spacing:.16em; text-transform:uppercase;
+}
+.temu-exporter-auto-title svg { width:11px; height:11px; color:var(--te-cyan); }
+.temu-exporter-auto-row {
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:7px 0;
+  border-top:1px solid rgba(120,190,215,.1);
+}
+.temu-exporter-auto-row:first-of-type { border-top:0; }
+.temu-exporter-auto-copy strong { display:block; color:var(--te-text-2); font-size:10px; font-weight:700; }
+.temu-exporter-auto-copy small  { display:block; margin-top:2px; color:var(--te-muted); font-size:8px; line-height:1.35; }
+
+/* Toggle switch for automations */
+.temu-exporter-switch { position:relative; display:inline-block; width:34px; height:19px; flex:0 0 34px; }
+.temu-exporter-switch input { position:absolute; width:1px; height:1px; opacity:0; }
+.temu-exporter-switch span {
+  position:absolute; inset:0;
+  background:var(--te-surface-3);
+  border:1px solid var(--te-border);
+  border-radius:99px; cursor:pointer;
+  transition:background var(--te-fast), border-color var(--te-fast), box-shadow var(--te-fast);
+}
+.temu-exporter-switch span::after {
+  content:""; position:absolute; top:2px; left:2px;
+  width:13px; height:13px;
+  background:var(--te-muted); border-radius:50%;
+  transition:transform var(--te-spring), background var(--te-fast);
+}
+.temu-exporter-switch input:checked + span { background:var(--te-cyan-soft); border-color:var(--te-border-s); box-shadow:0 0 10px rgba(0,229,255,.28); }
+.temu-exporter-switch input:checked + span::after { background:var(--te-cyan); transform:translateX(15px); }
+.temu-exporter-switch input:focus-visible + span { outline:2px solid var(--te-cyan); outline-offset:2px; }
+
+/* ── Activity Log ───────────────────────────────────────────── */
+.temu-exporter-log-wrap { margin-top:11px; }
+.temu-exporter-log-label {
+  display:flex; align-items:center; justify-content:space-between;
+  color:#86a6b2; font-size:7.5px; font-weight:900; letter-spacing:.17em; text-transform:uppercase;
+}
+.temu-exporter-live-dot {
+  display:inline-flex; align-items:center; gap:4px;
+  color:#6ce8ad; font-size:7.5px; font-weight:900; letter-spacing:.1em;
+}
+.temu-exporter-live-dot::before {
+  content:""; width:5px; height:5px;
+  background:var(--te-green); border-radius:50%;
+  box-shadow:0 0 7px rgba(52,211,153,.72);
+  animation:te-dot-pulse 2s ease-in-out infinite;
+}
+.temu-exporter-log {
+  max-height:88px; margin-top:5px; overflow-y:auto;
+  background:rgba(3,12,22,.84);
+  border:1px solid rgba(120,190,215,.16);
+  border-radius:9px; scrollbar-gutter:stable;
+}
+/* Typed log entry spans: timestamp · icon · message */
+.temu-exporter-log .temu-log-ts   { color: var(--te-dim); font-size:7.5px; margin-right:4px; flex-shrink:0; }
+.temu-exporter-log .temu-log-icon { margin-right:4px; flex-shrink:0; font-size:9px; }
+.temu-exporter-log .temu-log-msg  { min-width:0; }
+/* Typed colors override */
+.temu-exporter-log-success { color: var(--te-green) !important; }
+.temu-exporter-log-warning { color: var(--te-amber) !important; }
+.temu-exporter-log-error   { color: var(--te-red)   !important; }
+.temu-exporter-log-info    { color: #b2ced7         !important; }
+/* Make log entries flex so spans align in a row */
+.temu-exporter-log > div {
+  display: flex; align-items: baseline;
+  padding: 5px 8px;
+  color: var(--te-muted);
+  border-bottom: 1px solid rgba(120,190,215,.1);
+  font-size: 8.5px; line-height: 1.4;
+  gap: 0;
+}
+.temu-exporter-log > div:last-child { border-bottom: 0; }
+.temu-exporter-log > div:hover { color: var(--te-text-2); background: rgba(12,32,54,.6); }
+
+/* ── Footer ─────────────────────────────────────────────────── */
+.temu-exporter-footer {
+  display:flex; align-items:center; justify-content:space-between;
+  min-height:30px; margin:11px -12px -12px; padding:7px 12px;
+  color:#7897a5; background:rgba(3,11,22,.74);
+  border-top:1px solid rgba(120,190,215,.14);
+  font-size:7.5px; font-weight:700; letter-spacing:.04em;
+}
+.temu-exporter-footer span:first-child { color:#9ab8c3; }
+
+/* ── Drawers (history/settings overlay) ────────────────────── */
+.temu-exporter-drawer {
+  position:absolute; inset:0; z-index:5;
+  display:none; flex-direction:column; overflow:hidden;
+  background:linear-gradient(160deg,#06182a,#04101e);
+  border-radius:inherit;
+}
+.temu-exporter-drawer.is-open { display:flex; }
+.temu-exporter-drawer-head { min-height:54px; padding:12px 14px; border-bottom:1px solid rgba(120,190,215,.18); }
+.temu-exporter-drawer-head strong { color:var(--te-cyan-2); font-size:12px; }
+.temu-exporter-drawer-body { flex:1; overflow-y:auto; padding:12px; }
+.temu-exporter-drawer-close {
+  display:grid; width:30px; height:30px; place-items:center;
+  color:var(--te-text-2); background:var(--te-surface-2);
+  border:1px solid var(--te-border); border-radius:8px; cursor:pointer;
+}
+.temu-exporter-drawer-close:hover { color:var(--te-red); border-color:rgba(248,113,113,.45); background:var(--te-red-soft); }
+
+.temu-exporter-setting-row,
+.temu-exporter-history-item { display:flex; align-items:center; gap:8px; padding:8px; margin-bottom:6px; background:rgba(8,24,42,.78); border:1px solid rgba(120,190,215,.17); border-radius:9px; }
+.temu-exporter-setting-row { justify-content:space-between; }
+.temu-exporter-setting-row label { color:var(--te-text-2); font-size:9px; font-weight:800; }
+.temu-exporter-setting-note { color:var(--te-muted); font-size:8px; }
+
+.temu-exporter-history-list { max-height:300px; overflow-y:auto; }
+.temu-exporter-history-icon {
+  display:grid; width:28px; height:28px; flex:0 0 28px;
+  place-items:center; color:var(--te-green);
+  background:var(--te-green-soft);
+  border:1px solid rgba(52,211,153,.3); border-radius:7px;
+}
+.temu-exporter-history-icon svg { width:14px; height:14px; }
+.temu-exporter-history-main { min-width:0; flex:1; }
+.temu-exporter-history-main strong { display:block; overflow:hidden; color:var(--te-text); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.temu-exporter-history-main small  { display:block; margin-top:2px; color:var(--te-muted); font-size:7px; }
+.temu-exporter-history-actions { display:flex; gap:4px; }
+.temu-exporter-history-actions button { display:grid; width:26px; height:26px; place-items:center; color:var(--te-text-2); background:var(--te-surface-2); border:1px solid var(--te-border); border-radius:7px; cursor:pointer; }
+.temu-exporter-history-actions button:hover { color:var(--te-cyan); border-color:var(--te-border-s); background:var(--te-cyan-soft); }
+.temu-exporter-clear-history { width:100%; padding:7px; color:var(--te-red); background:transparent; border:1px solid rgba(248,113,113,.32); border-radius:8px; cursor:pointer; font:inherit; font-size:8px; font-weight:800; }
+.temu-exporter-clear-history:hover { background:var(--te-red-soft); }
+
+/* Empty state */
+.temu-exporter-empty-state { display:flex; flex-direction:column; align-items:center; gap:4px; padding:18px 12px; text-align:center; }
+.temu-exporter-empty-icon { font-size:20px; opacity:.35; }
+
+#temu-order-exporter-panel.drawer-open .temu-exporter-body { opacity:0; pointer-events:none; }
+
+/* ── Focus & Motion Prefs ───────────────────────────────────── */
+#temu-order-exporter-panel button:focus-visible,
+#temu-order-exporter-panel input:focus-visible,
+#temu-order-exporter-panel [tabindex]:focus-visible { outline:2px solid var(--te-cyan-2); outline-offset:2px; }
+
+#temu-order-exporter-panel[data-motion="off"] *,
+#temu-order-exporter-panel[data-motion="off"] *::before,
+#temu-order-exporter-panel[data-motion="off"] *::after { animation:none !important; transition-duration:.01ms !important; }
+
+/* ── Minimized FAB — Clean Circle ───────────────────────────── */
+#temu-order-exporter-panel.is-minimized {
+  width: 56px !important;
+  height: 56px !important;
+  min-width: 0 !important;
+  max-height: 56px !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  padding: 0 !important;
+  /* Multi-color Google-style spinning ring */
+  background:
+    #07182e padding-box,
+    conic-gradient(
+      from var(--te-rotate),
+      #EA4335 0deg,
+      #FBBC05 90deg,
+      #34A853 180deg,
+      #4285F4 270deg,
+      #EA4335 360deg
+    ) border-box;
+  border: 4px solid transparent !important;
+  box-shadow:
+    0 0 16px rgba(234,67,53,.35),
+    0 0 16px rgba(66,133,244,.35),
+    0 4px 20px rgba(0,0,0,.55);
+  animation: te-panel-in .25s cubic-bezier(.2,.9,.3,1) both, te-border-rotate 3s linear infinite;
+  transition: box-shadow var(--te-norm), transform var(--te-norm);
+}
+#temu-order-exporter-panel.is-minimized:hover {
+  transform: scale(1.1);
+  box-shadow:
+    0 0 26px rgba(234,67,53,.6),
+    0 0 26px rgba(66,133,244,.6),
+    0 6px 24px rgba(0,0,0,.6);
+}
+
+/* Hide EVERYTHING inside when minimized — then selectively show header */
+#temu-order-exporter-panel.is-minimized > * {
+  display: none !important;
+}
+
+/* Header becomes a full-size icon fill */
+#temu-order-exporter-panel.is-minimized .temu-exporter-header {
+  display: flex !important;
+  width: 48px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  align-items: center !important;
+  justify-content: center !important;
+  pointer-events: none;
+}
+/* Hide brand text, toolbar */
+#temu-order-exporter-panel.is-minimized .temu-exporter-brand-copy,
+#temu-order-exporter-panel.is-minimized .temu-exporter-toolbar,
+#temu-order-exporter-panel.is-minimized .temu-exporter-brand-copy strong,
+#temu-order-exporter-panel.is-minimized .temu-exporter-brand-copy small { display: none !important; }
+
+#temu-order-exporter-panel.is-minimized .temu-exporter-brand {
+  display: flex !important;
+  gap: 0 !important;
+}
+#temu-order-exporter-panel.is-minimized .temu-exporter-logo {
+  display: grid !important;
+  width: 44px !important;
+  height: 44px !important;
+  flex: 0 0 44px !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  animation: none !important;
+  padding: 0 !important;
+}
+/* The anime icon fills the circle */
+#temu-order-exporter-panel.is-minimized .temu-exporter-logo img.te-header-icon {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+/* Status-aware: spinning faster when running, keep multicolor base */
+#temu-order-exporter-panel.is-minimized[data-status="running"] {
+  animation: te-border-rotate 1.6s linear infinite;
+  box-shadow:
+    0 0 22px rgba(234,67,53,.5),
+    0 0 22px rgba(66,133,244,.5),
+    0 4px 20px rgba(0,0,0,.55);
+}
+/* Complete → green tint overlay on the gradient */
+#temu-order-exporter-panel.is-minimized[data-status="complete"] {
+  background:
+    #07182e padding-box,
+    conic-gradient(
+      from var(--te-rotate),
+      #34A853 0deg,
+      #6ee7b7 90deg,
+      #34A853 180deg,
+      #6ee7b7 270deg,
+      #34A853 360deg
+    ) border-box;
+  box-shadow: 0 0 22px rgba(52,168,83,.6), 0 4px 20px rgba(0,0,0,.55);
+}
+/* Paused → amber tint */
+#temu-order-exporter-panel.is-minimized[data-status="paused"] {
+  background:
+    #07182e padding-box,
+    conic-gradient(
+      from var(--te-rotate),
+      #FBBC05 0deg,
+      #fde68a 90deg,
+      #FBBC05 180deg,
+      #fde68a 270deg,
+      #FBBC05 360deg
+    ) border-box;
+  box-shadow: 0 0 22px rgba(251,188,5,.5), 0 4px 20px rgba(0,0,0,.55);
+}
+/* Error → red tint */
+#temu-order-exporter-panel.is-minimized[data-status="error"] {
+  background:
+    #07182e padding-box,
+    conic-gradient(
+      from var(--te-rotate),
+      #EA4335 0deg,
+      #fca5a5 90deg,
+      #EA4335 180deg,
+      #fca5a5 270deg,
+      #EA4335 360deg
+    ) border-box;
+  box-shadow: 0 0 22px rgba(234,67,53,.6), 0 4px 20px rgba(0,0,0,.55);
+}
+
+
+/* ── Resize Handle ───────────────────────────────────────────── */
+.temu-exporter-resize-handle {
+  position: absolute;
+  left: 0; top: 16px; bottom: 16px;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 10;
+  border-radius: 3px 0 0 3px;
+  transition: background var(--te-fast);
+}
+.temu-exporter-resize-handle:hover,
+.temu-exporter-resize-handle:active {
+  background: linear-gradient(180deg, #EA4335, #FBBC05, #34A853, #4285F4);
+  opacity: .7;
+}
+#temu-order-exporter-panel.is-minimized .temu-exporter-resize-handle { display: none; }
+
+/* ── Typed Log Entries (v5.0) ────────────────────────────────── */
+.temu-exporter-log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 0;
+  font-size: 9px;
+  line-height: 1.4;
+  border-bottom: 1px solid rgba(120,190,215,.06);
+}
+.temu-log-ts {
+  flex: 0 0 auto;
+  color: var(--te-dim);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+}
+.temu-log-icon {
+  flex: 0 0 10px;
+  font-size: 10px;
+  text-align: center;
+}
+.temu-log-msg {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--te-text-2);
+}
+/* Color by type */
+.temu-log-info    .temu-log-icon { color: var(--te-muted); }
+.temu-log-info    .temu-log-msg  { color: #a0c4cf; }
+.temu-log-success .temu-log-icon { color: var(--te-green); }
+.temu-log-success .temu-log-msg  { color: #6ee7b7; }
+.temu-log-warn    .temu-log-icon { color: var(--te-amber); }
+.temu-log-warn    .temu-log-msg  { color: #fcd34d; }
+.temu-log-error   .temu-log-icon { color: var(--te-red); }
+.temu-log-error   .temu-log-msg  { color: #fca5a5; }
+/* Keep old class names working (backward compat) */
+.temu-exporter-log-info    { color: #a0c4cf; font-size: 9px; padding: 2px 0; }
+.temu-exporter-log-success { color: var(--te-green); font-size: 9px; padding: 2px 0; }
+.temu-exporter-log-warning { color: var(--te-amber); font-size: 9px; padding: 2px 0; }
+.temu-exporter-log-error   { color: var(--te-red); font-size: 9px; padding: 2px 0; }
+
+/* Ripple (kept from v3 but unused — fallback kept) */
+.temu-ripple { display:none; }
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width:560px) {
+  #temu-order-exporter-panel { right:12px; bottom:12px; width:min(320px,calc(100vw - 24px)); max-height:calc(100vh - 24px); }
+  .temu-exporter-body { max-height:calc(100vh - 84px); }
+}
+@media (max-width:330px) {
+  #temu-order-exporter-panel { right:8px; bottom:8px; width:calc(100vw - 16px); }
+  .temu-exporter-header { padding-inline:10px; }
+  .temu-exporter-brand-copy strong { font-size:12px; }
+  .temu-exporter-tools-button { min-width:32px !important; padding-inline:6px !important; }
+  .temu-exporter-tools-button small { display:none; }
+  .temu-exporter-body { padding:9px; }
+  .temu-exporter-recovery { align-items:flex-start; flex-direction:column; }
+  .temu-exporter-recovery button { width:100%; }
+}
+@media (prefers-reduced-motion:reduce) {
+  #temu-order-exporter-panel *,
+  #temu-order-exporter-panel *::before,
+  #temu-order-exporter-panel *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; scroll-behavior:auto !important; }
+}
