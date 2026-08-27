@@ -467,7 +467,10 @@ async function handleFailure(entry, message) {
   const currentEntry = state.inFlight.find(item => item.key === entry.key);
   if (state.runId !== entry.runId || !currentEntry || (entry.attemptToken && currentEntry.attemptToken !== entry.attemptToken)) return;
   const attempts = state.attempts[entry.key] || entry.attempt;
-  activeTabs.delete(entry.tabId);
+  // BUG FIX: activeTabs.delete MOVED to after commitState (below).
+  // Deleting before commitState created a race window: if onRemoved fired between
+  // activeTabs.delete and commitState, findTrackedEntry would re-read the entry from
+  // storage (still in inFlight) and trigger a second handleFailure for the same entry.
   if (attempts < MAX_ATTEMPTS && state.status !== 'idle') {
     const readyAt = Date.now() + retryDelay(attempts);
     const retryQueue = [...state.retryQueue.filter(item => item.key !== entry.key), { key: entry.key, index: entry.index, row: entry.row, readyAt }];
@@ -475,9 +478,14 @@ async function handleFailure(entry, message) {
       if (current.runId !== entry.runId || !current.inFlight.some(item => item.key === entry.key)) return current;
       return { ...current, inFlight: current.inFlight.filter(item => item.key !== entry.key), retryQueue };
     });
+    // Now safe to remove from activeTabs — entry is out of both activeTabs and inFlight
+    activeTabs.delete(entry.tabId);
     await closeTabIntentionally(entry.tabId);
-    await scheduleWake(saved);
-    pump(saved, saved.runId);
+    // Only pump if commitState actually modified state (guard didn't reject)
+    if (saved.runId === entry.runId) {
+      await scheduleWake(saved);
+      pump(saved, saved.runId);
+    }
     return;
   }
   const errorRecord = { key: entry.key, index: entry.index, orderNo: entry.row?.orderNo || '', packageId: entry.row?.packageId || '', attempts, message, at: new Date().toISOString() };
@@ -485,10 +493,15 @@ async function handleFailure(entry, message) {
     if (current.runId !== entry.runId || !current.inFlight.some(item => item.key === entry.key)) return current;
     return { ...current, inFlight: current.inFlight.filter(item => item.key !== entry.key), errors: [...current.errors.filter(error => error.key !== entry.key), errorRecord] };
   });
+  // Now safe to remove from activeTabs
+  activeTabs.delete(entry.tabId);
   await closeTabIntentionally(entry.tabId);
-  await scheduleWake(saved);
-  pump(saved, saved.runId);
+  if (saved.runId === entry.runId) {
+    await scheduleWake(saved);
+    pump(saved, saved.runId);
+  }
 }
+
 
 async function handleSuccess(entry, productRecords, missing = []) {
   if (!entry || !entry.key) return;
@@ -563,8 +576,12 @@ async function launchItem(item, runId) {
         if (launchEpoch !== operationEpoch || state.status !== 'running' || state.runId !== runId) return state;
         return { ...state, attempts: { ...state.attempts, [item.key]: attempt }, inFlight: [...state.inFlight.filter(candidate => candidate.key !== item.key), entry] };
       });
-      if (queued.status !== 'running' || queued.runId !== runId || !queued.inFlight.some(candidate => candidate.attemptToken === attemptToken)) { await closeTabIntentionally(tab.id); await restoreTakenItem(item, runId); return; }
-      if (launchEpoch !== operationEpoch || queued.status !== 'running' || queued.runId !== runId) {
+      // BUG FIX: Only one epoch/status guard after commitState.
+      // A second guard here was dangerous: it could fire after the entry was already
+      // committed to inFlight, causing restoreTakenItem to silently fail (entry is in
+      // inFlight so restoreQueuedItem skips it), leaving the tab stuck for 30 seconds.
+      // The commitState lambda's own guards ensure the entry is only added when valid.
+      if (queued.status !== 'running' || queued.runId !== runId || !queued.inFlight.some(candidate => candidate.attemptToken === attemptToken)) {
         await closeTabIntentionally(tab.id);
         await restoreTakenItem(item, runId);
         return;
@@ -650,7 +667,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener(async tabId => {
-  if (closingTabs.has(tabId)) { closingTabs.delete(tabId); activeTabs.delete(tabId); return; }
+  // BUG FIX: No longer deleting from closingTabs here. The closeTabIntentionally()
+  // finally block is the single authoritative place for closingTabs cleanup.
+  // Deleting here created a brief window where closingTabs lost the entry before
+  // the finally block ran, allowing onRemoved to fall through to findTrackedEntry.
+  if (closingTabs.has(tabId)) return; // intentionally closing — ignore
   const entry = await findTrackedEntry(tabId);
   if (entry) await handleFailure(entry, 'Detail tab closed before extraction completed.');
 });
