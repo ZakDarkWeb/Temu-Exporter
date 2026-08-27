@@ -5,6 +5,9 @@
   const BULK_PATH = '/buy-shipping-bulk-details.html';
   const DETAIL_PATH = '/order-detail.html';
   const PANEL_ID = 'temu-order-exporter-panel';
+  // Columns used for VALIDATION (must be non-empty to pass). The 3 optional
+  // columns (Carrier, SKU ID, Goods ID) are intentionally excluded — they may
+  // be blank and should never cause an extraction failure.
   const EXPORT_COLUMNS = [
     'Shipping Date',
     'Order Date',
@@ -14,11 +17,10 @@
     'Product Details',
     'Qty (No)',
     'Est. Revenue',
-    'Shipping Cost',
-    'Carrier',
-    'SKU ID',
-    'Goods ID'
+    'Shipping Cost'
   ];
+  // Storage key for column selection (shared with tools.js)
+  const COLS_KEY = 'temuOrderExporterColumnsV1';
   const TRACKING_RE = /\b(?:1Z[0-9A-Z]{8,}|GFUS[0-9A-Z]{8,}|9[24][0-9]{18,}|[A-Z]{2}[0-9]{8,}[A-Z]{2}|[A-Z]{2,}\d{8,})\b/i;
   const AMOUNT_RE = /[$€£]\s?[\d,]+(?:\.\d{1,2})?/;
   const UI_KEY = 'temuOrderExporterUiV1';
@@ -654,6 +656,15 @@
       const order = entry.order;
       const productName = normalize(order.goodsName || order.originalGoodsName || '');
       const trackingNumber = normalize(entry.orderPackage?.trackingNumber || entry.packageData.trackingNumber || entry.interline.trackingNumber || '');
+      // Carrier from structured data (field names vary across API versions)
+      const carrier = normalize(
+        entry.packageData?.carrierName || entry.packageData?.courierName ||
+        entry.interline?.carrierName   || entry.interline?.courierName   ||
+        entry.orderPackage?.carrierName || ''
+      );
+      // SKU ID and Goods ID from structured data
+      const skuId   = normalize(order.skuId   || order.skuSn   || order.goodsSkuSn || '');
+      const goodsId = normalize(order.goodsId || order.goodsSn || order.goodsNo    || '');
       return {
         'Shipping Date': dateOnly(entry.packageData.sendTimeStr || ''),
         'Order Date': dateOnly(parent.localParentOrderTimeStr || ''),
@@ -671,7 +682,10 @@
         'Product Details': cleanProductTitle(productName),
         'Qty (No)': order.quantity ?? order.fulfillmentQuantity ?? order.originQuantity ?? '',
         'Est. Revenue': index === 0 ? (parentRevenue || normalize(order.estimatedIncome || '')) : '',
-        'Shipping Cost': index === 0 ? shippingTotal : ''
+        'Shipping Cost': index === 0 ? shippingTotal : '',
+        'Carrier':   carrier,
+        'SKU ID':    skuId,
+        'Goods ID':  goodsId
       };
     });
     return { records, store };
@@ -1010,7 +1024,17 @@
       await saveHistoryEntry();
       const records = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
       const statusRows = [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))];
-      downloadRecords(records, statusRows, `Downloaded ${records.length} records as an Excel workbook.`);
+      // Read saved column preference from storage (matches tools.js COLS_KEY)
+      let cols;
+      try {
+        const stored = await chrome.storage.local.get(COLS_KEY);
+        const saved = stored[COLS_KEY];
+        cols = Array.isArray(saved) && saved.length ? saved : undefined;
+      } catch (_) { cols = undefined; }
+      if (window.TemuXlsx?.downloadWorkbook) {
+        window.TemuXlsx.downloadWorkbook(records, statusRows, cols);
+        log(`Downloaded ${records.length} records as an Excel workbook.`, 'success');
+      }
     });
     panel.querySelector('[data-action="tools"]').addEventListener('click', openToolsPage);
     panel.querySelector('[data-action="minimize"]').addEventListener('click', () => setMinimized(!uiPrefs.minimized));
@@ -1175,7 +1199,18 @@
           if (uiPrefs.autoExport && state.records.length) {
             const cleanRecords = state.records.map(({ __key, __index, __attempts, __lineIndex, ...r }) => r);
             const statusRows = [...state.errors, ...(state.warnings || []).map(w => ({ ...w, message: w.message || 'Parser warning' }))];
-            setTimeout(() => downloadRecords(cleanRecords, statusRows, `Auto-exported ${cleanRecords.length} records as Excel workbook.`), 600);
+            setTimeout(async () => {
+              let cols;
+              try {
+                const stored = await chrome.storage.local.get(COLS_KEY);
+                const saved = stored[COLS_KEY];
+                cols = Array.isArray(saved) && saved.length ? saved : undefined;
+              } catch (_) { cols = undefined; }
+              if (window.TemuXlsx?.downloadWorkbook) {
+                window.TemuXlsx.downloadWorkbook(cleanRecords, statusRows, cols);
+                log(`Auto-exported ${cleanRecords.length} records as Excel workbook.`, 'success');
+              }
+            }, 600);
           }
           // Auto-Retry: retry failed orders automatically once
           if (uiPrefs.autoRetry && state.errors.length) {
