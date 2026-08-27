@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Exporter",
-  "version": "4.0.0",
-  "description": "Professional Temu Seller order extractor — in-page card with automations, auto-export, auto-retry, and a full History & Tools workspace.",
+  "version": "5.1.0",
+  "description": "Professional Temu Seller order extractor — smart adaptive concurrency, column selector, Carrier/SKU ID/Goods ID extraction, anime-themed card UI, and full History & Tools workspace.",
   "permissions": [
     "alarms",
     "notifications",

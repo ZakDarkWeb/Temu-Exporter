@@ -14,7 +14,10 @@
     'Product Details',
     'Qty (No)',
     'Est. Revenue',
-    'Shipping Cost'
+    'Shipping Cost',
+    'Carrier',
+    'SKU ID',
+    'Goods ID'
   ];
   const TRACKING_RE = /\b(?:1Z[0-9A-Z]{8,}|GFUS[0-9A-Z]{8,}|9[24][0-9]{18,}|[A-Z]{2}[0-9]{8,}[A-Z]{2}|[A-Z]{2,}\d{8,})\b/i;
   const AMOUNT_RE = /[$€£]\s?[\d,]+(?:\.\d{1,2})?/;
@@ -460,12 +463,17 @@
       const cells = [...row.querySelectorAll('td')];
       const rawProduct = normalize(textOf(cells[1]));
       const beforeIdentifiers = rawProduct.split(/\b(?:Goods ID|SKU ID|Order item ID)\s*:/i)[0].trim() || rawProduct;
+      // Extract SKU ID and Goods ID from product cell text
+      const skuMatch   = rawProduct.match(/\bSKU ID\s*:\s*([A-Z0-9_\-]+)/i);
+      const goodsMatch = rawProduct.match(/\bGoods ID\s*:\s*([A-Z0-9_\-]+)/i);
+      const skuId   = skuMatch   ? skuMatch[1].trim()   : '';
+      const goodsId = goodsMatch ? goodsMatch[1].trim() : '';
       const quantityText = normalize(textOf(cells[2]));
       const quantity = quantityText.match(/(\d+)\s+shipped\b/i)?.[1] || quantityText.match(/(\d+)\s+item/i)?.[1] || quantityText.match(/\d+/)?.[0] || '';
       const proceedsText = normalize(textOf(cells[5]));
       const revenueMatches = proceedsText.match(/[$€£]\s?[\d,]+(?:\.\d{1,2})?/g) || [];
       const lineRevenue = revenueMatches.length ? revenueMatches[revenueMatches.length - 1] : '';
-      return { productDetails: cleanProductTitle(beforeIdentifiers), quantity, lineRevenue };
+      return { productDetails: cleanProductTitle(beforeIdentifiers), quantity, lineRevenue, skuId, goodsId };
     }).filter(product => product.productDetails || product.quantity);
   }
 
@@ -536,6 +544,8 @@
     // Use direct CSS selector for tracking (avoids timeline text contamination)
     const trackingNumber = extractTrackingFromDom(packageRoot) || extractTrackingFromDom(document) || valueAfterLabel('Tracking number', packageRoot, TRACKING_RE) || '';
     const shippingCost = findSiblingValue('Est. total shipping cost', packageRoot, AMOUNT_RE) || valueAfterLabel('Est. total shipping cost', packageRoot, /([$€£]\s?[\d,]+(?:\.\d{1,2})?)/);
+    // Carrier: try direct DOM selector first, then sibling label approach
+    const carrier = extractCarrierFromDom(packageRoot) || extractCarrierFromDom(document);
     const firstRevenue = orderRevenue || products[0]?.lineRevenue || '';
     const firstShippingCost = shippingCost || '';
     const common = {
@@ -543,14 +553,17 @@
       'Order Date': dateOnly(findSiblingValue('Purchase date') || valueAfterLabel('Purchase date', document, /^(.*?)(?=\s+Shipping service\b|$)/i)),
       'Tracking Number': trackingNumber,
       'Order No': parseOrderNumberFromDom() || active?.orderNo || '',
-      'Customer Name': findSiblingValue('Recipient name') || extractRecipientNameFromDom()
+      'Customer Name': findSiblingValue('Recipient name') || extractRecipientNameFromDom(),
+      'Carrier': carrier
     };
     return products.map((product, index) => ({
       ...common,
       'Product Details': cleanProductTitle(product.productDetails),
       'Qty (No)': product.quantity,
       'Est. Revenue': index === 0 ? firstRevenue : '',
-      'Shipping Cost': index === 0 ? firstShippingCost : ''
+      'Shipping Cost': index === 0 ? firstShippingCost : '',
+      'SKU ID':   product.skuId   || '',
+      'Goods ID': product.goodsId || ''
     }));
   }
 
