@@ -12,7 +12,7 @@
   const TRACKING_RE = /\b(?:1Z[0-9A-Z]{8,}|GFUS[0-9A-Z]{8,}|9[24][0-9]{18,}|[A-Z]{2}[0-9]{8,}[A-Z]{2}|[A-Z]{2,}\d{8,})\b/i;
   const AMOUNT_RE = /[$€£]\s?[\d,]+(?:\.\d{1,2})?/;
   const DETAIL_WAIT_TIMEOUT = 30000;
-  const DETAIL_POLL_INTERVAL = 300;
+  const DETAIL_POLL_INTERVAL = 250;
 
   /*
    * Temu's class names are CSS-module hashes and change on deploys. Every
@@ -542,46 +542,61 @@
     return records.length > 0 && records.every((record, index) => hasMinimumDetail(record) && missingFields(record, index).length === 0);
   }
 
-  function detailPageState() {
-    if (getPageBootstrapStore()?.orderList?.length) return 'ready';
+  // Cheap check: structured store present? Script scanning is cached per
+  // script-count, so repeated calls cost nothing until a new <script> lands.
+  let scannedScriptCount = -1;
+  function storeReady() {
+    if (document.scripts.length !== scannedScriptCount) {
+      scannedScriptCount = document.scripts.length;
+      bootstrapStoreCache = undefined;
+    }
+    return Boolean(getPageBootstrapStore()?.orderList?.length);
+  }
+
+  // Expensive check (reads rendered text): only run on the slow interval.
+  // innerText is used deliberately — textContent would include Temu's
+  // multi-megabyte inline JSON script and make every scan cost MBs.
+  function renderedPageState() {
     if (/no-auth|login/i.test(location.pathname)) throw new Error('Temu opened a no-auth page.');
-    const bodyText = normalize(document.body?.textContent || '');
+    const bodyText = normalize(document.body?.innerText || '');
     if (/no internet|network error|no connection/i.test(bodyText)) throw new Error('Temu displayed a network error page.');
     if (/Purchase date/i.test(bodyText) && /Order details/i.test(document.title)) return 'ready';
     return 'pending';
   }
 
-  // Resolves as soon as the detail page has data. A MutationObserver reacts to
-  // SPA renders immediately; a slow interval is the safety net. This replaces
-  // the old 50 ms innerText poll, which forced a full layout reflow 20x/second.
+  // Resolves as soon as the detail page has data. The MutationObserver path is
+  // cheap (store check only, throttled); the rendered-text check runs once a
+  // second as a fallback for pages without structured data.
   function waitForDetailData(timeout = DETAIL_WAIT_TIMEOUT) {
     return new Promise((resolve, reject) => {
       let observer = null;
       let interval = null;
       let deadline = null;
-      let scheduled = false;
+      let throttled = false;
       const cleanup = () => {
         observer?.disconnect();
         clearInterval(interval);
         clearTimeout(deadline);
       };
-      const check = () => {
-        scheduled = false;
+      const finish = (fn) => { cleanup(); fn(); };
+      const quickCheck = () => {
+        try { if (storeReady()) finish(() => resolve(true)); }
+        catch (error) { finish(() => reject(error)); }
+      };
+      const slowCheck = () => {
         try {
-          bootstrapStoreCache = undefined; // scripts may have been injected since last look
-          if (detailPageState() === 'ready') { cleanup(); resolve(true); }
-        } catch (error) { cleanup(); reject(error); }
+          if (storeReady() || renderedPageState() === 'ready') finish(() => resolve(true));
+        } catch (error) { finish(() => reject(error)); }
       };
-      const scheduleCheck = () => {
-        if (scheduled) return;
-        scheduled = true;
-        setTimeout(check, 50);
-      };
-      observer = new MutationObserver(scheduleCheck);
+      observer = new MutationObserver(() => {
+        if (throttled) return;
+        throttled = true;
+        setTimeout(() => { throttled = false; quickCheck(); }, DETAIL_POLL_INTERVAL);
+      });
       observer.observe(document.documentElement, { childList: true, subtree: true });
-      interval = setInterval(check, DETAIL_POLL_INTERVAL);
-      deadline = setTimeout(() => { cleanup(); reject(new Error('Timed out waiting for structured order-detail data.')); }, timeout);
-      check();
+      interval = setInterval(slowCheck, 1000);
+      deadline = setTimeout(() => finish(() => reject(new Error('Timed out waiting for structured order-detail data.'))), timeout);
+      slowCheck();
     });
   }
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Exporter",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "description": "Export Temu Seller bulk-shipping orders to Excel. Adaptive background extraction, column selection, Carrier / SKU ID / Goods ID capture, retry handling and a local History & Tools workspace.",
   "minimum_chrome_version": "111",
   "permissions": [
@@ -19,14 +19,27 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://seller.temu.com/buy-shipping-bulk-details.html*"],
-      "css": ["content.css"],
-      "js": ["constants.js", "xlsx.js", "content.js"],
+      "matches": [
+        "https://seller.temu.com/buy-shipping-bulk-details.html*"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "js": [
+        "constants.js",
+        "xlsx.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://seller.temu.com/order-detail.html*"],
-      "js": ["constants.js", "content.js"],
+      "matches": [
+        "https://seller.temu.com/order-detail.html*"
+      ],
+      "js": [
+        "constants.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -51,8 +64,12 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*.png"],
-      "matches": ["https://seller.temu.com/*"]
+      "resources": [
+        "icons/*.png"
+      ],
+      "matches": [
+        "https://seller.temu.com/*"
+      ]
     }
   ]
 }

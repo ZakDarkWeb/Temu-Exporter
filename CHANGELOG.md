@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.2.1 — 2026-08-29
+
+### Fixed
+- **Severe slowdown on detail tabs (regression in 5.2.0).** The new readiness check read `document.body.textContent`, which includes Temu's multi-megabyte inline `window.rawData` script, and the MutationObserver re-scanned all scripts on every DOM change. Each detail tab was doing megabytes of string work many times per second. Now: the observer path only checks the structured store (script scan cached by script count, throttled to 250 ms); the rendered-text check uses `innerText` and runs once per second as a fallback only.
+
 ## 5.2.0 — 2026-08-29
 
 ### Fixed
