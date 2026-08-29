@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Temu Order Exporter — Workspace</title>
   <meta name="description" content="Manage extraction history, configure export columns, automations and diagnostics for Temu Order Exporter.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
   <link rel="stylesheet" href="tools.css">
 </head>
 <body>
@@ -20,7 +17,7 @@
       </div>
       <div class="tp-brand-copy">
         <strong>Temu Order Exporter</strong>
-        <small>WORKSPACE &amp; TOOLS · v5.1</small>
+        <small data-role="version">WORKSPACE &amp; TOOLS</small>
       </div>
     </div>
     <div class="tp-header-actions">
@@ -202,16 +199,15 @@
       <div class="tp-settings-group">
         <div class="tp-settings-group-head">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Scheduled Auto-Run
-          <span class="tp-badge-new">NEW</span>
+          Daily Reminder
         </div>
         <div class="tp-setting-row">
           <div>
-            <strong>Enable daily auto-run</strong>
-            <small>Automatically open bulk page and start extraction at the set time.</small>
+            <strong>Open the bulk-shipping page daily</strong>
+            <small>Temu needs orders selected in Manage Orders before an export can start, so this opens the page at the set time and shows the card — you then select orders and press Start.</small>
           </div>
           <label class="tp-switch">
-            <input type="checkbox" id="schedule-enabled" data-setting="scheduleEnabled" aria-label="Enable scheduled auto-run">
+            <input type="checkbox" id="schedule-enabled" data-setting="scheduleEnabled" aria-label="Enable daily reminder">
             <span></span>
           </label>
         </div>
@@ -220,10 +216,10 @@
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Run at
           </label>
-          <input type="time" id="schedule-time" data-role="schedule-time" value="09:00" aria-label="Scheduled run time">
+          <input type="time" id="schedule-time" data-role="schedule-time" value="09:00" aria-label="Reminder time">
           <button type="button" id="btn-save-schedule" data-action="save-schedule" class="tp-btn tp-btn-sm">Save</button>
         </div>
-        <p class="tp-schedule-note" data-role="schedule-status">Schedule not set. Enable above and save to activate.</p>
+        <p class="tp-schedule-note" data-role="schedule-status">Reminder not set. Enable above and save to activate.</p>
       </div>
 
       <!-- ── Toggle Settings ── -->
@@ -294,9 +290,10 @@
   <!-- Footer -->
   <footer class="tp-footer">
     <span>🔒 All data stays in this browser. Nothing is uploaded.</span>
-    <span>Temu Order Exporter v5.1</span>
+    <span data-role="footer-version">Temu Order Exporter</span>
   </footer>
 
+  <script src="constants.js"></script>
   <script src="xlsx.js"></script>
   <script src="tools.js"></script>
 </body>

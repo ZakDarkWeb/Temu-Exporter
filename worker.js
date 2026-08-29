@@ -1,31 +1,35 @@
 'use strict';
 
-const STATE_KEY = 'temuOrderExporterStateV7';
-const DETAIL_PATH = '/order-detail.html';
-const BULK_PATH = '/buy-shipping-bulk-details.html';
+importScripts('constants.js');
+const C = self.TEMU_CONSTANTS;
+const { STORAGE_KEYS, MSG, SELLER_ORIGIN, BULK_PATH, DETAIL_PATH } = C;
+
+const STATE_KEY    = STORAGE_KEYS.STATE;
+const UI_KEY       = STORAGE_KEYS.UI;
+const SCHEDULE_KEY = STORAGE_KEYS.SCHEDULE;
+const CONCURRENCY_KEY = STORAGE_KEYS.CONCURRENCY;
 const NO_AUTH_PATHS = ['/no-auth.html', '/login.html'];
-const SELLER_ORIGIN = 'https://seller.temu.com';
-// Adaptive concurrency: starts at 2, auto-adjusts between 1-4 based on response times
+
+// Adaptive concurrency: starts at 2, auto-adjusts between 1-4 based on response times.
+// Persisted in chrome.storage.session so a service-worker restart does not reset it.
 const CONCURRENCY_MIN = 1;
 const CONCURRENCY_MAX = 4;
 const CONCURRENCY_DEFAULT = 2;
+const CONCURRENCY_COOLDOWN_MS = 15000;
+const CONCURRENCY_SAMPLE_SIZE = 6;
 let adaptiveConcurrency = {
   current: CONCURRENCY_DEFAULT,
   responseTimes: [],   // last N successful response times (ms)
   lastTimeout: 0,      // timestamp of last timeout — used for cooldown
   cooldownUntil: 0     // don't increase during cooldown
 };
+let concurrencyReady = null; // promise resolved once persisted concurrency is loaded
+
 const MAX_ATTEMPTS = 3;
 const BASE_RETRY_DELAY = 1200;
 const DETAIL_TIMEOUT = 30000;
 const WAKE_ALARM     = 'temu-order-exporter-wake';
 const SCHEDULE_ALARM = 'temu-order-exporter-schedule';
-const UI_KEY         = 'temuOrderExporterUiV1';
-const SCHEDULE_KEY   = 'temuOrderExporterScheduleV1';
-const EXPORT_COLUMNS = [
-  'Shipping Date', 'Order Date', 'Tracking Number', 'Order No', 'Customer Name',
-  'Product Details', 'Qty (No)', 'Est. Revenue', 'Shipping Cost'
-];
 
 let activeTabs = new Map();
 let closingTabs = new Set();
@@ -78,9 +82,9 @@ async function getState() {
 
 async function broadcast(state) {
   if (state.sourceTabId) {
-    try { await chrome.tabs.sendMessage(state.sourceTabId, { type: 'TEMU_STATE_UPDATE', state }); } catch (_) {}
+    try { await chrome.tabs.sendMessage(state.sourceTabId, { type: MSG.STATE_UPDATE, state }); } catch (_) {}
   }
-  try { chrome.runtime.sendMessage({ type: 'TEMU_STATE_UPDATE', state }, () => { void chrome.runtime.lastError; }); } catch (_) {}
+  try { chrome.runtime.sendMessage({ type: MSG.STATE_UPDATE, state }, () => { void chrome.runtime.lastError; }); } catch (_) {}
 }
 
 async function setState(nextState) {
@@ -154,6 +158,48 @@ function isDetailUrl(url) {
 function retryDelay(attempt) { return BASE_RETRY_DELAY * (2 ** Math.max(0, attempt - 1)); }
 function canUseAlarms() { return Boolean(chrome.alarms?.create && chrome.alarms?.clear && chrome.alarms?.onAlarm?.addListener); }
 
+function sessionStore() {
+  return chrome.storage.session || chrome.storage.local;
+}
+
+async function loadConcurrency() {
+  if (!concurrencyReady) {
+    concurrencyReady = (async () => {
+      try {
+        const stored = await sessionStore().get(CONCURRENCY_KEY);
+        const saved = stored[CONCURRENCY_KEY];
+        if (saved && typeof saved === 'object') {
+          adaptiveConcurrency = {
+            current: Math.min(CONCURRENCY_MAX, Math.max(CONCURRENCY_MIN, Number(saved.current) || CONCURRENCY_DEFAULT)),
+            responseTimes: Array.isArray(saved.responseTimes) ? saved.responseTimes.slice(-CONCURRENCY_SAMPLE_SIZE) : [],
+            lastTimeout: Number(saved.lastTimeout) || 0,
+            cooldownUntil: Number(saved.cooldownUntil) || 0
+          };
+        }
+      } catch (_) { /* keep defaults */ }
+    })();
+  }
+  return concurrencyReady;
+}
+
+function saveConcurrency() {
+  try { sessionStore().set({ [CONCURRENCY_KEY]: adaptiveConcurrency }).catch(() => {}); } catch (_) {}
+}
+
+function resetConcurrency() {
+  adaptiveConcurrency = { current: CONCURRENCY_DEFAULT, responseTimes: [], lastTimeout: 0, cooldownUntil: 0 };
+  saveConcurrency();
+}
+
+// Send a log line to the card on the bulk page (content scripts are only
+// reachable via tabs.sendMessage) and to any open extension page (tools).
+function sendLog(level, message) {
+  getState().then(state => {
+    if (state.sourceTabId) chrome.tabs.sendMessage(state.sourceTabId, { type: MSG.LOG, level, message }, () => { void chrome.runtime.lastError; });
+  }).catch(() => {});
+  try { chrome.runtime.sendMessage({ type: MSG.LOG, level, message }, () => { void chrome.runtime.lastError; }); } catch (_) {}
+}
+
 // Adaptive concurrency: call after each success (responseMs = how long the tab took)
 // or after a timeout (isTimeout = true). Adjusts adaptiveConcurrency.current and
 // broadcasts a log message so the user can see speed changes in the card.
@@ -161,18 +207,16 @@ function adjustConcurrency(responseMs, isTimeout = false) {
   const ac = adaptiveConcurrency;
   if (isTimeout) {
     ac.lastTimeout = Date.now();
-    ac.cooldownUntil = Date.now() + 15000; // 15s cooldown after timeout
+    ac.cooldownUntil = Date.now() + CONCURRENCY_COOLDOWN_MS;
     const prev = ac.current;
     ac.current = CONCURRENCY_MIN;
     ac.responseTimes = []; // reset history
-    if (prev !== ac.current) {
-      chrome.runtime.sendMessage({ type: 'TEMU_LOG', level: 'warn', message: `⚡ Speed reduced to ${ac.current} tab (timeout detected, 15s cooldown)` }).catch(() => {});
-    }
+    saveConcurrency();
+    if (prev !== ac.current) sendLog('warn', `Speed reduced to ${ac.current} tab (timeout detected, ${CONCURRENCY_COOLDOWN_MS / 1000}s cooldown)`);
     return;
   }
-  // Track last 6 response times
   ac.responseTimes.push(responseMs);
-  if (ac.responseTimes.length > 6) ac.responseTimes.shift();
+  if (ac.responseTimes.length > CONCURRENCY_SAMPLE_SIZE) ac.responseTimes.shift();
   if (ac.responseTimes.length < 3) return; // need at least 3 samples
   const avg = ac.responseTimes.reduce((s, v) => s + v, 0) / ac.responseTimes.length;
   const now = Date.now();
@@ -185,9 +229,10 @@ function adjustConcurrency(responseMs, isTimeout = false) {
   } else if (!inCooldown && avg < 12000 && ac.current < CONCURRENCY_DEFAULT) {
     ac.current = CONCURRENCY_DEFAULT;
   }
+  saveConcurrency();
   if (prev !== ac.current) {
-    const dir = ac.current > prev ? '↑ increased' : '↓ reduced';
-    chrome.runtime.sendMessage({ type: 'TEMU_LOG', level: 'info', message: `⚡ Speed ${dir} to ${ac.current} tabs (avg ${(avg/1000).toFixed(1)}s/order)` }).catch(() => {});
+    const dir = ac.current > prev ? 'increased' : 'reduced';
+    sendLog('info', `Speed ${dir} to ${ac.current} tabs (avg ${(avg / 1000).toFixed(1)}s/order)`);
   }
 }
 
@@ -272,6 +317,7 @@ async function startJob(message, sender) {
   clearAllRuntimeTimers();
   activeTabs.clear();
   operationEpoch += 1;
+  resetConcurrency();
   const rows = Array.isArray(message.rows) ? message.rows : [];
   const validRows = rows.filter(row => row && row.orderNo && row.packageId);
   const invalidRows = rows.length - validRows.length;
@@ -295,11 +341,20 @@ async function pauseJob() {
     const queuedKeys = new Set(current.retryQueue.map(item => item.key));
     const requeued = current.inFlight
       .filter(item => item?.key && !queuedKeys.has(item.key))
-      .map(item => ({ ...item, readyAt: 0 }));
+      .map(item => ({ key: item.key, index: item.index, row: item.row, readyAt: 0 }));
+    // A pause is not a failure: refund the attempt that launchItem charged for
+    // each interrupted tab, otherwise repeated pauses exhaust MAX_ATTEMPTS.
+    const attempts = { ...current.attempts };
+    for (const item of current.inFlight) {
+      if (!item?.key) continue;
+      const charged = Number(attempts[item.key]) || 0;
+      if (charged > 0) attempts[item.key] = charged - 1;
+    }
     return {
       ...current,
       status: 'paused',
       inFlight: [],
+      attempts,
       retryQueue: [...current.retryQueue, ...requeued]
     };
   });
@@ -439,16 +494,12 @@ async function recoverOpenDetailTabs() {
   if (refreshed.status === 'running') pump(refreshed, refreshed.runId);
 }
 
-function recordMissingFields(record, index) {
-  const allowedBlank = new Set(['Est. Revenue', 'Shipping Cost']);
-  return EXPORT_COLUMNS.filter(column => !String(record?.[column] ?? '').trim() && (index === 0 || !allowedBlank.has(column)));
-}
 
 function validateIncomingRecords(records) {
   if (!Array.isArray(records) || !records.length) return { ok: false, message: 'Detail page returned no product records.' };
   const missing = [];
   records.forEach((record, index) => {
-    const fields = recordMissingFields(record, index);
+    const fields = C.missingRequiredFields(record, index);
     if (!(record && typeof record === 'object')) fields.push('record');
     if (!record?.['Order No'] && !record?.['Tracking Number']) fields.push('Order identity');
     if (!record?.['Product Details'] && !record?.['Qty (No)']) fields.push('Product identity');
@@ -461,8 +512,8 @@ async function handleFailure(entry, message) {
   if (!entry || !entry.key) return;
   clearEntryTimer(entry.key, entry.attemptToken);
   // Timeout detection for adaptive concurrency
-  const isTimeoutMsg = /timed out|timeout/i.test(message || '');
-  if (isTimeoutMsg) adjustConcurrency(DETAIL_TIMEOUT, true);
+  const isTimeoutMsg = /timed out|timeout/i.test(message || '') && !/service worker/i.test(message || '');
+  if (isTimeoutMsg) { await loadConcurrency(); adjustConcurrency(DETAIL_TIMEOUT, true); }
   const state = await getState();
   const currentEntry = state.inFlight.find(item => item.key === entry.key);
   if (state.runId !== entry.runId || !currentEntry || (entry.attemptToken && currentEntry.attemptToken !== entry.attemptToken)) return;
@@ -508,12 +559,12 @@ async function handleSuccess(entry, productRecords, missing = []) {
   const incomingRecords = Array.isArray(productRecords) ? productRecords : (productRecords ? [productRecords] : []);
   const validation = validateIncomingRecords(incomingRecords);
   if (!validation.ok) { await handleFailure(entry, validation.message); return; }
-  // Track response time for adaptive concurrency
-  if (entry.startedAt) adjustConcurrency(Date.now() - entry.startedAt, false);
   const state = await getState();
   const currentEntry = state.inFlight.find(item => item.key === entry.key);
   if (state.runId !== entry.runId || !currentEntry || (entry.attemptToken && currentEntry.attemptToken !== entry.attemptToken)) return;
   clearEntryTimer(entry.key, entry.attemptToken);
+  // Track response time for adaptive concurrency (only for the live attempt)
+  if (currentEntry.startedAt) { await loadConcurrency(); adjustConcurrency(Date.now() - currentEntry.startedAt, false); }
   const warning = missing.length ? { key: entry.key, index: entry.index, orderNo: entry.row?.orderNo || '', packageId: entry.row?.packageId || '', message: `Parser warning: ${missing.join(', ')}`, at: new Date().toISOString() } : null;
   const saved = await commitState(current => {
     if (current.runId !== entry.runId || !current.inFlight.some(item => item.key === entry.key)) return current;
@@ -603,6 +654,7 @@ async function pump(inputState = null, expectedRunId = null) {
   if (pumpRunning) { pumpAgain = true; return; }
   pumpRunning = true;
   try {
+    await loadConcurrency();
     const sourceState = normalizeState(inputState || await getState());
     if (sourceState.status !== 'running' || (expectedRunId !== null && sourceState.runId !== expectedRunId)) return;
     while (true) {
@@ -627,7 +679,7 @@ async function pump(inputState = null, expectedRunId = null) {
           const errors  = completed.errors?.length || 0;
           chrome.notifications.create('temu-complete-' + Date.now(), {
             type: 'basic',
-            iconUrl: 'icons/icon128.png',
+            iconUrl: chrome.runtime.getURL('icons/icon128.png'),
             title: 'Temu Order Exporter — Export Complete',
             message: `${records} records exported${errors ? `, ${errors} error(s).` : ' successfully.'}`
           });
@@ -648,7 +700,7 @@ if (chrome.action?.onClicked?.addListener) {
   chrome.action.onClicked.addListener(async tab => {
     try {
       if (tab?.id && tab.url?.startsWith(SELLER_ORIGIN) && new URL(tab.url).pathname === BULK_PATH) {
-        chrome.tabs.sendMessage(tab.id, { type: 'TEMU_OPEN_PANEL' }, () => { void chrome.runtime.lastError; });
+        chrome.tabs.sendMessage(tab.id, { type: MSG.OPEN_PANEL }, () => { void chrome.runtime.lastError; });
         return;
       }
       if (tab?.id) await chrome.tabs.update(tab.id, { url: `${SELLER_ORIGIN}${BULK_PATH}` });
@@ -688,7 +740,7 @@ if (chrome.alarms?.onAlarm?.addListener) chrome.alarms.onAlarm.addListener(async
         if (schedule.enabled) {
           const tabs = await chrome.tabs.query({ url: `${SELLER_ORIGIN}${BULK_PATH}*` });
           if (tabs.length) {
-            chrome.tabs.sendMessage(tabs[0].id, { type: 'TEMU_OPEN_PANEL' }, () => { void chrome.runtime.lastError; });
+            chrome.tabs.sendMessage(tabs[0].id, { type: MSG.OPEN_PANEL }, () => { void chrome.runtime.lastError; });
           } else {
             await chrome.tabs.create({ url: `${SELLER_ORIGIN}${BULK_PATH}` });
           }
@@ -702,25 +754,25 @@ recoverOpenDetailTabs().catch(() => {});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
-    if (message?.type === 'TEMU_START_JOB') sendResponse({ ok: true, state: await startJob(message, sender) });
-    else if (message?.type === 'TEMU_PAUSE_JOB') sendResponse({ ok: true, state: await pauseJob() });
-    else if (message?.type === 'TEMU_RETRY_FAILED') sendResponse({ ok: true, state: await retryFailedJob(sender) });
-    else if (message?.type === 'TEMU_RESUME_JOB') sendResponse({ ok: true, state: await resumeJob(sender) });
-    else if (message?.type === 'TEMU_STOP_JOB') sendResponse({ ok: true, state: await stopJob() });
-    else if (message?.type === 'TEMU_GET_STATE') sendResponse({ ok: true, state: await getState() });
-    else if (message?.type === 'TEMU_OPEN_PANEL') {
+    if (message?.type === MSG.START_JOB) sendResponse({ ok: true, state: await startJob(message, sender) });
+    else if (message?.type === MSG.PAUSE_JOB) sendResponse({ ok: true, state: await pauseJob() });
+    else if (message?.type === MSG.RETRY_FAILED) sendResponse({ ok: true, state: await retryFailedJob(sender) });
+    else if (message?.type === MSG.RESUME_JOB) sendResponse({ ok: true, state: await resumeJob(sender) });
+    else if (message?.type === MSG.STOP_JOB) sendResponse({ ok: true, state: await stopJob() });
+    else if (message?.type === MSG.GET_STATE) sendResponse({ ok: true, state: await getState() });
+    else if (message?.type === MSG.OPEN_PANEL) {
       const current = await getState();
       if (current.sourceTabId) {
-        try { await chrome.tabs.sendMessage(current.sourceTabId, { type: 'TEMU_OPEN_PANEL' }); sendResponse({ ok: true }); }
+        try { await chrome.tabs.sendMessage(current.sourceTabId, { type: MSG.OPEN_PANEL }); sendResponse({ ok: true }); }
         catch (_) { sendResponse({ ok: false, error: 'Open the Temu bulk page to resume the panel.' }); }
       } else sendResponse({ ok: false, error: 'Open the Temu bulk page to resume the panel.' });
     }
-    else if (message?.type === 'TEMU_OPEN_TOOLS') {
+    else if (message?.type === MSG.OPEN_TOOLS) {
       try { await chrome.tabs.create({ url: chrome.runtime.getURL('tools.html') }); sendResponse({ ok: true }); }
       catch (_) { sendResponse({ ok: false, error: 'Could not open History & Tools.' }); }
     }
-    else if (message?.type === 'TEMU_UI_PREFS_UPDATE') sendResponse({ ok: true });
-    else if (message?.type === 'TEMU_SCHEDULE_SET') {
+    else if (message?.type === MSG.UI_PREFS_UPDATE) sendResponse({ ok: true });
+    else if (message?.type === MSG.SCHEDULE_SET) {
       try {
         if (canUseAlarms()) await chrome.alarms.clear(SCHEDULE_ALARM);
         if (message.enabled && message.time) {
@@ -740,11 +792,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       } catch (err) { sendResponse({ ok: false, error: err?.message }); }
     }
-    else if (message?.type === 'TEMU_DETAIL_RESULT' && sender.tab?.id) {
+    else if (message?.type === MSG.DETAIL_RESULT && sender.tab?.id) {
       const entry = await findTrackedEntry(sender.tab.id);
       if (entry) await handleSuccess(entry, message.records || message.record, message.missing || []);
       sendResponse({ ok: Boolean(entry), accepted: Boolean(entry) });
-    } else if (message?.type === 'TEMU_DETAIL_ERROR' && sender.tab?.id) {
+    } else if (message?.type === MSG.DETAIL_ERROR && sender.tab?.id) {
       const entry = await findTrackedEntry(sender.tab.id);
       if (entry) await handleFailure(entry, message.message || 'Detail extraction failed.');
       sendResponse({ ok: Boolean(entry), accepted: Boolean(entry) });

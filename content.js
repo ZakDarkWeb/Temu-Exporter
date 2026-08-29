@@ -1,31 +1,33 @@
 (() => {
   'use strict';
 
-  const STATE_KEY = 'temuOrderExporterStateV7';
-  const BULK_PATH = '/buy-shipping-bulk-details.html';
-  const DETAIL_PATH = '/order-detail.html';
+  const C = window.TEMU_CONSTANTS;
+  const { STORAGE_KEYS, MSG, BULK_PATH, DETAIL_PATH, HISTORY_LIMIT } = C;
+  const { normalize, dateOnly, moneyNumber } = C;
+  const STATE_KEY   = STORAGE_KEYS.STATE;
+  const UI_KEY      = STORAGE_KEYS.UI;
+  const HISTORY_KEY = STORAGE_KEYS.HISTORY;
+  const COLS_KEY    = STORAGE_KEYS.COLUMNS;
   const PANEL_ID = 'temu-order-exporter-panel';
-  // Columns used for VALIDATION (must be non-empty to pass). The 3 optional
-  // columns (Carrier, SKU ID, Goods ID) are intentionally excluded — they may
-  // be blank and should never cause an extraction failure.
-  const EXPORT_COLUMNS = [
-    'Shipping Date',
-    'Order Date',
-    'Tracking Number',
-    'Order No',
-    'Customer Name',
-    'Product Details',
-    'Qty (No)',
-    'Est. Revenue',
-    'Shipping Cost'
-  ];
-  // Storage key for column selection (shared with tools.js)
-  const COLS_KEY = 'temuOrderExporterColumnsV1';
   const TRACKING_RE = /\b(?:1Z[0-9A-Z]{8,}|GFUS[0-9A-Z]{8,}|9[24][0-9]{18,}|[A-Z]{2}[0-9]{8,}[A-Z]{2}|[A-Z]{2,}\d{8,})\b/i;
   const AMOUNT_RE = /[$€£]\s?[\d,]+(?:\.\d{1,2})?/;
-  const UI_KEY = 'temuOrderExporterUiV1';
-  const HISTORY_KEY = 'temuOrderExporterHistoryV1';
-  const HISTORY_LIMIT = 20;
+  const DETAIL_WAIT_TIMEOUT = 30000;
+  const DETAIL_POLL_INTERVAL = 300;
+
+  /*
+   * Temu's class names are CSS-module hashes and change on deploys. Every
+   * selector below has a label-based fallback; if the primary selector stops
+   * matching, extraction still works but a parser warning is logged so the
+   * map can be updated.
+   */
+  const SELECTORS = Object.freeze({
+    packageCard:      'div._35FMloub, div._1uiAgRn2 > div',
+    labelHeading:     'div._13soV-Aw, div._2t_pUr4h',
+    trackingValue:    'span._1KnTNdCB > span',
+    carrier:          'div._2OTvT66D',
+    tableRow:         'tr[data-testid="beast-core-table-body-tr"]',
+    tableHeaderRow:   'tr[data-testid="beast-core-table-header-tr"]'
+  });
 
   let state = defaultState();
   let panel = null;
@@ -39,16 +41,13 @@
   let progressPercent = null;
   let metrics = {};
   let pipelineStages = {};
-  let uiPrefs = { minimized: false, motion: true, saveHistory: true, autoExport: false, autoRetry: false, fabRight: 18, fabBottom: 18, cardWidth: 320 };
+  let uiPrefs = { ...C.DEFAULT_UI_PREFS };
   let historyEntries = [];
-  let lastHistoryRunId = null;
-  let settingsDrawer = null;
-  let historyDrawer = null;
   let detailReported = false;
   let bootstrapStoreCache;
   const shownWarningKeys = new Set();
-  let drawerFocusReturn = null;
   let controlActionBusy = false;
+  const selectorMisses = new Set();
 
   function defaultState() {
     return {
@@ -103,133 +102,12 @@
       errorsData: [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))]
     };
     historyEntries = [entry, ...historyEntries.filter(item => item.id !== entry.id)].slice(0, HISTORY_LIMIT);
-    lastHistoryRunId = state.runId;
-    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); } catch (_) { /* history is best effort */ }
-    renderHistory();
-  }
-
-  function historyDate(value) {
-    try { return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch (_) { return value || ''; }
-  }
-
-  function downloadRecords(records, errors, message = 'Downloaded the Excel workbook.') {
-    window.TemuXlsx.downloadWorkbook(records || [], errors || []);
-    log(message);
-  }
-
-  function renderHistory() {
-    const list = panel?.querySelector('[data-role="history-list"]');
-    if (!list) return;
-    list.replaceChildren();
-    if (!historyEntries.length) {
-      const empty = document.createElement('div');
-      empty.className = 'temu-exporter-empty-state';
-      const icon = document.createElement('span');
-      icon.className = 'temu-exporter-empty-icon';
-      icon.textContent = '▤';
-      const title = document.createElement('strong');
-      title.textContent = 'No saved sheets yet';
-      const hint = document.createElement('small');
-      hint.textContent = 'Completed Excel exports will appear here.';
-      empty.append(icon, title, hint);
-      list.appendChild(empty);
-      return;
-    }
-    historyEntries.forEach(entry => {
-      const item = document.createElement('div');
-      item.className = 'temu-exporter-history-item';
-      item.dataset.historyId = String(entry.id).replace(/[^a-zA-Z0-9_-]/g, '');
-      const main = document.createElement('div');
-      main.className = 'temu-exporter-history-main';
-      const icon = document.createElement('span');
-      icon.className = 'temu-exporter-history-icon';
-      icon.textContent = '▤';
-      const copy = document.createElement('div');
-      const date = document.createElement('strong');
-      const meta = document.createElement('small');
-      date.textContent = historyDate(entry.createdAt);
-      meta.textContent = `${Number(entry.orders) || 0} orders · ${Number(entry.rows) || 0} rows · ${Number(entry.errors) || 0} errors · ${Number(entry.warnings) || 0} notes`;
-      copy.append(date, meta);
-      main.append(icon, copy);
-      const actions = document.createElement('div');
-      actions.className = 'temu-exporter-history-actions';
-      [['download', 'Download this sheet', '↓'], ['delete', 'Delete this history item', '×']].forEach(([action, label, text]) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.dataset.historyAction = action;
-        button.title = label;
-        button.setAttribute('aria-label', label);
-        button.textContent = text;
-        actions.appendChild(button);
-      });
-      item.append(main, actions);
-      list.appendChild(item);
-    });
-  }
-
-  async function deleteHistoryEntry(id) {
-    historyEntries = historyEntries.filter(entry => entry.id !== id);
-    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); } catch (_) { /* best effort */ }
-    renderHistory();
-    log('History item deleted.');
-  }
-
-  async function clearHistory() {
-    historyEntries = [];
-    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); } catch (_) { /* best effort */ }
-    renderHistory();
-    log('Sheet history cleared.');
-  }
-
-  function closeDrawers(restoreFocus = true) {
-    settingsDrawer?.classList.remove('is-open');
-    historyDrawer?.classList.remove('is-open');
-    settingsDrawer?.setAttribute('aria-hidden', 'true');
-    historyDrawer?.setAttribute('aria-hidden', 'true');
-    panel?.classList.remove('drawer-open');
-    panel?.querySelector('[data-action="settings"]')?.setAttribute('aria-expanded', 'false');
-    panel?.querySelector('[data-action="history"]')?.setAttribute('aria-expanded', 'false');
-    if (restoreFocus && drawerFocusReturn && typeof drawerFocusReturn.focus === 'function') drawerFocusReturn.focus();
-    if (restoreFocus) drawerFocusReturn = null;
-  }
-
-  function drawerFocusables(drawer) {
-    return [...drawer.querySelectorAll('button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')].filter(element => element.offsetParent !== null);
-  }
-
-  function handleDrawerKeydown(event) {
-    if (!panel?.classList.contains('drawer-open')) return;
-    if (event.key === 'Escape') { event.preventDefault(); closeDrawers(); return; }
-    if (event.key !== 'Tab') return;
-    const drawer = settingsDrawer?.classList.contains('is-open') ? settingsDrawer : historyDrawer;
-    const focusable = drawer ? drawerFocusables(drawer) : [];
-    if (!focusable.length) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  }
-
-  function toggleDrawer(drawer) {
-    const target = drawer === 'settings' ? settingsDrawer : historyDrawer;
-    const trigger = panel?.querySelector(`[data-action="${drawer}"]`);
-    const shouldOpen = !target?.classList.contains('is-open');
-    if (!shouldOpen) {
-      closeDrawers();
-      return;
-    }
-    drawerFocusReturn = trigger || document.activeElement;
-    closeDrawers(false);
-    target?.classList.add('is-open');
-    target?.setAttribute('aria-hidden', 'false');
-    panel?.classList.add('drawer-open');
-    trigger?.setAttribute('aria-expanded', 'true');
-    if (drawer === 'history') renderHistory();
-    setTimeout(() => target?.querySelector('button, input')?.focus(), 0);
+    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); }
+    catch (error) { log(`History could not be saved (${error?.message || 'storage error'}).`, 'warn'); }
   }
 
   async function setMinimized(value) {
-    if (value && panel?.classList.contains('drawer-open')) closeDrawers(false);
+    if (!panel) return;
     uiPrefs.minimized = Boolean(value);
     panel?.classList.toggle('is-minimized', uiPrefs.minimized);
     // Anime icon is always visible in header — no toggle needed
@@ -245,23 +123,8 @@
     await saveUiPrefs();
   }
 
-  function normalize(value) {
-    return String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-  }
-
   function textOf(element) {
     return normalize(element?.innerText || element?.textContent || '');
-  }
-
-  function dateOnly(value) {
-    const text = normalize(value);
-    if (!text) return '';
-    const monthDate = text.match(/^(.+?,\s*\d{4})/);
-    if (monthDate) return monthDate[1].trim();
-    const isoDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (isoDate) return isoDate[1];
-    const beforeTime = text.match(/^(.+?)(?=,?\s+\d{1,2}:\d{2}\s*(?:am|pm)?\b)/i);
-    return beforeTime ? beforeTime[1].replace(/,\s*$/, '').trim() : text;
   }
 
   function cleanProductTitle(value) {
@@ -274,28 +137,8 @@
     return title.replace(/\s{2,}/g, ' ');
   }
 
-  function moneyNumber(value) {
-    const cleaned = normalize(value).replace(/[^0-9.-]/g, '');
-    if (!cleaned || cleaned === '-' || cleaned === '.') return null;
-    const number = Number(cleaned);
-    return Number.isFinite(number) ? number : null;
-  }
-
   function moneyText(value) {
     return value === null || value === undefined || !Number.isFinite(value) ? '' : `$${value.toFixed(2)}`;
-  }
-
-  function allocateMoney(totalText, basisValues) {
-    const total = moneyNumber(totalText);
-    if (total === null || !basisValues.length) return basisValues.map(() => '');
-    const weights = basisValues.map(value => Number.isFinite(value) && value > 0 ? value : 1);
-    const weightTotal = weights.reduce((sum, value) => sum + value, 0);
-    let allocated = 0;
-    return weights.map((weight, index) => {
-      const value = index === weights.length - 1 ? total - allocated : Math.round((total * weight / weightTotal) * 100) / 100;
-      allocated += value;
-      return moneyText(value);
-    });
   }
 
   function sleep(ms) {
@@ -313,10 +156,7 @@
     stop:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`,
     download:`<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 2V10M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 12H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     retry:  `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 8a4 4 0 1 1 4 4H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 12L3 10M5 12L7 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-    tools:  `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="5" r="2.5" stroke="currentColor" stroke-width="1.4"/><circle cx="11" cy="11" r="2.5" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 11h5M8.5 5h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
-    gear:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.5V3M8 13V14.5M1.5 8H3M13 8H14.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     history:`<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-    file:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 2h5l3 3v9H4V2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9 2v3h3" stroke="currentColor" stroke-width="1.3"/><path d="M6 8h4M6 11h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`,
     bolt:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 2L5 9h4.5L6.5 14L12 7H7.5L9.5 2Z" fill="currentColor"/></svg>`
   };
   function svgIcon(name) {
@@ -376,7 +216,7 @@
 
   async function getCurrentState() {
     try {
-      const response = await sendMessage({ type: 'TEMU_GET_STATE' });
+      const response = await sendMessage({ type: MSG.GET_STATE });
       state = { ...defaultState(), ...(response.state || {}) };
     } catch (_) {
       const result = await chrome.storage.local.get(STATE_KEY);
@@ -439,7 +279,7 @@
     if (!packageId) return document;
     // Priority: use the known CSS class for the package card (div._35FMloub)
     // This is faster and avoids false positives in multi-package orders
-    for (const card of document.querySelectorAll('div._35FMloub, div._1uiAgRn2 > div')) {
+    for (const card of document.querySelectorAll(SELECTORS.packageCard)) {
       if (normalize(textOf(card)).includes(packageId)) return card;
     }
     // Fallback: walk ancestors of the element that shows the packageId text
@@ -456,7 +296,7 @@
   }
 
   function parseProductsFromDom() {
-    const rows = [...document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]')]
+    const rows = [...document.querySelectorAll(SELECTORS.tableRow)]
       .filter(candidate => candidate.querySelectorAll('td').length >= 3);
     const fallbackRows = rows.length ? rows : [...document.querySelectorAll('table')]
       .flatMap(table => [...table.querySelectorAll('tr')])
@@ -488,50 +328,49 @@
   // Confirmed from real DOM: div._13soV-Aw ("Tracking number") → sibling → span._1KnTNdCB > span
   function extractTrackingFromDom(root = document) {
     // Strategy 1: Find the label heading, then look for _1KnTNdCB in its sibling container
-    for (const heading of root.querySelectorAll('div._13soV-Aw, div._2t_pUr4h')) {
+    for (const heading of root.querySelectorAll(SELECTORS.labelHeading)) {
       if (!/Tracking number/i.test(normalize(heading.textContent))) continue;
       const container = heading.parentElement;
       if (!container) continue;
-      const tnSpan = container.querySelector('span._1KnTNdCB > span');
+      const tnSpan = container.querySelector(SELECTORS.trackingValue);
       if (tnSpan) {
         const val = normalize(tnSpan.textContent);
         if (val && TRACKING_RE.test(val)) return val;
       }
     }
     // Strategy 2: All _1KnTNdCB > span elements — pick first that matches TRACKING_RE
-    for (const span of root.querySelectorAll('span._1KnTNdCB > span')) {
+    for (const span of root.querySelectorAll(SELECTORS.trackingValue)) {
       const val = normalize(span.textContent);
       if (val && TRACKING_RE.test(val)) return val;
     }
+    selectorMisses.add('trackingValue');
     return '';
   }
 
   // Extract courier/carrier name from DOM — confirmed selector: div._2OTvT66D
   function extractCarrierFromDom(root = document) {
-    const el = root.querySelector('div._2OTvT66D');
+    const el = root.querySelector(SELECTORS.carrier);
     if (el) { const val = normalize(el.textContent); if (val) return val; }
-    // Fallback: label sibling approach
+    selectorMisses.add('carrier');
     return findSiblingValue('Courier', root) || '';
   }
 
   function extractRecipientNameFromDom() {
     // Walk all label-like divs looking for one whose visible text starts with "Recipient name"
     // The page structure is: div._3XfPagy1 > div._2t_pUr4h ("Recipient name") + div._2-2LmK96 (value)
+    // textContent is used for the scan (innerText would force a layout reflow per element).
     for (const el of document.querySelectorAll('div,span')) {
-      const text = normalize(el.innerText || el.textContent || '');
-      if (text !== 'Recipient name') continue;
-      // Try nextElementSibling first (fastest path)
+      if (normalize(el.textContent) !== 'Recipient name') continue;
       const sibling = el.nextElementSibling;
       if (sibling) {
-        const val = normalize(sibling.innerText || sibling.textContent || '');
+        const val = textOf(sibling);
         if (val && val !== 'Recipient name') return val;
       }
-      // Also check parent's children
       const parent = el.parentElement;
       if (parent) {
         for (const child of parent.children) {
           if (child === el) continue;
-          const val = normalize(child.innerText || child.textContent || '');
+          const val = textOf(child);
           if (val && val !== 'Recipient name') return val;
         }
       }
@@ -696,24 +535,54 @@
   }
 
   function missingFields(record, rowIndex = 0) {
-    const allowedBlank = new Set(['Est. Revenue', 'Shipping Cost']);
-    return EXPORT_COLUMNS.filter(column => !normalize(record?.[column]) && (rowIndex === 0 || !allowedBlank.has(column)));
+    return C.missingRequiredFields(record, rowIndex);
   }
 
   function allRecordsComplete(records) {
     return records.length > 0 && records.every((record, index) => hasMinimumDetail(record) && missingFields(record, index).length === 0);
   }
 
-  async function waitForDetailData(timeout = 30000) {
-    const started = Date.now();
-    while (Date.now() - started < timeout) {
-      if (getPageBootstrapStore()?.orderList?.length) return true;
-      if (/no-auth|login/i.test(location.pathname)) throw new Error('Temu opened a no-auth page.');
-      if (/no internet|network error|no connection/i.test(textOf(document.body))) throw new Error('Temu displayed a network error page.');
-      if (/Purchase date/i.test(textOf(document.body)) && /Order details/i.test(document.title)) return true;
-      await sleep(50);
-    }
-    throw new Error('Timed out waiting for structured order-detail data.');
+  function detailPageState() {
+    if (getPageBootstrapStore()?.orderList?.length) return 'ready';
+    if (/no-auth|login/i.test(location.pathname)) throw new Error('Temu opened a no-auth page.');
+    const bodyText = normalize(document.body?.textContent || '');
+    if (/no internet|network error|no connection/i.test(bodyText)) throw new Error('Temu displayed a network error page.');
+    if (/Purchase date/i.test(bodyText) && /Order details/i.test(document.title)) return 'ready';
+    return 'pending';
+  }
+
+  // Resolves as soon as the detail page has data. A MutationObserver reacts to
+  // SPA renders immediately; a slow interval is the safety net. This replaces
+  // the old 50 ms innerText poll, which forced a full layout reflow 20x/second.
+  function waitForDetailData(timeout = DETAIL_WAIT_TIMEOUT) {
+    return new Promise((resolve, reject) => {
+      let observer = null;
+      let interval = null;
+      let deadline = null;
+      let scheduled = false;
+      const cleanup = () => {
+        observer?.disconnect();
+        clearInterval(interval);
+        clearTimeout(deadline);
+      };
+      const check = () => {
+        scheduled = false;
+        try {
+          bootstrapStoreCache = undefined; // scripts may have been injected since last look
+          if (detailPageState() === 'ready') { cleanup(); resolve(true); }
+        } catch (error) { cleanup(); reject(error); }
+      };
+      const scheduleCheck = () => {
+        if (scheduled) return;
+        scheduled = true;
+        setTimeout(check, 50);
+      };
+      observer = new MutationObserver(scheduleCheck);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      interval = setInterval(check, DETAIL_POLL_INTERVAL);
+      deadline = setTimeout(() => { cleanup(); reject(new Error('Timed out waiting for structured order-detail data.')); }, timeout);
+      check();
+    });
   }
 
   async function processDetailPage() {
@@ -731,15 +600,16 @@
       }
       const missing = [...new Set(records.flatMap((record, index) => missingFields(record, index)))];
       if (!allRecordsComplete(records)) throw new Error(`Order-detail data was incomplete after rendering. Missing: ${missing.join(', ') || 'unknown fields'}`);
-      await sendMessageWithAck({ type: 'TEMU_DETAIL_RESULT', records, missing: [] });
+      const notes = selectorMisses.size ? [`primary selector missed: ${[...selectorMisses].join(', ')} (fallback used)`] : [];
+      await sendMessageWithAck({ type: MSG.DETAIL_RESULT, records, missing: notes });
     } catch (error) {
-      try { await sendMessageWithAck({ type: 'TEMU_DETAIL_ERROR', message: error?.message || String(error) }); } catch (_) { /* worker timeout/recovery remains the final safeguard */ }
+      try { await sendMessageWithAck({ type: MSG.DETAIL_ERROR, message: error?.message || String(error) }); } catch (_) { /* worker timeout/recovery remains the final safeguard */ }
     }
   }
 
   function captureBulkRows() {
-    const rows = [...document.querySelectorAll('tr[data-testid="beast-core-table-body-tr"]')];
-    const header = document.querySelector('tr[data-testid="beast-core-table-header-tr"]');
+    const rows = [...document.querySelectorAll(SELECTORS.tableRow)];
+    const header = document.querySelector(SELECTORS.tableHeaderRow);
     const headerCells = header ? [...header.querySelectorAll('th[data-testid="beast-core-table-th"], th')] : [];
     const headers = headerCells.map(textOf).map(value => value.toLowerCase());
     const indexOf = (patterns, fallback) => {
@@ -770,6 +640,7 @@
   // Typed log with timestamp — supports: info | success | warn | error
   function log(message, type = 'info') {
     if (!logBox) return;
+    if (type === 'warning') type = 'warn';
     const now = new Date();
     const ts  = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const icons = { info: '›', success: '✓', warn: '⚠', error: '✗' };
@@ -833,8 +704,11 @@
     // ETA calculation
     const etaEl = panel.querySelector('[data-role="eta"]');
     if (etaEl) {
-      if (state.status === 'running' && stats.done > 3 && stats.total > stats.done) {
-        const elapsed = (Date.now() - (state._startMs || Date.now())) / 1000;
+      // runId is Date.now() at job start, so it doubles as the run's start time
+      // and survives every state broadcast (a local field would be overwritten).
+      const startedAt = Number(state.runId) || 0;
+      const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+      if (state.status === 'running' && stats.done > 3 && stats.total > stats.done && elapsed > 1) {
         const rate = stats.done / elapsed; // orders/sec
         const remaining = (stats.total - stats.done) / rate;
         const mins = Math.floor(remaining / 60);
@@ -903,7 +777,7 @@
         </div>
 
         <!-- Automations Drawer -->
-        <div class="temu-exporter-automations" data-role="automations-drawer" aria-hidden="true">
+        <div class="temu-exporter-automations" data-role="automations-drawer" inert>
           <div class="temu-exporter-auto-panel">
             <div class="temu-exporter-auto-title">${svgIcon('bolt')} Automations</div>
             <div class="temu-exporter-auto-row">
@@ -953,7 +827,7 @@
         <div class="temu-exporter-pipeline" data-role="pipeline" aria-label="Extraction pipeline">
           <div class="temu-exporter-pipeline-stage" data-pipeline-stage="capture"><span class="temu-exporter-pipeline-number">1</span><div><strong>Capture rows</strong><small>Bulk page</small></div></div>
           <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
-          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="details"><span class="temu-exporter-pipeline-number">2</span><div><strong>Read details</strong><small>Two tabs</small></div></div>
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="details"><span class="temu-exporter-pipeline-number">2</span><div><strong>Read details</strong><small>Adaptive tabs</small></div></div>
           <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
           <div class="temu-exporter-pipeline-stage" data-pipeline-stage="workbook"><span class="temu-exporter-pipeline-number">3</span><div><strong>Build XLSX</strong><small>Local file</small></div></div>
         </div>
@@ -978,7 +852,7 @@
           <button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('retry')}</span><span>Retry failed</span></button>
         </div>
         <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
-        <div class="temu-exporter-footer"><span>Local-only processing</span><span>v5.0.0</span></div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span data-role="version"></span></div>
       </div>
       <!-- Resize handle -->
       <div class="temu-exporter-resize-handle" aria-hidden="true" title="Drag to resize"></div>
@@ -987,10 +861,10 @@
     // Set the icon src correctly via runtime URL (works for both header and FAB)
     const headerImg = panel.querySelector('img.te-header-icon');
     if (headerImg) headerImg.src = chrome.runtime.getURL('icons/icon128.png');
+    const versionEl = panel.querySelector('[data-role="version"]');
+    if (versionEl) versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
     progressBox = panel.querySelector('[data-role="progress"]');
     logBox = panel.querySelector('[data-role="log"]');
-    settingsDrawer = panel.querySelector('[data-role="settings-drawer"]');
-    historyDrawer = panel.querySelector('[data-role="history-drawer"]');
     statusChip = panel.querySelector('[data-role="status-chip"]');
     statusTitle = panel.querySelector('[data-role="status-title"]');
     statusDetail = panel.querySelector('[data-role="status-detail"]');
@@ -1016,10 +890,10 @@
     };
     // Wire ripple to all action buttons
     Object.values(buttons).forEach(btn => { if (btn) addRipple(btn); });
-    buttons.start.addEventListener('click', startJob);
+    buttons.start.addEventListener('click', () => runControl('start', buttons.start, startJob));
     buttons.pause.addEventListener('click', pauseJob);
     buttons.stop.addEventListener('click', stopJob);
-    buttons.retry.addEventListener('click', retryFailedJob);
+    buttons.retry.addEventListener('click', () => runControl('retry', buttons.retry, retryFailedJob));
     buttons.download.addEventListener('click', async () => {
       await saveHistoryEntry();
       const records = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
@@ -1043,7 +917,7 @@
       const drawer = panel.querySelector('[data-role="automations-drawer"]');
       const btn = panel.querySelector('[data-action="automations"]');
       const isOpen = drawer.classList.toggle('is-open');
-      drawer.setAttribute('aria-hidden', String(!isOpen));
+      drawer.inert = !isOpen; // inert removes hidden controls from tab order without aria-hidden conflicts
       btn.setAttribute('aria-expanded', String(isOpen));
     });
     // ── Draggable FAB (minimized card can be repositioned) ─────────
@@ -1182,9 +1056,10 @@
       panel.style.bottom = (uiPrefs.fabBottom ?? 18) + 'px';
     }
     panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
-    renderHistory();
     chrome.runtime.onMessage.addListener(message => {
-      if (message?.type === 'TEMU_STATE_UPDATE') {
+      if (message?.type === MSG.LOG) {
+        log(message.message || '', message.level === 'warn' ? 'warn' : message.level === 'error' ? 'error' : 'info');
+      } else if (message?.type === MSG.STATE_UPDATE) {
         const prevStatus = state.status;
         state = { ...defaultState(), ...(message.state || {}) };
         updatePanel();
@@ -1215,29 +1090,39 @@
           // Auto-Retry: retry failed orders automatically once
           if (uiPrefs.autoRetry && state.errors.length) {
             log(`Auto-retry: retrying ${state.errors.length} failed order(s)...`, 'warning');
-            setTimeout(() => retryFailedJob().catch(() => {}), 1200);
+            setTimeout(() => runControl('retry', buttons.retry, retryFailedJob), 1200);
           }
         }
-      } else if (message?.type === 'TEMU_POPUP_START') {
-        startJob().catch(error => log(error?.message || 'Could not start extraction.', 'error'));
-      } else if (message?.type === 'TEMU_OPEN_PANEL') {
+      } else if (message?.type === MSG.OPEN_PANEL) {
         setMinimized(false);
-      } else if (message?.type === 'TEMU_OPEN_HISTORY') {
-        openToolsPage();
       }
     });
     updatePanel();
   }
 
+  // Serialises Start/Retry clicks and surfaces any error in the activity log
+  // instead of an unhandled promise rejection in the console.
+  async function runControl(name, button, action) {
+    if (controlActionBusy) return;
+    controlActionBusy = true;
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    try { await action(); }
+    catch (error) { log(error?.message || `Could not ${name}.`, 'error'); await getCurrentState().catch(() => {}); }
+    finally {
+      controlActionBusy = false;
+      if (button) button.removeAttribute('aria-busy');
+      updatePanel();
+    }
+  }
+
   async function openToolsPage() {
     try {
-      const response = await sendMessage({ type: 'TEMU_OPEN_TOOLS' });
+      const response = await sendMessage({ type: MSG.OPEN_TOOLS });
       if (!response?.ok) log(response?.error || 'Could not open History & Tools.', 'error');
     } catch (error) { log(error?.message || 'Could not open History & Tools.', 'error'); }
   }
 
   async function startJob() {
-    state._startMs = Date.now();
     shownWarningKeys.clear();
     bootstrapStoreCache = undefined;
     if (logBox) logBox.textContent = '';
@@ -1247,11 +1132,11 @@
       log(noData ? 'Bulk page has no loaded packages. Open Manage Orders, select orders, then choose Buy shipping in bulk.' : 'No valid rendered order rows found. Wait for the table and reload the page.', 'error');
       return;
     }
-    const response = await sendMessage({ type: 'TEMU_START_JOB', sourceUrl: location.href, rows });
+    const response = await sendMessage({ type: MSG.START_JOB, sourceUrl: location.href, rows });
     if (response?.ok === false) throw new Error(response.error || 'Could not start extraction.');
     state = { ...defaultState(), ...(response.state || {}) };
     updatePanel();
-    log(`Started ${rows.length} unique orders with two background detail tabs.`);
+    log(`Started ${rows.length} unique orders in background detail tabs (adaptive speed).`);
   }
 
   async function pauseJob() {
@@ -1265,7 +1150,7 @@
     updatePanel();
     log('Pausing. Current checkpoint is being preserved.');
     try {
-      const response = await sendMessage({ type: 'TEMU_PAUSE_JOB' });
+      const response = await sendMessage({ type: MSG.PAUSE_JOB });
       if (response?.ok === false) throw new Error(response.error || 'Could not pause extraction.');
       state = { ...defaultState(), ...(response.state || {}) };
       updatePanel();
@@ -1284,7 +1169,8 @@
     if (!state.errors.length || state.status === 'running' || state.inFlight.length) return;
     shownWarningKeys.clear();
     const failedCount = state.errors.length; // capture before state is reset by response
-    const response = await sendMessage({ type: 'TEMU_RETRY_FAILED' });
+    const response = await sendMessage({ type: MSG.RETRY_FAILED });
+    if (response?.ok === false) throw new Error(response.error || 'Could not retry failed orders.');
     state = { ...defaultState(), ...(response.state || {}) };
     updatePanel();
     log(`Retrying ${failedCount} failed order${failedCount === 1 ? '' : 's'} with a fresh attempt budget.`);
@@ -1303,7 +1189,7 @@
     updatePanel();
     log('Stopping and clearing the saved batch.');
     try {
-      const response = await sendMessage({ type: 'TEMU_STOP_JOB' });
+      const response = await sendMessage({ type: MSG.STOP_JOB });
       if (response?.ok === false) throw new Error(response.error || 'Could not stop extraction.');
       state = { ...defaultState(), ...(response.state || {}) };
       if (logBox) logBox.textContent = '';

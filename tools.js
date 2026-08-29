@@ -1,16 +1,17 @@
 (() => {
   'use strict';
-  const STATE_KEY    = 'temuOrderExporterStateV7';
-  const UI_KEY       = 'temuOrderExporterUiV1';
-  const HISTORY_KEY  = 'temuOrderExporterHistoryV1';
-  const SCHEDULE_KEY = 'temuOrderExporterScheduleV1';
-  const COLS_KEY     = 'temuOrderExporterColumnsV1';
-  const HISTORY_LIMIT = 20;
-  const BULK_URL = 'https://seller.temu.com/buy-shipping-bulk-details.html';
+  const C = window.TEMU_CONSTANTS;
+  const { STORAGE_KEYS, MSG, HISTORY_LIMIT } = C;
+  const STATE_KEY    = STORAGE_KEYS.STATE;
+  const UI_KEY       = STORAGE_KEYS.UI;
+  const HISTORY_KEY  = STORAGE_KEYS.HISTORY;
+  const SCHEDULE_KEY = STORAGE_KEYS.SCHEDULE;
+  const COLS_KEY     = STORAGE_KEYS.COLUMNS;
+  const BULK_URL     = `${C.SELLER_ORIGIN}${C.BULK_PATH}`;
 
   let state          = defaultState();
   let historyEntries = [];
-  let uiPrefs        = { minimized: false, motion: true, saveHistory: true, autoExport: false, autoRetry: false, notifyOnComplete: false };
+  let uiPrefs        = { ...C.DEFAULT_UI_PREFS };
   let schedulePrefs  = { enabled: false, time: '09:00' };
   let selectedColumns = null; // null = use MAIN_COLUMNS default
   let busy = false;
@@ -216,7 +217,7 @@
     const note = $('[data-role="schedule-status"]');
     if (!note) return;
     if (schedulePrefs.enabled && schedulePrefs.time) {
-      note.textContent = `✓ Auto-run scheduled daily at ${schedulePrefs.time}. Chrome must be running.`;
+      note.textContent = `Daily reminder set for ${schedulePrefs.time}. The bulk-shipping page opens automatically; Chrome must be running.`;
       note.style.color = 'var(--tp-green)';
     } else {
       note.textContent = 'Schedule not set. Enable above and save to activate.';
@@ -270,33 +271,21 @@
     try {
       await chrome.storage.local.set({ [SCHEDULE_KEY]: schedulePrefs });
       if (schedulePrefs.enabled && schedulePrefs.time) {
-        await send({ type: 'TEMU_SCHEDULE_SET', time: schedulePrefs.time, enabled: true });
-        feedback(`Daily auto-run scheduled at ${schedulePrefs.time}.`, 'success');
+        await send({ type: MSG.SCHEDULE_SET, time: schedulePrefs.time, enabled: true });
+        feedback(`Daily reminder set for ${schedulePrefs.time}.`, 'success');
       } else {
-        await send({ type: 'TEMU_SCHEDULE_SET', enabled: false });
-        feedback('Schedule cleared.', 'success');
+        await send({ type: MSG.SCHEDULE_SET, enabled: false });
+        feedback('Reminder cleared.', 'success');
       }
     } catch (_) { feedback('Could not save schedule.', 'error'); }
     renderScheduleStatus();
-  }
-
-  /* ── Notification permission ────────────────────────────── */
-  async function requestNotificationPermission() {
-    if (!('Notification' in window)) return false;
-    if (Notification.permission === 'granted') return true;
-    if (Notification.permission === 'denied') {
-      feedback('Notification permission was blocked. Enable it in browser settings.', 'error');
-      return false;
-    }
-    const result = await Notification.requestPermission();
-    return result === 'granted';
   }
 
   /* ── Load all data ──────────────────────────────────────── */
   async function load() {
     try {
       const [response, stored] = await Promise.all([
-        send({ type: 'TEMU_GET_STATE' }),
+        send({ type: MSG.GET_STATE }),
         chrome.storage.local.get([HISTORY_KEY, UI_KEY, SCHEDULE_KEY, COLS_KEY])
       ]);
       state          = { ...defaultState(), ...(response.state || {}) };
@@ -347,12 +336,12 @@
         await chrome.tabs.create({ url: state.sourceUrl || BULK_URL }); return;
       }
       if (action === 'resume') {
-        const sent = await send({ type: 'TEMU_OPEN_PANEL' });
+        const sent = await send({ type: MSG.OPEN_PANEL });
         if (!sent?.ok) await chrome.tabs.create({ url: state.sourceUrl || BULK_URL });
         return;
       }
-      if (action === 'retry')    await send({ type: 'TEMU_RETRY_FAILED' });
-      if (action === 'stop')     await send({ type: 'TEMU_STOP_JOB' });
+      if (action === 'retry')    await send({ type: MSG.RETRY_FAILED });
+      if (action === 'stop')     await send({ type: MSG.STOP_JOB });
       if (action === 'download-current') {
         const records = (state.records || []).map(cleanRecord);
         if (!records.length) { feedback('No workbook rows are ready yet.', 'warning'); return; }
@@ -425,21 +414,12 @@
       schedulePrefs.enabled = checked;
       renderScheduleStatus();
       await chrome.storage.local.set({ [SCHEDULE_KEY]: schedulePrefs });
-      if (!checked) await send({ type: 'TEMU_SCHEDULE_SET', enabled: false }).catch(() => {});
-    } else if (key === 'notifyOnComplete') {
-      if (checked) {
-        const granted = await requestNotificationPermission();
-        if (!granted) { event.target.checked = false; return; }
-      }
-      uiPrefs[key] = checked;
-      await chrome.storage.local.set({ [UI_KEY]: uiPrefs });
-      try { await send({ type: 'TEMU_UI_PREFS_UPDATE', prefs: uiPrefs }); } catch (_) {}
-      feedback(`Completion notifications ${checked ? 'enabled' : 'disabled'}.`, 'success');
+      if (!checked) await send({ type: MSG.SCHEDULE_SET, enabled: false }).catch(() => {});
     } else {
       uiPrefs[key] = checked;
       await chrome.storage.local.set({ [UI_KEY]: uiPrefs });
-      try { await send({ type: 'TEMU_UI_PREFS_UPDATE', prefs: uiPrefs }); } catch (_) {}
-      const labels = { motion: 'Motion effects', saveHistory: 'Sheet history', autoExport: 'Auto-export', autoRetry: 'Auto-retry' };
+      try { await send({ type: MSG.UI_PREFS_UPDATE, prefs: uiPrefs }); } catch (_) {}
+      const labels = { motion: 'Motion effects', saveHistory: 'Sheet history', autoExport: 'Auto-export', autoRetry: 'Auto-retry', notifyOnComplete: 'Completion notifications' };
       feedback(`${labels[key] || key} ${checked ? 'enabled' : 'disabled'}.`, 'success');
     }
   }));
@@ -459,7 +439,7 @@
 
   // Live state updates from background
   chrome.runtime.onMessage.addListener(message => {
-    if (message?.type === 'TEMU_STATE_UPDATE') {
+    if (message?.type === MSG.STATE_UPDATE) {
       state = { ...defaultState(), ...(message.state || {}) };
       renderState();
       renderDiagnostics();
@@ -471,5 +451,9 @@
   });
 
   // Init
+  const versionEl = $('[data-role="version"]');
+  if (versionEl) versionEl.textContent = `WORKSPACE & TOOLS · v${chrome.runtime.getManifest().version}`;
+  const footerVersionEl = $('[data-role="footer-version"]');
+  if (footerVersionEl) footerVersionEl.textContent = `Temu Order Exporter v${chrome.runtime.getManifest().version}`;
   load();
 })();

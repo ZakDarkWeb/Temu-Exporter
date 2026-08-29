@@ -1,25 +1,8 @@
 (() => {
   'use strict';
 
-  // All available columns (master list shown in settings)
-  const ALL_COLUMNS = [
-    'Shipping Date',
-    'Order Date',
-    'Tracking Number',
-    'Order No',
-    'Customer Name',
-    'Product Details',
-    'Qty (No)',
-    'Est. Revenue',
-    'Shipping Cost',
-    'Carrier',
-    'SKU ID',
-    'Goods ID'
-  ];
-  // Default columns for export (original 9 — preserved for backward compat)
-  const MAIN_COLUMNS = ALL_COLUMNS.slice(0, 9);
-
-  const ERROR_COLUMNS = ['Time', 'Order No', 'Package ID', 'Attempts', 'Error'];
+  const C = window.TEMU_CONSTANTS;
+  const { ALL_COLUMNS, MAIN_COLUMNS, ERROR_COLUMNS, dateOnly } = C;
   const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
   function xmlEscape(value) {
@@ -50,25 +33,33 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  function dateOnly(value) {
-    const text = String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!text) return '';
-    const monthDate = text.match(/^(.+?,\s*\d{4})/);
-    if (monthDate) return monthDate[1].trim();
-    const isoDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (isoDate) return isoDate[1];
-    const beforeTime = text.match(/^(.+?)(?=,?\s+\d{1,2}:\d{2}\s*(?:am|pm)?\b)/i);
-    return beforeTime ? beforeTime[1].replace(/,\s*$/, '').trim() : text;
+  /** Excel serial date (days since 1899-12-30) for a parseable date string; null otherwise. */
+  function excelSerial(value) {
+    const text = dateOnly(value);
+    if (!text) return null;
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return null;
+    const utcDay = Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    return Math.round((utcDay - Date.UTC(1899, 11, 30)) / 86400000);
   }
 
-  function cellXml(rowNumber, columnIndex, value, numeric = false, style = 0) {
+  // Styles (index into cellXfs): 0=text, 1=header, 2=money 0.00, 3=integer, 4=date
+  const STYLE = { TEXT: 0, HEADER: 1, MONEY: 2, INTEGER: 3, DATE: 4 };
+
+  function cellXml(rowNumber, columnIndex, value, kind = 'text', style = STYLE.TEXT) {
     const reference = `${colLetter(columnIndex)}${rowNumber}`;
     if (value === null || value === undefined || String(value).trim() === '') return `<c r="${reference}" s="${style}"/>`;
-    if (numeric) {
-      const number = asNumber(value);
+    if (kind === 'date') {
+      const serial = excelSerial(value);
+      if (serial !== null) return `<c r="${reference}" s="${style}" t="n"><v>${serial}</v></c>`;
+      return `<c r="${reference}" s="${STYLE.TEXT}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(dateOnly(value))}</t></is></c>`;
+    }
+    if (kind === 'number') {
+      // Non-dollar currencies stay as text so the symbol is not silently lost.
+      const number = /[€£]/.test(String(value)) ? null : asNumber(value);
       if (number !== null) return `<c r="${reference}" s="${style}" t="n"><v>${number}</v></c>`;
     }
-    return `<c r="${reference}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    return `<c r="${reference}" s="${STYLE.TEXT}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
   }
 
   // Columns that contain numeric/money values (by column name)
@@ -83,19 +74,17 @@
     'Carrier': 22, 'SKU ID': 20, 'Goods ID': 22
   };
 
-  function makeSheetXml(records, errors, columns = MAIN_COLUMNS) {
+  function makeSheetXml(records, columns = MAIN_COLUMNS) {
     const rows = [];
-    rows.push(`<row r="1">${columns.map((col, index) => cellXml(1, index, col, false, 1)).join('')}</row>`);
+    rows.push(`<row r="1">${columns.map((col, index) => cellXml(1, index, col, 'text', STYLE.HEADER)).join('')}</row>`);
     records.forEach((record, recordIndex) => {
       const rowNumber = recordIndex + 2;
       const cells = columns.map((col, index) => {
         const rawValue = record[col];
-        const isDate   = DATE_COLUMNS.has(col);
-        const isNum    = NUMERIC_COLUMNS.has(col);
-        const value    = isDate ? dateOnly(rawValue) : rawValue;
-        // Style: 1=header(unused here), 2=money, 3=integer qty, 0=text
-        const style = col === 'Qty (No)' ? 3 : (isNum ? 2 : 0);
-        return cellXml(rowNumber, index, value, isNum, style);
+        if (DATE_COLUMNS.has(col)) return cellXml(rowNumber, index, rawValue, 'date', STYLE.DATE);
+        if (col === 'Qty (No)') return cellXml(rowNumber, index, rawValue, 'number', STYLE.INTEGER);
+        if (NUMERIC_COLUMNS.has(col)) return cellXml(rowNumber, index, rawValue, 'number', STYLE.MONEY);
+        return cellXml(rowNumber, index, rawValue, 'text', STYLE.TEXT);
       });
       rows.push(`<row r="${rowNumber}">${cells.join('')}</row>`);
     });
@@ -117,14 +106,14 @@
 
   function makeErrorsSheetXml(errors) {
     const rows = [];
-    rows.push(`<row r="1">${ERROR_COLUMNS.map((column, index) => cellXml(1, index, column, false, 1)).join('')}</row>`);
+    rows.push(`<row r="1">${ERROR_COLUMNS.map((column, index) => cellXml(1, index, column, 'text', STYLE.HEADER)).join('')}</row>`);
     if (!errors.length) {
-      rows.push(`<row r="2">${cellXml(2, 0, 'Completed without extraction errors', false, 0)}</row>`);
+      rows.push(`<row r="2">${cellXml(2, 0, 'Completed without extraction errors')}</row>`);
     } else {
       errors.forEach((error, index) => {
         const rowNumber = index + 2;
         const values = [error.at || new Date().toISOString(), error.orderNo || '', error.packageId || '', error.attempts || '', error.message || ''];
-        rows.push(`<row r="${rowNumber}">${values.map((value, column) => cellXml(rowNumber, column, value, column === 3, column === 3 ? 3 : 0)).join('')}</row>`);
+        rows.push(`<row r="${rowNumber}">${values.map((value, column) => column === 3 ? cellXml(rowNumber, column, value, 'number', STYLE.INTEGER) : cellXml(rowNumber, column, value)).join('')}</row>`);
       });
     }
     const lastRow = Math.max(errors.length + 1, 2);
@@ -150,12 +139,12 @@
   function makeStylesXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <numFmts count="1"><numFmt numFmtId="164" formatCode="0.00"/></numFmts>
+  <numFmts count="2"><numFmt numFmtId="164" formatCode="0.00"/><numFmt numFmtId="165" formatCode="yyyy-mm-dd"/></numFmts>
   <fonts count="2"><font><sz val="11"/><name val="Calibri"/><family val="2"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/><family val="2"/></font></fonts>
   <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF00B050"/><bgColor indexed="64"/></patternFill></fill></fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyNumberFormat="1" xfId="0"/><xf numFmtId="1" fontId="0" fillId="0" borderId="0" applyNumberFormat="1" xfId="0"/></cellXfs>
+  <cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyNumberFormat="1" xfId="0"/><xf numFmtId="1" fontId="0" fillId="0" borderId="0" applyNumberFormat="1" xfId="0"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" applyNumberFormat="1" xfId="0"/></cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
   }
@@ -217,9 +206,6 @@
   }
 
   function buildWorkbook(records, errors, columns = MAIN_COLUMNS) {
-    const colCount = columns.length;
-    const lastColLetter = colLetter(colCount - 1);
-    const sheet1Ref = `A1:${lastColLetter}${Math.max(records.length + 1, 1)}`;
     const files = [
       { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>` },
       { name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>` },
@@ -227,7 +213,7 @@
       { name: 'docProps/app.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Temu Order Exporter</Application></Properties>` },
       { name: 'xl/workbook.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Orders" sheetId="1" r:id="rId1"/><sheet name="Extraction Status" sheetId="2" r:id="rId2"/></sheets></workbook>` },
       { name: 'xl/_rels/workbook.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
-      { name: 'xl/worksheets/sheet1.xml', content: makeSheetXml(records, errors, columns) },
+      { name: 'xl/worksheets/sheet1.xml', content: makeSheetXml(records, columns) },
       { name: 'xl/worksheets/sheet2.xml', content: makeErrorsSheetXml(errors) },
       { name: 'xl/worksheets/_rels/sheet1.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>` },
       { name: 'xl/tables/table1.xml', content: makeTableXml(records, columns) },
@@ -237,7 +223,10 @@
   }
 
   function downloadWorkbook(records, errors, columns) {
-    const activeCols = Array.isArray(columns) && columns.length ? columns : MAIN_COLUMNS;
+    // Only known columns, in canonical order — protects against stale storage values.
+    const requested = Array.isArray(columns) && columns.length ? columns : MAIN_COLUMNS;
+    const activeCols = ALL_COLUMNS.filter(col => requested.includes(col));
+    if (!activeCols.length) activeCols.push(...MAIN_COLUMNS);
     const bytes = buildWorkbook(records || [], errors || [], activeCols);
     const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
