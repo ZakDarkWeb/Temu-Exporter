@@ -1,3 +1,7 @@
+/**
+ * Temu Order Exporter - XLSX & ZIP Writer (v5.4.1)
+ * Dependency-free generator producing Excel workbooks (.xlsx) with styled tables.
+ */
 (() => {
   'use strict';
 
