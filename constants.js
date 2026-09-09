@@ -39,9 +39,16 @@
 
   const HISTORY_LIMIT = 20;
 
+  const SPEED_PROFILES = Object.freeze({
+    STEALTH:  Object.freeze({ id: 'stealth',  label: 'Stealth (Safe)', concurrency: 1, minDelay: 1400, maxDelay: 2600 }),
+    BALANCED: Object.freeze({ id: 'balanced', label: 'Balanced',       concurrency: 2, minDelay: 200,  maxDelay: 400 }),
+    TURBO:    Object.freeze({ id: 'turbo',    label: 'Turbo (Fast)',   concurrency: 4, minDelay: 0,    maxDelay: 50 })
+  });
+
   const DEFAULT_UI_PREFS = Object.freeze({
     minimized: false, motion: true, saveHistory: true, autoExport: false,
-    autoRetry: false, notifyOnComplete: false, fabRight: 18, fabBottom: 18, cardWidth: 320
+    autoRetry: false, notifyOnComplete: false, fabRight: 18, fabBottom: 18, cardWidth: 320,
+    speedProfile: 'balanced', autoPaginate: true
   });
 
   /* Message types exchanged between worker, content script and tools page. */
@@ -90,7 +97,7 @@
   root.TEMU_CONSTANTS = Object.freeze({
     SELLER_ORIGIN, BULK_PATH, DETAIL_PATH, STORAGE_KEYS,
     REQUIRED_COLUMNS, OPTIONAL_COLUMNS, ALL_COLUMNS, MAIN_COLUMNS, ERROR_COLUMNS,
-    BLANK_ALLOWED_ON_CONTINUATION, HISTORY_LIMIT, DEFAULT_UI_PREFS, MSG,
+    BLANK_ALLOWED_ON_CONTINUATION, HISTORY_LIMIT, DEFAULT_UI_PREFS, SPEED_PROFILES, MSG,
     normalize, dateOnly, moneyNumber, missingRequiredFields
   });
 })(typeof self !== 'undefined' ? self : globalThis);

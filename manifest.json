@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Temu Order Exporter",
-  "version": "5.2.1",
+  "version": "5.4.1",
   "description": "Export Temu Seller bulk-shipping orders to Excel. Adaptive background extraction, column selection, Carrier / SKU ID / Goods ID capture, retry handling and a local History & Tools workspace.",
   "minimum_chrome_version": "111",
   "permissions": [

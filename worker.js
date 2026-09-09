@@ -32,6 +32,8 @@ const WAKE_ALARM     = 'temu-order-exporter-wake';
 const SCHEDULE_ALARM = 'temu-order-exporter-schedule';
 
 let activeTabs = new Map();
+let tabPool = new Set();
+let idleTabs = [];
 let closingTabs = new Set();
 let closingTasks = new Map();
 let launchTasks = new Set();
@@ -157,6 +159,64 @@ function isDetailUrl(url) {
 
 function retryDelay(attempt) { return BASE_RETRY_DELAY * (2 ** Math.max(0, attempt - 1)); }
 function canUseAlarms() { return Boolean(chrome.alarms?.create && chrome.alarms?.clear && chrome.alarms?.onAlarm?.addListener); }
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function getActiveProfile() {
+  try {
+    const stored = await chrome.storage.local.get(UI_KEY);
+    const prefs = stored[UI_KEY] || {};
+    const id = prefs.speedProfile || 'balanced';
+    if (id === 'stealth') return C.SPEED_PROFILES.STEALTH;
+    if (id === 'turbo') return C.SPEED_PROFILES.TURBO;
+    return C.SPEED_PROFILES.BALANCED;
+  } catch (_) {
+    return C.SPEED_PROFILES.BALANCED;
+  }
+}
+
+async function acquireWorkerTab() {
+  while (idleTabs.length > 0) {
+    const tabId = idleTabs.pop();
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && !tab.discarded) {
+        tabPool.add(tabId);
+        return tabId;
+      }
+    } catch (_) {
+      tabPool.delete(tabId);
+    }
+  }
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  tabPool.add(tab.id);
+  return tab.id;
+}
+
+async function releaseWorkerTab(tabId, state) {
+  activeTabs.delete(tabId);
+  if (!tabId || tabId < 0) return;
+  const profile = await getActiveProfile();
+  const maxTabs = profile.id === 'stealth' ? 1 : Math.min(profile.concurrency, adaptiveConcurrency.current);
+  if (state?.status === 'running' && tabPool.has(tabId) && tabPool.size <= maxTabs) {
+    try {
+      await chrome.tabs.update(tabId, { url: 'about:blank' });
+      if (!idleTabs.includes(tabId)) idleTabs.push(tabId);
+      return;
+    } catch (_) {
+      // Tab may be closed or broken
+    }
+  }
+  tabPool.delete(tabId);
+  idleTabs = idleTabs.filter(id => id !== tabId);
+  await closeTabIntentionally(tabId);
+}
+
+async function drainTabPool() {
+  const tabsToClose = [...tabPool];
+  tabPool.clear();
+  idleTabs = [];
+  await Promise.all(tabsToClose.map(id => closeTabIntentionally(id)));
+}
 
 function sessionStore() {
   return chrome.storage.session || chrome.storage.local;
@@ -203,13 +263,22 @@ function sendLog(level, message) {
 // Adaptive concurrency: call after each success (responseMs = how long the tab took)
 // or after a timeout (isTimeout = true). Adjusts adaptiveConcurrency.current and
 // broadcasts a log message so the user can see speed changes in the card.
-function adjustConcurrency(responseMs, isTimeout = false) {
+async function adjustConcurrency(responseMs, isTimeout = false) {
+  const profile = await getActiveProfile();
   const ac = adaptiveConcurrency;
+  if (profile.id === 'stealth') {
+    ac.current = 1;
+    saveConcurrency();
+    return;
+  }
+  const minLimit = profile.id === 'turbo' ? 2 : 1;
+  const maxLimit = profile.id === 'turbo' ? 4 : 3;
+
   if (isTimeout) {
     ac.lastTimeout = Date.now();
     ac.cooldownUntil = Date.now() + CONCURRENCY_COOLDOWN_MS;
     const prev = ac.current;
-    ac.current = CONCURRENCY_MIN;
+    ac.current = minLimit;
     ac.responseTimes = []; // reset history
     saveConcurrency();
     if (prev !== ac.current) sendLog('warn', `Speed reduced to ${ac.current} tab (timeout detected, ${CONCURRENCY_COOLDOWN_MS / 1000}s cooldown)`);
@@ -222,17 +291,17 @@ function adjustConcurrency(responseMs, isTimeout = false) {
   const now = Date.now();
   const inCooldown = now < ac.cooldownUntil;
   const prev = ac.current;
-  if (!inCooldown && avg < 8000 && ac.current < CONCURRENCY_MAX) {
-    ac.current = Math.min(CONCURRENCY_MAX, ac.current + 1);
-  } else if (avg > 18000 && ac.current > CONCURRENCY_MIN) {
-    ac.current = Math.max(CONCURRENCY_MIN, ac.current - 1);
-  } else if (!inCooldown && avg < 12000 && ac.current < CONCURRENCY_DEFAULT) {
-    ac.current = CONCURRENCY_DEFAULT;
+  if (!inCooldown && avg < 8000 && ac.current < maxLimit) {
+    ac.current = Math.min(maxLimit, ac.current + 1);
+  } else if (avg > 18000 && ac.current > minLimit) {
+    ac.current = Math.max(minLimit, ac.current - 1);
+  } else if (!inCooldown && avg < 12000 && ac.current < 2) {
+    ac.current = 2;
   }
   saveConcurrency();
   if (prev !== ac.current) {
     const dir = ac.current > prev ? 'increased' : 'reduced';
-    sendLog('info', `Speed ${dir} to ${ac.current} tabs (avg ${(avg / 1000).toFixed(1)}s/order)`);
+    sendLog('info', `Speed ${dir} to ${ac.current} tabs (avg ${(avg / 1000).toFixed(1)}s/order) [${profile.label}]`);
   }
 }
 
@@ -316,6 +385,7 @@ async function startJob(message, sender) {
   }
   clearAllRuntimeTimers();
   activeTabs.clear();
+  await drainTabPool();
   operationEpoch += 1;
   resetConcurrency();
   const rows = Array.isArray(message.rows) ? message.rows : [];
@@ -362,6 +432,7 @@ async function pauseJob() {
   operationEpoch += 1;
   clearAllRuntimeTimers();
   activeTabs.clear();
+  await drainTabPool();
   // Closing active detail tabs makes Pause immediate. Their entries were
   // requeued above, so no extracted order is lost and no stale callback can
   // advance the queue after the pause. The browser close calls continue in
@@ -449,6 +520,7 @@ async function stopJob() {
   const stopped = await commitState(() => ({ ...defaultState(), runId: stopRunId }));
   clearAllRuntimeTimers();
   activeTabs.clear();
+  await drainTabPool();
   pumpAgain = false;
   // The persistent state is already cleared. Close known tabs in the
   // background so Stop/Clear responds immediately even if Chrome is slow.
@@ -530,8 +602,7 @@ async function handleFailure(entry, message) {
       return { ...current, inFlight: current.inFlight.filter(item => item.key !== entry.key), retryQueue };
     });
     // Now safe to remove from activeTabs — entry is out of both activeTabs and inFlight
-    activeTabs.delete(entry.tabId);
-    await closeTabIntentionally(entry.tabId);
+    await releaseWorkerTab(entry.tabId, saved);
     // Only pump if commitState actually modified state (guard didn't reject)
     if (saved.runId === entry.runId) {
       await scheduleWake(saved);
@@ -545,8 +616,7 @@ async function handleFailure(entry, message) {
     return { ...current, inFlight: current.inFlight.filter(item => item.key !== entry.key), errors: [...current.errors.filter(error => error.key !== entry.key), errorRecord] };
   });
   // Now safe to remove from activeTabs
-  activeTabs.delete(entry.tabId);
-  await closeTabIntentionally(entry.tabId);
+  await releaseWorkerTab(entry.tabId, saved);
   if (saved.runId === entry.runId) {
     await scheduleWake(saved);
     pump(saved, saved.runId);
@@ -571,8 +641,7 @@ async function handleSuccess(entry, productRecords, missing = []) {
     const records = [...current.records.filter(item => item.__key !== entry.key), ...incomingRecords.map((record, lineIndex) => ({ ...record, __key: entry.key, __index: entry.index, __lineIndex: lineIndex, __attempts: current.attempts[entry.key] || entry.attempt }))];
     return { ...current, inFlight: current.inFlight.filter(item => item.key !== entry.key), records, warnings: warning ? [...current.warnings.filter(item => item.key !== entry.key), warning] : current.warnings };
   });
-  activeTabs.delete(entry.tabId);
-  await closeTabIntentionally(entry.tabId);
+  await releaseWorkerTab(entry.tabId, saved);
   await scheduleWake(saved);
   pump(saved, saved.runId);
 }
@@ -583,10 +652,12 @@ async function restoreTakenItem(item, runId) {
   await scheduleWake(saved);
 }
 
-async function takeNextItem(runId) {
+async function takeNextItem(runId, maxConcurrency = null) {
+  const profile = await getActiveProfile();
+  const limit = maxConcurrency ?? (profile.id === 'stealth' ? 1 : Math.min(profile.concurrency, adaptiveConcurrency.current));
   let selected = null;
   const saved = await commitState(state => {
-    if (state.runId !== runId || state.status !== 'running' || state.inFlight.length >= adaptiveConcurrency.current) return state;
+    if (state.runId !== runId || state.status !== 'running' || state.inFlight.length >= limit) return state;
     const occupied = new Set(state.inFlight.map(entry => entry.key));
     const retryIndex = state.retryQueue.findIndex(item => !occupied.has(item.key) && (!item.readyAt || item.readyAt <= Date.now()));
     if (retryIndex >= 0) {
@@ -616,10 +687,10 @@ async function launchItem(item, runId) {
       const attempt = (current.attempts[item.key] || 0) + 1;
       const attemptToken = `${runId}:${item.key}:${attempt}:${Date.now()}`;
       entry = { key: item.key, index: item.index, row: item.row, attempt, attemptToken, runId, tabId: null, startedAt: Date.now(), deadlineAt: Date.now() + DETAIL_TIMEOUT };
-      const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-      entry.tabId = tab.id;
+      const tabId = await acquireWorkerTab();
+      entry.tabId = tabId;
       if (launchEpoch !== operationEpoch) {
-        await closeTabIntentionally(tab.id);
+        await releaseWorkerTab(tabId, current);
         await restoreTakenItem(item, runId);
         return;
       }
@@ -627,18 +698,27 @@ async function launchItem(item, runId) {
         if (launchEpoch !== operationEpoch || state.status !== 'running' || state.runId !== runId) return state;
         return { ...state, attempts: { ...state.attempts, [item.key]: attempt }, inFlight: [...state.inFlight.filter(candidate => candidate.key !== item.key), entry] };
       });
-      // BUG FIX: Only one epoch/status guard after commitState.
-      // A second guard here was dangerous: it could fire after the entry was already
-      // committed to inFlight, causing restoreTakenItem to silently fail (entry is in
-      // inFlight so restoreQueuedItem skips it), leaving the tab stuck for 30 seconds.
-      // The commitState lambda's own guards ensure the entry is only added when valid.
+      // Guard after commitState: if invalid, release tab
       if (queued.status !== 'running' || queued.runId !== runId || !queued.inFlight.some(candidate => candidate.attemptToken === attemptToken)) {
-        await closeTabIntentionally(tab.id);
+        await releaseWorkerTab(tabId, queued);
         await restoreTakenItem(item, runId);
         return;
       }
-      activeTabs.set(tab.id, entry);
-      await chrome.tabs.update(tab.id, { url: makeDetailUrl(queued, entry) });
+      activeTabs.set(tabId, entry);
+
+      // Stealth / human-like pacing delay
+      const profile = await getActiveProfile();
+      if (profile.minDelay > 0) {
+        const jitter = profile.minDelay + Math.random() * (profile.maxDelay - profile.minDelay);
+        await sleep(jitter);
+      }
+      if (launchEpoch !== operationEpoch) {
+        await releaseWorkerTab(tabId, queued);
+        await restoreTakenItem(item, runId);
+        return;
+      }
+
+      await chrome.tabs.update(tabId, { url: makeDetailUrl(queued, entry) });
       armEntryTimeout(entry);
       await scheduleWake(queued);
     } catch (error) {
@@ -655,13 +735,15 @@ async function pump(inputState = null, expectedRunId = null) {
   pumpRunning = true;
   try {
     await loadConcurrency();
+    const profile = await getActiveProfile();
+    const effectiveMax = profile.id === 'stealth' ? 1 : Math.min(profile.concurrency, adaptiveConcurrency.current);
     const sourceState = normalizeState(inputState || await getState());
     if (sourceState.status !== 'running' || (expectedRunId !== null && sourceState.runId !== expectedRunId)) return;
     while (true) {
       const current = await getState();
       if (current.status !== 'running' || (expectedRunId !== null && current.runId !== expectedRunId)) return;
-      if (current.inFlight.length >= adaptiveConcurrency.current) break;
-      const next = await takeNextItem(current.runId);
+      if (current.inFlight.length >= effectiveMax) break;
+      const next = await takeNextItem(current.runId, effectiveMax);
       if (!next.item) break;
       await launchItem(next.item, current.runId);
     }
@@ -670,6 +752,7 @@ async function pump(inputState = null, expectedRunId = null) {
     if (refreshed.status === 'running' && refreshed.nextIndex >= refreshed.rows.length && !refreshed.retryQueue.length && !refreshed.inFlight.length) {
       const completed = await commitState(state => state.runId === refreshed.runId && state.status === 'running' ? { ...state, status: 'complete', completedAt: new Date().toISOString() } : state);
       await scheduleWake(completed);
+      await drainTabPool();
       // Notify on completion
       try {
         const uiStored = await chrome.storage.local.get(UI_KEY);
@@ -719,10 +802,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener(async tabId => {
-  // BUG FIX: No longer deleting from closingTabs here. The closeTabIntentionally()
-  // finally block is the single authoritative place for closingTabs cleanup.
-  // Deleting here created a brief window where closingTabs lost the entry before
-  // the finally block ran, allowing onRemoved to fall through to findTrackedEntry.
+  tabPool.delete(tabId);
+  idleTabs = idleTabs.filter(id => id !== tabId);
   if (closingTabs.has(tabId)) return; // intentionally closing — ignore
   const entry = await findTrackedEntry(tabId);
   if (entry) await handleFailure(entry, 'Detail tab closed before extraction completed.');

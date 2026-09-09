@@ -68,9 +68,25 @@
     };
   }
 
+  async function getLocalStore(keys) {
+    try {
+      if (typeof chrome === 'undefined' || !chrome?.storage?.local?.get) return {};
+      return (await chrome.storage.local.get(keys)) || {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  async function setLocalStore(items) {
+    try {
+      if (typeof chrome === 'undefined' || !chrome?.storage?.local?.set) return;
+      await chrome.storage.local.set(items);
+    } catch (_) {}
+  }
+
   async function loadUiData() {
     try {
-      const stored = await chrome.storage.local.get([UI_KEY, HISTORY_KEY]);
+      const stored = await getLocalStore([UI_KEY, HISTORY_KEY]);
       uiPrefs = { ...uiPrefs, ...(stored[UI_KEY] || {}) };
       historyEntries = Array.isArray(stored[HISTORY_KEY]) ? stored[HISTORY_KEY].slice(0, HISTORY_LIMIT) : [];
     } catch (_) {
@@ -80,7 +96,7 @@
   }
 
   async function saveUiPrefs() {
-    try { await chrome.storage.local.set({ [UI_KEY]: uiPrefs }); } catch (_) { /* local preference is optional */ }
+    await setLocalStore({ [UI_KEY]: uiPrefs });
   }
 
   async function saveHistoryEntry() {
@@ -102,8 +118,7 @@
       errorsData: [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))]
     };
     historyEntries = [entry, ...historyEntries.filter(item => item.id !== entry.id)].slice(0, HISTORY_LIMIT);
-    try { await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries }); }
-    catch (error) { log(`History could not be saved (${error?.message || 'storage error'}).`, 'warn'); }
+    await setLocalStore({ [HISTORY_KEY]: historyEntries });
   }
 
   async function setMinimized(value) {
@@ -116,7 +131,9 @@
       panel.style.bottom = (uiPrefs.fabBottom ?? 18) + 'px';
       panel.style.left   = 'auto'; panel.style.top = 'auto';
     } else {
-      panel.style.right  = '18px'; panel.style.bottom = '18px';
+      panel.style.right  = (uiPrefs.cardRight  ?? 18) + 'px';
+      panel.style.bottom = (uiPrefs.cardBottom ?? 18) + 'px';
+      if (uiPrefs.cardWidth) panel.style.width = uiPrefs.cardWidth + 'px';
       panel.style.left   = 'auto'; panel.style.top    = 'auto';
     }
     updatePanel();
@@ -190,12 +207,20 @@
   }
 
   function sendMessage(message) {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, response => {
-        const error = chrome.runtime.lastError;
-        if (error) reject(new Error(error.message));
-        else resolve(response || {});
-      });
+    return new Promise(resolve => {
+      if (typeof chrome === 'undefined' || !chrome?.runtime?.id) {
+        resolve({ ok: false, error: 'Extension context reloaded. Please refresh the page.' });
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage(message, response => {
+          const error = chrome.runtime.lastError;
+          if (error) resolve({ ok: false, error: error.message });
+          else resolve(response || {});
+        });
+      } catch (err) {
+        resolve({ ok: false, error: err?.message || 'Context invalidated' });
+      }
     });
   }
 
@@ -205,7 +230,7 @@
       try {
         const response = await sendMessage(message);
         if (response?.accepted || response?.ok) return response;
-        lastError = new Error('Background worker did not accept the detail message.');
+        lastError = new Error(response?.error || 'Background worker did not accept the detail message.');
       } catch (error) {
         lastError = error;
       }
@@ -217,9 +242,14 @@
   async function getCurrentState() {
     try {
       const response = await sendMessage({ type: MSG.GET_STATE });
-      state = { ...defaultState(), ...(response.state || {}) };
+      if (response?.ok && response.state) {
+        state = { ...defaultState(), ...response.state };
+      } else {
+        const result = await getLocalStore(STATE_KEY);
+        state = { ...defaultState(), ...(result[STATE_KEY] || {}) };
+      }
     } catch (_) {
-      const result = await chrome.storage.local.get(STATE_KEY);
+      const result = await getLocalStore(STATE_KEY);
       state = { ...defaultState(), ...(result[STATE_KEY] || {}) };
     }
     updatePanel();
@@ -652,25 +682,133 @@
     });
   }
 
-  // Typed log with timestamp — supports: info | success | warn | error
+  function findNextPageButton() {
+    const candidates = [
+      ...document.querySelectorAll('button[aria-label*="next" i], [aria-label="Next page" i], [aria-label="next" i]'),
+      ...document.querySelectorAll('[data-testid*="pagination-next"], [data-testid*="next-page"]'),
+      ...document.querySelectorAll('.beast-core-pagination-next, button.beast-core-pagination-next-btn, li.beast-core-pagination-next button'),
+      ...document.querySelectorAll('.ant-pagination-next button, li.ant-pagination-next:not(.ant-pagination-disabled) button'),
+      ...document.querySelectorAll('li.is-active + li:not(.is-disabled) button, li.beast-core-pagination-item-active + li button'),
+      ...[...document.querySelectorAll('button')].filter(b => {
+        const t = normalize(b.textContent).toLowerCase();
+        const title = (b.getAttribute('title') || '').toLowerCase();
+        return (t === 'next' || t === '>' || title === 'next' || title === 'next page') && !b.disabled && !b.classList.contains('is-disabled');
+      })
+    ];
+
+    for (const btn of candidates) {
+      if (!btn) continue;
+      const isDisabled = btn.disabled ||
+        btn.getAttribute('aria-disabled') === 'true' ||
+        btn.classList.contains('is-disabled') ||
+        btn.classList.contains('disabled') ||
+        btn.closest('.is-disabled') ||
+        btn.closest('[aria-disabled="true"]');
+      if (!isDisabled && btn.offsetParent !== null) {
+        return btn;
+      }
+    }
+    return null;
+  }
+
+  async function scrapeAllBulkPages(onProgress = null) {
+    const allRows = [];
+    const seenKeys = new Set();
+    let pageNum = 1;
+    const maxPages = 50;
+
+    while (pageNum <= maxPages) {
+      const pageRows = captureBulkRows();
+      for (const row of pageRows) {
+        const key = `${row.orderNo}::${row.packageId}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          allRows.push(row);
+        }
+      }
+
+      if (onProgress) onProgress(pageNum, allRows.length);
+
+      if (!uiPrefs.autoPaginate) break;
+
+      const nextBtn = findNextPageButton();
+      if (!nextBtn) break;
+
+      const firstRowText = document.querySelector(SELECTORS.tableRow)?.textContent || '';
+      nextBtn.click();
+      log(`Auto-pagination: Navigating to page ${pageNum + 1}...`, 'info');
+
+      let pageChanged = false;
+      for (let i = 0; i < 25; i++) {
+        await sleep(200);
+        const currentFirstRow = document.querySelector(SELECTORS.tableRow)?.textContent || '';
+        if (currentFirstRow && currentFirstRow !== firstRowText) {
+          pageChanged = true;
+          break;
+        }
+      }
+
+      if (!pageChanged) {
+        await sleep(600);
+        const checkRow = document.querySelector(SELECTORS.tableRow)?.textContent || '';
+        if (checkRow === firstRowText) {
+          break;
+        }
+      }
+
+      pageNum++;
+    }
+
+    return allRows;
+  }
+
+  // Typed log with timestamp & category badges — supports: info | success | warn | error
   function log(message, type = 'info') {
     if (!logBox) return;
     if (type === 'warning') type = 'warn';
     const now = new Date();
     const ts  = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    // Smart tag detection
+    let tag = 'INFO';
+    const mLower = String(message || '').toLowerCase();
+    if (mLower.includes('scrap') || mLower.includes('page') || mLower.includes('captur') || mLower.includes('scan') || mLower.includes('bulk')) {
+      tag = 'SCRAPE';
+    } else if (mLower.includes('worker') || mLower.includes('tab') || mLower.includes('pool') || mLower.includes('recycled') || mLower.includes('dispatched')) {
+      tag = 'WORKER';
+    } else if (mLower.includes('excel') || mLower.includes('xlsx') || mLower.includes('workbook')) {
+      tag = 'EXCEL';
+    } else if (mLower.includes('speed') || mLower.includes('profile') || mLower.includes('setting') || mLower.includes('enabled') || mLower.includes('disabled') || mLower.includes('cleared')) {
+      tag = 'CONFIG';
+    } else if (type === 'success' || mLower.includes('finish') || mLower.includes('complete') || mLower.includes('done')) {
+      tag = 'SUCCESS';
+    } else if (type === 'warn' || mLower.includes('warning') || mLower.includes('retry')) {
+      tag = 'WARN';
+    } else if (type === 'error' || mLower.includes('error') || mLower.includes('fail')) {
+      tag = 'ERROR';
+    }
+
     const icons = { info: '›', success: '✓', warn: '⚠', error: '✗' };
     const line = document.createElement('div');
     line.className = `temu-exporter-log-entry temu-log-${type}`;
+    
     const timeEl = document.createElement('span');
     timeEl.className = 'temu-log-ts';
     timeEl.textContent = ts;
+
+    const badgeEl = document.createElement('span');
+    badgeEl.className = `temu-log-badge ${tag.toLowerCase()}`;
+    badgeEl.textContent = tag;
+
     const iconEl = document.createElement('span');
     iconEl.className = 'temu-log-icon';
     iconEl.textContent = icons[type] || '›';
+
     const msgEl = document.createElement('span');
     msgEl.className = 'temu-log-msg';
     msgEl.textContent = message;
-    line.append(timeEl, iconEl, msgEl);
+
+    line.append(timeEl, badgeEl, iconEl, msgEl);
     logBox.appendChild(line);
     while (logBox.children.length > 80) logBox.removeChild(logBox.firstChild);
     logBox.scrollTop = logBox.scrollHeight;
@@ -707,7 +845,17 @@
     const detail = stats.total ? `${stats.done} of ${stats.total} orders processed` : 'Open a Temu bulk-shipping page to begin';
     const stateMessage = stats.status === 'running' ? 'Live extraction in progress' : stats.status === 'paused' ? 'Checkpoint saved — ready to resume' : stats.status === 'complete' ? 'Extraction complete — workbook ready' : 'Ready for a new extraction';
     const recoveryVisible = state.errors.length > 0 && stats.status !== 'running' && !stats.active;
-    if (progressBox) progressBox.textContent = `${stats.status} — ${stats.done}/${stats.total || 0} orders — ${stats.rows} product rows — ${stats.active} active — ${stats.failed} errors — ${(state.warnings || []).length} warnings — ${stats.retried} retried`;
+    if (progressBox) {
+      if (stats.status === 'Running') {
+        progressBox.textContent = `Extracting ${stats.done}/${stats.total || 0} · ${stats.active} tab${stats.active === 1 ? '' : 's'}`;
+      } else if (stats.status === 'Paused') {
+        progressBox.textContent = `Paused · ${stats.done}/${stats.total || 0} done`;
+      } else if (stats.status === 'Complete') {
+        progressBox.textContent = `Done · ${stats.done} orders (${stats.rows} rows)`;
+      } else {
+        progressBox.textContent = stats.total ? `${stats.total} orders detected` : 'Ready to start';
+      }
+    }
     if (statusChip) {
       statusChip.textContent = stats.status;
       statusChip.dataset.status = stats.status.toLowerCase();
@@ -748,6 +896,38 @@
       retryButton.disabled = !recoveryVisible;
       retryButton.innerHTML = `<span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('retry')}</span><span>Retry ${state.errors.length || ''} failed${state.errors.length === 1 ? '' : 's'}</span>`;
     }
+    // Update Minimized FAB circular progress ring & badge
+    const fabRingFg = panel.querySelector('.te-fab-ring-fg');
+    if (fabRingFg) {
+      const C = 157.08;
+      const pct = stats.percent || 0;
+      const offset = C - (Math.min(100, Math.max(0, pct)) / 100) * C;
+      fabRingFg.style.strokeDashoffset = String(offset);
+      const st = stats.status.toLowerCase();
+      if (st === 'complete') {
+        fabRingFg.style.stroke = '#34d399';
+      } else if (st === 'error') {
+        fabRingFg.style.stroke = '#f87171';
+      } else {
+        fabRingFg.style.stroke = '#00e5ff';
+      }
+    }
+    const fabBadge = panel.querySelector('[data-role="fab-badge"]');
+    if (fabBadge) {
+      const st = stats.status.toLowerCase();
+      if (st === 'running') {
+        fabBadge.textContent = `${stats.percent}%`;
+        fabBadge.className = 'te-fab-badge is-visible';
+      } else if (st === 'complete') {
+        fabBadge.textContent = '✓';
+        fabBadge.className = 'te-fab-badge is-visible is-complete';
+      } else if (state.errors.length) {
+        fabBadge.textContent = `!${state.errors.length}`;
+        fabBadge.className = 'te-fab-badge is-visible is-error';
+      } else {
+        fabBadge.className = 'te-fab-badge';
+      }
+    }
     panel.dataset.status = stats.status.toLowerCase();
     const minimizeButton = panel.querySelector('[data-action="minimize"]');
     if (minimizeButton) {
@@ -767,7 +947,14 @@
     panel.id = PANEL_ID;
     panel.setAttribute('aria-label', 'Temu Order Exporter');
     panel.innerHTML = `
-      <div class="temu-exporter-header">
+      <!-- Minimized FAB Circular Progress Ring & Badge -->
+      <svg class="te-fab-ring" viewBox="0 0 56 56" aria-hidden="true">
+        <circle class="te-fab-ring-bg" cx="28" cy="28" r="25" />
+        <circle class="te-fab-ring-fg" cx="28" cy="28" r="25" />
+      </svg>
+      <span class="te-fab-badge" data-role="fab-badge"></span>
+
+      <div class="temu-exporter-header" title="Drag to reposition · Double-click to reset">
         <div class="temu-exporter-brand">
           <div class="temu-exporter-logo" aria-hidden="true">
             <img class="te-header-icon te-fab-icon" src="" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">
@@ -789,6 +976,14 @@
           </div>
           <div class="temu-exporter-progress-track" aria-label="Extraction progress"><span data-role="progress-fill"></span></div>
           <div class="temu-exporter-progress-meta"><span data-role="progress"></span><span class="temu-exporter-eta" data-role="eta"></span><strong data-role="progress-percent">0%</strong></div>
+          <div class="temu-exporter-quick-pills" aria-label="Quick mode controls">
+            <button type="button" class="temu-quick-pill" data-action="quick-speed" title="Click to cycle speed mode: Balanced ➔ Turbo ➔ Safe">
+              <span data-role="quick-speed-label">⚡ Balanced</span>
+            </button>
+            <button type="button" class="temu-quick-pill" data-action="quick-paginate" title="Click to toggle multi-page auto-scraping">
+              <span data-role="quick-paginate-label">📄 All Pages: ON</span>
+            </button>
+          </div>
         </div>
 
         <!-- Automations Drawer -->
@@ -835,6 +1030,27 @@
                 <span></span>
               </label>
             </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Auto-Scrape All Pages</strong>
+                <small>Scan and accumulate orders across multiple table pages.</small>
+              </div>
+              <label class="temu-exporter-switch" title="Auto-scrape all pages">
+                <input type="checkbox" data-setting="autoPaginate" aria-label="Auto-scrape all pages">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Speed &amp; Safety Profile</strong>
+                <small>Stealth (Safe 1 tab), Balanced (2 tabs), Turbo (4 tabs).</small>
+              </div>
+              <div class="temu-speed-pill-group" data-role="speed-selector">
+                <button type="button" class="temu-speed-btn" data-speed="stealth" title="Stealth / Safe Mode (1 tab, humanized delays)">🛡️ Safe</button>
+                <button type="button" class="temu-speed-btn" data-speed="balanced" title="Balanced Mode (2 tabs, adaptive)">⚡ Balanced</button>
+                <button type="button" class="temu-speed-btn" data-speed="turbo" title="Turbo Mode (4 tabs, max speed)">🚀 Turbo</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -866,7 +1082,19 @@
           <div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div>
           <button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('retry')}</span><span>Retry failed</span></button>
         </div>
-        <div class="temu-exporter-log-wrap"><div class="temu-exporter-log-label"><span>Activity</span><span class="temu-exporter-live-dot">Live</span></div><div class="temu-exporter-log" data-role="log" aria-live="polite"></div></div>
+        <div class="temu-exporter-log-wrap">
+          <div class="temu-exporter-log-label">
+            <div class="temu-exporter-log-label-left">
+              <span>Activity</span>
+              <span class="temu-exporter-live-dot">Live</span>
+            </div>
+            <div class="temu-exporter-log-tools">
+              <button type="button" class="temu-log-tool-btn" data-action="copy-logs" title="Copy activity logs">Copy</button>
+              <button type="button" class="temu-log-tool-btn" data-action="clear-logs" title="Clear activity logs">Clear</button>
+            </div>
+          </div>
+          <div class="temu-exporter-log" data-role="log" aria-live="polite"></div>
+        </div>
         <div class="temu-exporter-footer"><span>Local-only processing</span><span data-role="version"></span></div>
       </div>
       <!-- Resize handle -->
@@ -916,7 +1144,7 @@
       // Read saved column preference from storage (matches tools.js COLS_KEY)
       let cols;
       try {
-        const stored = await chrome.storage.local.get(COLS_KEY);
+        const stored = await getLocalStore(COLS_KEY);
         const saved = stored[COLS_KEY];
         cols = Array.isArray(saved) && saved.length ? saved : undefined;
       } catch (_) { cols = undefined; }
@@ -935,82 +1163,153 @@
       drawer.inert = !isOpen; // inert removes hidden controls from tab order without aria-hidden conflicts
       btn.setAttribute('aria-expanded', String(isOpen));
     });
-    // ── Draggable FAB (minimized card can be repositioned) ─────────
-    (function initDraggableFab() {
+    // Activity Log Copy & Clear tools
+    const copyLogsBtn = panel.querySelector('[data-action="copy-logs"]');
+    if (copyLogsBtn) {
+      copyLogsBtn.addEventListener('click', async () => {
+        if (!logBox) return;
+        const entries = [...logBox.querySelectorAll('.temu-exporter-log-entry')];
+        const text = entries.map(e => e.textContent.trim()).join('\n');
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          copyLogsBtn.textContent = 'Copied!';
+          setTimeout(() => { copyLogsBtn.textContent = 'Copy'; }, 1500);
+        } catch (_) {}
+      });
+    }
+    const clearLogsBtn = panel.querySelector('[data-action="clear-logs"]');
+    if (clearLogsBtn) {
+      clearLogsBtn.addEventListener('click', () => {
+        if (logBox) {
+          logBox.innerHTML = '';
+          log('Activity log cleared.', 'info');
+        }
+      });
+    }
+
+    // ── Draggable Panel & FAB Engine ──────────────────────────────
+    (function initDraggablePanel() {
       let isDragging = false;
       let hasMoved   = false;
+      let dragMode   = 'fab'; // 'fab' or 'card'
       let startX, startY, startRight, startBottom;
       const FAB_SIZE = 56;
 
-      function beginDrag(clientX, clientY) {
-        if (!uiPrefs.minimized) return;
+      function beginDrag(clientX, clientY, mode) {
         isDragging = true;
         hasMoved   = false;
-        startX = clientX;
-        startY = clientY;
+        dragMode   = mode;
+        startX     = clientX;
+        startY     = clientY;
         const rect = panel.getBoundingClientRect();
         startRight  = window.innerWidth  - rect.right;
         startBottom = window.innerHeight - rect.bottom;
         panel.style.transition = 'none';
-        panel.style.cursor     = 'grabbing';
+        document.body.style.userSelect = 'none';
       }
 
       function moveDrag(clientX, clientY) {
         if (!isDragging) return;
         const dx = clientX - startX;
         const dy = clientY - startY;
-        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) hasMoved = true;
-        const newRight  = Math.max(4, Math.min(window.innerWidth  - FAB_SIZE - 4, startRight  - dx));
-        const newBottom = Math.max(4, Math.min(window.innerHeight - FAB_SIZE - 4, startBottom - dy));
-        panel.style.right  = newRight  + 'px';
-        panel.style.bottom = newBottom + 'px';
-        panel.style.left   = 'auto';
-        panel.style.top    = 'auto';
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) hasMoved = true;
+        
+        if (dragMode === 'fab') {
+          const newRight  = Math.max(4, Math.min(window.innerWidth  - FAB_SIZE - 4, startRight  - dx));
+          const newBottom = Math.max(4, Math.min(window.innerHeight - FAB_SIZE - 4, startBottom - dy));
+          panel.style.right  = newRight  + 'px';
+          panel.style.bottom = newBottom + 'px';
+        } else {
+          // Card mode
+          const w = panel.offsetWidth;
+          const h = panel.offsetHeight;
+          const newRight  = Math.max(4, Math.min(window.innerWidth  - w - 4, startRight  - dx));
+          const newBottom = Math.max(4, Math.min(window.innerHeight - h - 4, startBottom - dy));
+          panel.style.right  = newRight  + 'px';
+          panel.style.bottom = newBottom + 'px';
+        }
+        panel.style.left = 'auto';
+        panel.style.top  = 'auto';
       }
 
-      async function endDrag(didMove) {
+      async function endDrag() {
         if (!isDragging) return;
         isDragging = false;
         panel.style.transition = '';
-        panel.style.cursor     = '';
-        if (hasMoved) {
-          const rect = panel.getBoundingClientRect();
-          uiPrefs.fabRight  = Math.round(window.innerWidth  - rect.right);
-          uiPrefs.fabBottom = Math.round(window.innerHeight - rect.bottom);
-          await saveUiPrefs();
+        document.body.style.userSelect = '';
+        if (dragMode === 'fab') {
+          if (hasMoved) {
+            const rect = panel.getBoundingClientRect();
+            uiPrefs.fabRight  = Math.round(window.innerWidth  - rect.right);
+            uiPrefs.fabBottom = Math.round(window.innerHeight - rect.bottom);
+            await saveUiPrefs();
+          } else {
+            await setMinimized(false);
+          }
         } else {
-          // Pure tap/click — expand
-          await setMinimized(false);
+          // Card mode
+          if (hasMoved) {
+            const rect = panel.getBoundingClientRect();
+            uiPrefs.cardRight  = Math.round(window.innerWidth  - rect.right);
+            uiPrefs.cardBottom = Math.round(window.innerHeight - rect.bottom);
+            await saveUiPrefs();
+          }
         }
       }
 
-      // Mouse
+      // Minimized FAB Dragging (entire panel)
       panel.addEventListener('mousedown', e => {
         if (!uiPrefs.minimized) return;
         e.preventDefault();
-        beginDrag(e.clientX, e.clientY);
-        const onMove = ev => moveDrag(ev.clientX, ev.clientY);
-        const onUp   = async () => {
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-          await endDrag();
-        };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup',   onUp);
+        beginDrag(e.clientX, e.clientY, 'fab');
       });
 
-      // Touch
+      // Expanded Card Header Dragging (only header, excluding toolbar buttons)
+      const header = panel.querySelector('.temu-exporter-header');
+      if (header) {
+        header.addEventListener('mousedown', e => {
+          if (uiPrefs.minimized) return;
+          if (e.target.closest('button') || e.target.closest('input')) return;
+          e.preventDefault();
+          beginDrag(e.clientX, e.clientY, 'card');
+        });
+
+        // Double click header to reset card to default bottom-right
+        header.addEventListener('dblclick', async e => {
+          if (uiPrefs.minimized || e.target.closest('button')) return;
+          uiPrefs.cardRight  = 18;
+          uiPrefs.cardBottom = 18;
+          panel.style.right  = '18px';
+          panel.style.bottom = '18px';
+          await saveUiPrefs();
+          log('Card position reset to default.', 'info');
+        });
+      }
+
+      // Document move and up listeners
+      document.addEventListener('mousemove', e => {
+        if (isDragging) moveDrag(e.clientX, e.clientY);
+      });
+      document.addEventListener('mouseup', endDrag);
+
+      // Touch events for FAB & Header
       panel.addEventListener('touchstart', e => {
-        if (!uiPrefs.minimized) return;
         const t = e.touches[0];
-        beginDrag(t.clientX, t.clientY);
+        if (uiPrefs.minimized) {
+          beginDrag(t.clientX, t.clientY, 'fab');
+        } else if (e.target.closest('.temu-exporter-header') && !e.target.closest('button')) {
+          beginDrag(t.clientX, t.clientY, 'card');
+        }
       }, { passive: true });
+
       panel.addEventListener('touchmove', e => {
         if (!isDragging) return;
         e.preventDefault();
         const t = e.touches[0];
         moveDrag(t.clientX, t.clientY);
       }, { passive: false });
+
       panel.addEventListener('touchend', endDrag);
     })();
     // ── Resize handle (drag left edge to resize 320–420px) ─────────
@@ -1054,10 +1353,101 @@
       const key = event.target.dataset.setting;
       uiPrefs[key] = event.target.checked;
       if (key === 'motion') panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
+      if (key === 'autoPaginate') syncQuickPills();
       await saveUiPrefs();
-      const labels = { motion: 'Motion effects', saveHistory: 'Sheet history', autoExport: 'Auto-export', autoRetry: 'Auto-retry' };
+      const labels = { motion: 'Motion effects', saveHistory: 'Sheet history', autoExport: 'Auto-export', autoRetry: 'Auto-retry', autoPaginate: 'Auto-scrape all pages' };
       log(`${labels[key] || key} ${event.target.checked ? 'enabled' : 'disabled'}.`, 'info');
     }));
+
+    // Speed profile buttons in drawer
+    const currentSpeed = uiPrefs.speedProfile || 'balanced';
+    panel.querySelectorAll('.temu-speed-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.speed === currentSpeed);
+      btn.addEventListener('click', async () => {
+        panel.querySelectorAll('.temu-speed-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        uiPrefs.speedProfile = btn.dataset.speed;
+        syncQuickPills();
+        await saveUiPrefs();
+        try { await sendMessage({ type: MSG.UI_PREFS_UPDATE, prefs: uiPrefs }); } catch (_) {}
+        const speedLabels = { stealth: '🛡️ Stealth (Safe)', balanced: '⚡ Balanced', turbo: '🚀 Turbo' };
+        log(`Speed profile set to ${speedLabels[btn.dataset.speed] || btn.dataset.speed}.`, 'info');
+      });
+    });
+
+    // ── Quick Pills Sync & Click Listeners ───────────────────────
+    function syncQuickPills() {
+      const speedLabel = panel.querySelector('[data-role="quick-speed-label"]');
+      const paginateLabel = panel.querySelector('[data-role="quick-paginate-label"]');
+      const paginateBtn = panel.querySelector('[data-action="quick-paginate"]');
+      const speedPill = panel.querySelector('[data-action="quick-speed"]');
+
+      const speedMap = {
+        stealth:  '🛡️ Safe Mode',
+        balanced: '⚡ Balanced',
+        turbo:    '🚀 Turbo Mode'
+      };
+      if (speedLabel) speedLabel.textContent = speedMap[uiPrefs.speedProfile] || '⚡ Balanced';
+      if (speedPill) speedPill.dataset.speed = uiPrefs.speedProfile || 'balanced';
+
+      if (paginateLabel) paginateLabel.textContent = uiPrefs.autoPaginate ? '📄 All Pages: ON' : '📄 1 Page: OFF';
+      if (paginateBtn) paginateBtn.classList.toggle('is-off', !uiPrefs.autoPaginate);
+    }
+
+    const quickSpeedBtn = panel.querySelector('[data-action="quick-speed"]');
+    if (quickSpeedBtn) {
+      quickSpeedBtn.addEventListener('click', async () => {
+        const order = ['stealth', 'balanced', 'turbo'];
+        const curIdx = order.indexOf(uiPrefs.speedProfile || 'balanced');
+        const nextSpeed = order[(curIdx + 1) % order.length];
+        uiPrefs.speedProfile = nextSpeed;
+        panel.querySelectorAll('.temu-speed-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.speed === nextSpeed);
+        });
+        syncQuickPills();
+        await saveUiPrefs();
+        try { await sendMessage({ type: MSG.UI_PREFS_UPDATE, prefs: uiPrefs }); } catch (_) {}
+        const speedLabels = {
+          stealth: '🛡️ Stealth (Safe — 1 tab, humanized delays)',
+          balanced: '⚡ Balanced (2 tabs, adaptive speed)',
+          turbo: '🚀 Turbo (4 tabs, max speed)'
+        };
+        log(`Speed mode: ${speedLabels[nextSpeed]}.`, 'info');
+      });
+    }
+
+    const quickPaginateBtn = panel.querySelector('[data-action="quick-paginate"]');
+    if (quickPaginateBtn) {
+      quickPaginateBtn.addEventListener('click', async () => {
+        uiPrefs.autoPaginate = !uiPrefs.autoPaginate;
+        const chk = panel.querySelector('[data-setting="autoPaginate"]');
+        if (chk) chk.checked = uiPrefs.autoPaginate;
+        syncQuickPills();
+        await saveUiPrefs();
+        log(uiPrefs.autoPaginate ? 'Auto-pagination enabled (will scan and scrape all pages).' : 'Auto-pagination disabled (will scrape current page only).', 'info');
+      });
+    }
+
+    syncQuickPills();
+
+    // ── Live Page Order Detection ───────────────────────────────
+    function detectPageRows() {
+      if (state.status === 'idle' || !state.status) {
+        try {
+          const rows = captureBulkRows();
+          if (rows.length > 0 && (!state.rows || !state.rows.length)) {
+            if (statusDetail && (statusDetail.textContent.includes('Open a Temu') || statusDetail.textContent.includes('detected'))) {
+              statusDetail.textContent = `${rows.length} order package(s) detected on page`;
+            }
+            if (progressBox && (progressBox.textContent === 'Ready to start' || progressBox.textContent.includes('orders'))) {
+              progressBox.textContent = `${rows.length} orders ready to extract`;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    setTimeout(detectPageRows, 1200);
+    setTimeout(detectPageRows, 3000);
     // Sync initial toggle states
     panel.querySelectorAll('[data-setting]').forEach(input => {
       input.checked = Boolean(uiPrefs[input.dataset.setting]);
@@ -1065,10 +1455,13 @@
     panel.classList.toggle('is-minimized', uiPrefs.minimized);
     // Apply saved card width
     if (uiPrefs.cardWidth) panel.style.width = uiPrefs.cardWidth + 'px';
-    // Apply saved FAB position on minimized init
+    // Apply saved FAB or expanded card position on init
     if (uiPrefs.minimized) {
       panel.style.right  = (uiPrefs.fabRight  ?? 18) + 'px';
       panel.style.bottom = (uiPrefs.fabBottom ?? 18) + 'px';
+    } else {
+      if (uiPrefs.cardRight !== undefined) panel.style.right = uiPrefs.cardRight + 'px';
+      if (uiPrefs.cardBottom !== undefined) panel.style.bottom = uiPrefs.cardBottom + 'px';
     }
     panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
     chrome.runtime.onMessage.addListener(message => {
@@ -1092,7 +1485,7 @@
             setTimeout(async () => {
               let cols;
               try {
-                const stored = await chrome.storage.local.get(COLS_KEY);
+                const stored = await getLocalStore(COLS_KEY);
                 const saved = stored[COLS_KEY];
                 cols = Array.isArray(saved) && saved.length ? saved : undefined;
               } catch (_) { cols = undefined; }
@@ -1141,7 +1534,16 @@
     shownWarningKeys.clear();
     bootstrapStoreCache = undefined;
     if (logBox) logBox.textContent = '';
-    const rows = captureBulkRows();
+    let rows = [];
+    if (uiPrefs.autoPaginate) {
+      log('Scanning orders across pages (Auto-Pagination active)...');
+      rows = await scrapeAllBulkPages((page, total) => {
+        log(`Page ${page}: ${total} total orders accumulated so far.`, 'info');
+        if (statusTitle) statusTitle.textContent = `Scanning Page ${page}... (${total} orders)`;
+      });
+    } else {
+      rows = captureBulkRows();
+    }
     if (!rows.length) {
       const noData = /\bno data\b/i.test(textOf(document.body));
       log(noData ? 'Bulk page has no loaded packages. Open Manage Orders, select orders, then choose Buy shipping in bulk.' : 'No valid rendered order rows found. Wait for the table and reload the page.', 'error');
@@ -1151,7 +1553,7 @@
     if (response?.ok === false) throw new Error(response.error || 'Could not start extraction.');
     state = { ...defaultState(), ...(response.state || {}) };
     updatePanel();
-    log(`Started ${rows.length} unique orders in background detail tabs (adaptive speed).`);
+    log(`Started ${rows.length} unique orders in background detail tabs [${(uiPrefs.speedProfile || 'balanced').toUpperCase()} speed].`);
   }
 
   async function pauseJob() {

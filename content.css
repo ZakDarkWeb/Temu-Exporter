@@ -55,28 +55,25 @@
   contain: layout paint;
   color: var(--te-text);
 
-  /* ── Multi-color rotating border — Google-style ────────────── */
-  /* Solid colors = visible on white page AND dark page       */
+  /* ── Multi-color rotating border — Frosted Cyber Glassmorphism ─────────── */
   border: 4px solid transparent;
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
   background:
-    linear-gradient(160deg, #060f1e 0%, #04101e 55%, #060e1c 100%) padding-box,
+    linear-gradient(160deg, rgba(6, 15, 30, 0.94) 0%, rgba(4, 16, 30, 0.96) 55%, rgba(6, 14, 28, 0.97) 100%) padding-box,
     conic-gradient(
       from var(--te-rotate),
-      #EA4335 0deg,
-      #EA4335 15deg,
-      #FBBC05 90deg,
-      #FBBC05 105deg,
-      #34A853 180deg,
-      #34A853 195deg,
-      #4285F4 270deg,
-      #4285F4 285deg,
-      #EA4335 360deg
+      #00e5ff 0deg,
+      #38bdf8 60deg,
+      #34d399 120deg,
+      #a855f7 200deg,
+      #3b82f6 270deg,
+      #00e5ff 360deg
     ) border-box;
-  /* Soft multi-color glow */
   box-shadow:
-    0 22px 60px rgba(0,0,0,.62),
-    0 0 18px rgba(234,67,53,.22),
-    0 0 18px rgba(66,133,244,.22);
+    0 22px 60px rgba(0,0,0,.68),
+    0 0 20px rgba(0,229,255,.22),
+    0 0 10px rgba(56,189,248,.18);
 
   border-radius: var(--te-radius);
   font: 13px/1.45 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -154,7 +151,7 @@
 #temu-order-exporter-panel ::-webkit-scrollbar-thumb:hover { background:var(--te-cyan); }
 #temu-order-exporter-panel ::selection { color:var(--te-text); background:var(--te-cyan-soft); }
 
-/* ── Header ─────────────────────────────────────────────────── */
+/* ── Header (Draggable) ──────────────────────────────────────── */
 .temu-exporter-header {
   position: relative; z-index: 1;
   display: flex; min-height: 60px;
@@ -162,6 +159,11 @@
   gap: 10px; padding: 10px 13px;
   background: linear-gradient(145deg, rgba(8,24,42,.98), rgba(4,16,30,.98));
   border-bottom: 1px solid rgba(120,190,215,.17);
+  cursor: grab;
+  user-select: none;
+}
+.temu-exporter-header:active {
+  cursor: grabbing;
 }
 .temu-exporter-header::after {
   content: "";
@@ -203,7 +205,7 @@
 .temu-exporter-logo svg { position: relative; z-index: 1; }
 
 /* ── Toolbar ────────────────────────────────────────────────── */
-.temu-exporter-toolbar { display:flex; align-items:center; gap:5px; }
+.temu-exporter-toolbar { display:flex; align-items:center; gap:5px; cursor:default; }
 .temu-exporter-toolbar button {
   display:inline-flex; min-width:32px; height:30px;
   align-items:center; justify-content:center; gap:4px;
@@ -364,10 +366,60 @@
 }
 .temu-exporter-eta.visible { opacity: 1; }
 
+/* ── Quick Mode Pills ───────────────────────────────────────── */
+.temu-exporter-quick-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(120, 190, 215, 0.12);
+}
+.temu-quick-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  background: rgba(8, 24, 42, 0.85);
+  color: #c9e8f5;
+  font-family: inherit;
+  font-size: 8.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color var(--te-fast), background var(--te-fast), border-color var(--te-fast), transform var(--te-fast), box-shadow var(--te-fast);
+  white-space: nowrap;
+  user-select: none;
+}
+.temu-quick-pill:hover {
+  background: rgba(0, 229, 255, 0.16);
+  border-color: rgba(0, 229, 255, 0.6);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 10px rgba(0, 229, 255, 0.2);
+}
+.temu-quick-pill:active {
+  transform: translateY(0);
+}
+.temu-quick-pill[data-speed="turbo"] {
+  border-color: rgba(66, 133, 244, 0.5);
+  color: #93c5fd;
+}
+.temu-quick-pill[data-speed="stealth"] {
+  border-color: rgba(52, 211, 153, 0.5);
+  color: #86efac;
+}
+.temu-quick-pill.is-off {
+  color: #728d99;
+  border-color: rgba(120, 190, 215, 0.15);
+  background: rgba(6, 18, 30, 0.6);
+}
+
 /* ── Divider ────────────────────────────────────────────────── */
 .temu-exporter-divider {
   display:flex; align-items:center; gap:7px;
-  margin:12px 0 6px; color:#86a6b2;
+  margin:9px 0 5px; color:#86a6b2;
   font-size:7.5px; font-weight:900; letter-spacing:.18em; text-transform:uppercase;
 }
 .temu-exporter-divider::before,
@@ -377,16 +429,16 @@
 .temu-exporter-pipeline { display:flex; align-items:stretch; gap:4px; }
 .temu-exporter-pipeline-stage {
   display:flex; min-width:0; flex:1;
-  flex-direction:column; align-items:center; gap:5px;
-  padding:8px 3px 7px;
-  color:#7f9faa;
-  background:rgba(8,24,42,.7);
-  border:1px solid rgba(120,190,215,.16);
+  flex-direction:column; align-items:center; gap:4px;
+  padding:7px 4px 6px;
+  color:#9ec2ce;
+  background:rgba(8,24,42,.78);
+  border:1px solid rgba(120,190,215,.18);
   border-radius:9px; text-align:center;
   transition:color var(--te-fast), background var(--te-fast), border-color var(--te-fast), box-shadow var(--te-fast);
 }
-.temu-exporter-pipeline-stage strong { display:block; overflow:hidden; font-size:8.5px; font-weight:800; letter-spacing:-.01em; line-height:1.15; text-overflow:ellipsis; white-space:nowrap; }
-.temu-exporter-pipeline-stage small  { display:block; overflow:hidden; color:#9ab8c3; font-size:7.5px; font-weight:500; line-height:1.15; text-overflow:ellipsis; white-space:nowrap; }
+.temu-exporter-pipeline-stage strong { display:block; overflow:hidden; color:#e2f5fa; font-size:8.5px; font-weight:800; letter-spacing:-.01em; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.temu-exporter-pipeline-stage small  { display:block; overflow:hidden; color:#8ab6c5; font-size:7.5px; font-weight:600; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
 
 /* Pipeline step icon */
 .temu-exporter-pipeline-number {
@@ -406,7 +458,7 @@
 .temu-exporter-pipeline-stage[data-stage="complete"] + .temu-exporter-pipeline-line { background:rgba(52,211,153,.48); }
 .temu-exporter-pipeline-stage[data-stage="paused"] { color:var(--te-amber); background:var(--te-amber-soft); border-color:rgba(251,191,36,.38); }
 
-/* ── Metrics — 2×2 Grid (all 4 always visible, no clipping) ── */
+/* ── Metrics — 2×2 Grid ─────────────────────────────────────── */
 .temu-exporter-metrics {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -454,11 +506,11 @@
 .temu-metric-bump { animation:te-bump .3s cubic-bezier(.2,.9,.3,1) both; }
 
 /* ── Action Buttons ─────────────────────────────────────────── */
-.temu-exporter-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+.temu-exporter-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; }
 .temu-exporter-actions button {
   position:relative; display:inline-flex; min-width:0;
-  min-height:38px; align-items:center; justify-content:center;
-  gap:6px; overflow:hidden; padding:0 10px;
+  min-height:33px; align-items:center; justify-content:center;
+  gap:6px; overflow:hidden; padding:0 8px;
   color:var(--te-text-2);
   background:var(--te-surface-2);
   border:1px solid rgba(120,190,215,.26);
@@ -468,7 +520,7 @@
 }
 .temu-exporter-actions button > * { position:relative; z-index:1; }
 .temu-exporter-actions button.primary,
-.temu-exporter-actions button.download { grid-column:1/-1; min-height:41px; color:#03131c; border-color:transparent; font-size:11.5px; font-weight:900; letter-spacing:-.005em; }
+.temu-exporter-actions button.download { grid-column:1/-1; min-height:37px; color:#03131c; border-color:transparent; font-size:11.5px; font-weight:900; letter-spacing:-.005em; }
 .temu-exporter-actions button.primary  { background:linear-gradient(135deg,#00b8d4,#67e8f9); box-shadow:0 8px 22px rgba(0,229,255,.22); }
 .temu-exporter-actions button.download { color:#031e17; background:linear-gradient(135deg,#22c5b0,#6eebbe); box-shadow:0 8px 22px rgba(52,211,153,.18); }
 .temu-exporter-actions button.secondary:hover { color:var(--te-cyan-2); background:var(--te-cyan-soft); border-color:rgba(0,229,255,.5); box-shadow:0 7px 16px rgba(0,229,255,.1); }
@@ -476,6 +528,16 @@
 .temu-exporter-actions button:not(:disabled):hover { transform:translateY(-1px); filter:brightness(1.05); }
 .temu-exporter-actions button:not(:disabled):active { transform:translateY(0); filter:brightness(.97); }
 .temu-exporter-actions button:disabled { cursor:not-allowed; opacity:.35; pointer-events:none; }
+
+.te-drag-pill {
+  display: inline-block;
+  font-size: 8px;
+  color: var(--te-muted);
+  opacity: 0.6;
+  margin-left: 4px;
+  letter-spacing: -0.05em;
+  vertical-align: middle;
+}
 
 /* Shimmer sweep on hover */
 .temu-exporter-actions button::after,
@@ -520,7 +582,7 @@
   transition:max-height var(--te-norm), opacity var(--te-norm), transform var(--te-norm), margin-top var(--te-norm);
 }
 .temu-exporter-automations.is-open {
-  max-height:240px; opacity:1; transform:translateY(0); margin-top:8px;
+  max-height: 520px; opacity: 1; transform: translateY(0); margin-top: 8px;
 }
 .temu-exporter-auto-panel {
   padding:10px;
@@ -544,6 +606,40 @@
 .temu-exporter-auto-row:first-of-type { border-top:0; }
 .temu-exporter-auto-copy strong { display:block; color:var(--te-text-2); font-size:10px; font-weight:700; }
 .temu-exporter-auto-copy small  { display:block; margin-top:2px; color:var(--te-muted); font-size:8px; line-height:1.35; }
+
+/* Speed Pill Group */
+.temu-speed-pill-group {
+  display: inline-flex;
+  background: var(--te-surface-3);
+  border: 1px solid var(--te-border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.temu-speed-btn {
+  background: transparent;
+  border: none;
+  color: var(--te-muted);
+  font: inherit;
+  font-size: 8.5px;
+  font-weight: 700;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--te-fast);
+  white-space: nowrap;
+}
+.temu-speed-btn:hover {
+  color: var(--te-text);
+  background: rgba(255,255,255,.06);
+}
+.temu-speed-btn.active {
+  color: #03131c;
+  background: linear-gradient(135deg, #00b8d4, #67e8f9);
+  font-weight: 900;
+  box-shadow: 0 2px 8px rgba(0,229,255,.3);
+}
 
 /* Toggle switch for automations */
 .temu-exporter-switch { position:relative; display:inline-block; width:34px; height:19px; flex:0 0 34px; }
@@ -571,6 +667,28 @@
   display:flex; align-items:center; justify-content:space-between;
   color:#86a6b2; font-size:7.5px; font-weight:900; letter-spacing:.17em; text-transform:uppercase;
 }
+.temu-exporter-log-label-left {
+  display: flex; align-items: center; gap: 6px;
+}
+.temu-exporter-log-tools {
+  display: flex; align-items: center; gap: 4px;
+}
+.temu-log-tool-btn {
+  background: rgba(12, 31, 52, 0.7);
+  border: 1px solid rgba(120, 190, 215, 0.22);
+  color: var(--te-muted);
+  font-size: 7.5px; font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all var(--te-fast);
+  line-height: 1;
+}
+.temu-log-tool-btn:hover {
+  color: var(--te-cyan-2);
+  background: var(--te-cyan-soft);
+  border-color: var(--te-border-s);
+}
 .temu-exporter-live-dot {
   display:inline-flex; align-items:center; gap:4px;
   color:#6ce8ad; font-size:7.5px; font-weight:900; letter-spacing:.1em;
@@ -582,11 +700,28 @@
   animation:te-dot-pulse 2s ease-in-out infinite;
 }
 .temu-exporter-log {
-  max-height:88px; margin-top:5px; overflow-y:auto;
+  max-height:92px; margin-top:5px; overflow-y:auto;
   background:rgba(3,12,22,.84);
   border:1px solid rgba(120,190,215,.16);
   border-radius:9px; scrollbar-gutter:stable;
 }
+/* Log badge tags */
+.temu-log-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 7px; font-weight: 900;
+  padding: 1px 4px; margin-right: 5px;
+  border-radius: 4px; flex-shrink: 0;
+  letter-spacing: 0.05em; line-height: 1.1;
+}
+.temu-log-badge.scrape  { background: rgba(0, 229, 255, 0.16); color: #67e8f9; border: 1px solid rgba(0, 229, 255, 0.35); }
+.temu-log-badge.worker  { background: rgba(168, 85, 247, 0.16); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35); }
+.temu-log-badge.excel   { background: rgba(52, 211, 153, 0.16); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.35); }
+.temu-log-badge.config  { background: rgba(251, 191, 36, 0.16); color: #fde68a; border: 1px solid rgba(251, 191, 36, 0.35); }
+.temu-log-badge.success { background: rgba(52, 211, 153, 0.22); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.5); }
+.temu-log-badge.warn    { background: rgba(251, 191, 36, 0.22); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.5); }
+.temu-log-badge.error   { background: rgba(248, 113, 113, 0.22); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.5); }
+.temu-log-badge.info    { background: rgba(120, 190, 215, 0.12); color: #8ab4c2; border: 1px solid rgba(120, 190, 215, 0.22); }
+
 /* Typed log entry spans: timestamp · icon · message */
 .temu-exporter-log .temu-log-ts   { color: var(--te-dim); font-size:7.5px; margin-right:4px; flex-shrink:0; }
 .temu-exporter-log .temu-log-icon { margin-right:4px; flex-shrink:0; font-size:9px; }
@@ -686,21 +821,22 @@
   user-select: none;
   touch-action: none;
   padding: 0 !important;
-  /* Multi-color Google-style spinning ring */
+  /* Luminous Cyber-Cyan spinning ring */
   background:
     #07182e padding-box,
     conic-gradient(
       from var(--te-rotate),
-      #EA4335 0deg,
-      #FBBC05 90deg,
-      #34A853 180deg,
-      #4285F4 270deg,
-      #EA4335 360deg
+      #00e5ff 0deg,
+      #38bdf8 60deg,
+      #34d399 120deg,
+      #a855f7 200deg,
+      #3b82f6 270deg,
+      #00e5ff 360deg
     ) border-box;
   border: 4px solid transparent !important;
   box-shadow:
-    0 0 16px rgba(234,67,53,.35),
-    0 0 16px rgba(66,133,244,.35),
+    0 0 16px rgba(0,229,255,.35),
+    0 0 16px rgba(56,189,248,.35),
     0 4px 20px rgba(0,0,0,.55);
   animation: te-panel-in .25s cubic-bezier(.2,.9,.3,1) both, te-border-rotate 3s linear infinite;
   transition: box-shadow var(--te-norm), transform var(--te-norm);
@@ -708,14 +844,76 @@
 #temu-order-exporter-panel.is-minimized:hover {
   transform: scale(1.1);
   box-shadow:
-    0 0 26px rgba(234,67,53,.6),
-    0 0 26px rgba(66,133,244,.6),
+    0 0 26px rgba(0,229,255,.6),
+    0 0 26px rgba(56,189,248,.6),
     0 6px 24px rgba(0,0,0,.6);
 }
 
-/* Hide EVERYTHING inside when minimized — then selectively show header */
+/* ── Minimized FAB Progress Ring & Status Badge ───────────────── */
+.te-fab-ring {
+  position: absolute;
+  inset: 0;
+  width: 56px;
+  height: 56px;
+  pointer-events: none;
+  transform: rotate(-90deg);
+  z-index: 10;
+  display: none;
+}
+.te-fab-ring-bg {
+  fill: none;
+  stroke: rgba(0, 229, 255, 0.16);
+  stroke-width: 3.5;
+}
+.te-fab-ring-fg {
+  fill: none;
+  stroke: var(--te-cyan);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 157.08;
+  stroke-dashoffset: 157.08;
+  transition: stroke-dashoffset 320ms ease, stroke 320ms ease;
+  filter: drop-shadow(0 0 4px rgba(0, 229, 255, 0.8));
+}
+.te-fab-badge {
+  position: absolute;
+  bottom: 0px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  font-size: 8px;
+  font-weight: 900;
+  color: #03131c;
+  background: linear-gradient(135deg, #00e5ff, #67e8f9);
+  border-radius: 99px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 229, 255, 0.4);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.te-fab-badge.is-complete {
+  background: linear-gradient(135deg, #34d399, #6ee7b7);
+  color: #031e17;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 8px rgba(52, 211, 153, 0.4);
+}
+.te-fab-badge.is-error {
+  background: linear-gradient(135deg, #f87171, #fca5a5);
+  color: #2b0404;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 8px rgba(248, 113, 113, 0.4);
+}
+
+/* Hide non-FAB children when minimized */
 #temu-order-exporter-panel.is-minimized > * {
   display: none !important;
+}
+#temu-order-exporter-panel.is-minimized > .te-fab-ring {
+  display: block !important;
+}
+#temu-order-exporter-panel.is-minimized > .te-fab-badge.is-visible {
+  display: inline-flex !important;
 }
 
 /* Header becomes a full-size icon fill */
@@ -768,8 +966,8 @@
 #temu-order-exporter-panel.is-minimized[data-status="running"] {
   animation: te-border-rotate 1.6s linear infinite;
   box-shadow:
-    0 0 22px rgba(234,67,53,.5),
-    0 0 22px rgba(66,133,244,.5),
+    0 0 24px rgba(0,229,255,.65),
+    0 0 24px rgba(56,189,248,.65),
     0 4px 20px rgba(0,0,0,.55);
 }
 /* Complete → green tint overlay on the gradient */

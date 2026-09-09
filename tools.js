@@ -46,11 +46,19 @@
 
   /* ── Messaging ──────────────────────────────────────────── */
   function send(message) {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, response => {
-        const err = chrome.runtime.lastError;
-        if (err) reject(new Error(err.message)); else resolve(response || {});
-      });
+    return new Promise((resolve) => {
+      if (typeof chrome === 'undefined' || !chrome?.runtime?.id) {
+        resolve({ ok: false, error: 'Extension reloaded.' });
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage(message, response => {
+          const err = chrome.runtime.lastError;
+          if (err) resolve({ ok: false, error: err.message }); else resolve(response || {});
+        });
+      } catch (e) {
+        resolve({ ok: false, error: e?.message || 'Messaging error' });
+      }
     });
   }
 
@@ -83,7 +91,7 @@
     $('[data-role="status"]').textContent       = status;
     $('[data-role="status-detail"]').textContent = detail;
     $('[data-role="progress-fill"]').style.width = `${data.percent}%`;
-    $('[data-role="progress-text"]').textContent  = `${data.done} of ${data.total} orders · ${data.rows} rows · ${data.errors} errors · ${data.warnings} notes`;
+    $('[data-role="progress-text"]').textContent  = data.total ? `${data.done} of ${data.total} orders processed` : 'No orders loaded · Open bulk page to start';
     $('[data-role="progress-percent"]').textContent = `${data.percent}%`;
     $('[data-stat="orders"]').textContent   = `${data.done}/${data.total || 0}`;
     $('[data-stat="rows"]').textContent     = String(data.rows);
@@ -184,6 +192,128 @@
     if (shown === 0 && q) {
       list.appendChild(emptyEl(`No history matches "${filter}".`));
     }
+  }
+
+  /* ── Universal Order & Tracking Search ──────────────────── */
+  function allHistoricalRecords() {
+    const records = [];
+    (historyEntries || []).forEach(entry => {
+      const batchDate = formatDate(entry.createdAt);
+      (entry.records || []).forEach(rec => {
+        records.push({ ...rec, __batchDate: batchDate, __batchId: entry.id });
+      });
+    });
+    return records;
+  }
+
+  function renderGlobalSearch(filter = '') {
+    const list = $('[data-role="global-search-results"]');
+    const badge = $('[data-role="global-search-count"]');
+    if (!list) return;
+    list.replaceChildren();
+
+    const allRecords = allHistoricalRecords();
+    if (badge) badge.textContent = `${allRecords.length} order${allRecords.length === 1 ? '' : 's'} indexed`;
+
+    const q = filter.toLowerCase().trim();
+    if (!q) {
+      list.appendChild(emptyEl(
+        allRecords.length
+          ? `Type any Order ID, Tracking #, Customer Name, or SKU above to search across ${allRecords.length} indexed orders.`
+          : 'No historical orders indexed yet. Completed sessions will be searchable here.'
+      ));
+      return;
+    }
+
+    const matched = allRecords.filter(r => {
+      const orderNo   = String(r['Order No'] || '').toLowerCase();
+      const tracking  = String(r['Tracking Number'] || '').toLowerCase();
+      const customer  = String(r['Customer Name'] || '').toLowerCase();
+      const product   = String(r['Product Details'] || '').toLowerCase();
+      const sku       = String(r['SKU ID'] || '').toLowerCase();
+      const goods     = String(r['Goods ID'] || '').toLowerCase();
+      const carrier   = String(r['Carrier'] || '').toLowerCase();
+      return orderNo.includes(q) || tracking.includes(q) || customer.includes(q) ||
+             product.includes(q) || sku.includes(q) || goods.includes(q) || carrier.includes(q);
+    });
+
+    if (badge) badge.textContent = `${matched.length} order${matched.length === 1 ? '' : 's'} found`;
+
+    if (!matched.length) {
+      list.appendChild(emptyEl(`No orders matched "${filter}".`));
+      return;
+    }
+
+    matched.slice(0, 60).forEach(record => {
+      const card = document.createElement('div');
+      card.className = 'tp-global-order-card';
+
+      const header = document.createElement('div');
+      header.className = 'tp-global-order-header';
+
+      const snDiv = document.createElement('div');
+      snDiv.className = 'tp-global-order-sn';
+      snDiv.innerHTML = `<span>📦 <strong>${record['Order No'] || 'Unknown Order'}</strong></span><span class="tp-history-badge complete">${record.__batchDate}</span>`;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'tp-copy-btn';
+      copyBtn.textContent = 'Copy Details';
+      copyBtn.title = 'Copy complete order row as text';
+      copyBtn.addEventListener('click', () => {
+        const text = Object.entries(record)
+          .filter(([k]) => !k.startsWith('__'))
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('\n');
+        navigator.clipboard.writeText(text);
+        feedback(`Order ${record['Order No']} details copied to clipboard!`, 'success');
+      });
+
+      header.append(snDiv, copyBtn);
+
+      const grid = document.createElement('div');
+      grid.className = 'tp-global-order-grid';
+
+      const fields = [
+        ['Customer', record['Customer Name'] || '—'],
+        ['Tracking #', record['Tracking Number'] || '—', true],
+        ['Carrier', record['Carrier'] || '—'],
+        ['Product', record['Product Details'] || '—'],
+        ['Qty', record['Qty (No)'] || '1'],
+        ['Revenue', record['Est. Revenue'] || '—'],
+        ['Shipping', record['Shipping Cost'] || '—'],
+        ['SKU ID', record['SKU ID'] || '—'],
+        ['Goods ID', record['Goods ID'] || '—']
+      ];
+
+      fields.forEach(([label, val, isTracking]) => {
+        const f = document.createElement('div');
+        f.className = 'tp-global-field';
+        const span = document.createElement('span');
+        span.textContent = label;
+        const strong = document.createElement('strong');
+        strong.textContent = val;
+        if (isTracking && val !== '—') {
+          strong.className = 'tracking';
+          const copyPill = document.createElement('button');
+          copyPill.type = 'button';
+          copyPill.className = 'tp-copy-btn';
+          copyPill.textContent = 'Copy';
+          copyPill.title = 'Copy tracking number';
+          copyPill.addEventListener('click', (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(val);
+            feedback(`Tracking # ${val} copied!`, 'success');
+          });
+          strong.appendChild(copyPill);
+        }
+        f.append(span, strong);
+        grid.appendChild(f);
+      });
+
+      card.append(header, grid);
+      list.appendChild(card);
+    });
   }
 
   /* ── Render diagnostics ─────────────────────────────────── */
@@ -313,8 +443,13 @@
     const timeInput = $('[data-role="schedule-time"]');
     if (timeInput && schedulePrefs.time) timeInput.value = schedulePrefs.time;
 
+    // Sync speed profile radio
+    const speedRadio = $(`input[name="speedProfile"][value="${uiPrefs.speedProfile || 'balanced'}"]`);
+    if (speedRadio) speedRadio.checked = true;
+
     renderState();
     renderHistory();
+    renderGlobalSearch($('#global-order-search')?.value || '');
     renderDiagnostics();
     renderScheduleStatus();
     renderColGrid();
@@ -437,6 +572,23 @@
     renderHistory(event.target.value);
   });
 
+  // Global order search filter
+  $('#global-order-search')?.addEventListener('input', event => {
+    renderGlobalSearch(event.target.value);
+  });
+
+  // Speed profile selection in workspace
+  $$('input[name="speedProfile"]').forEach(radio => {
+    radio.addEventListener('change', async event => {
+      if (!event.target.checked) return;
+      uiPrefs.speedProfile = event.target.value;
+      await chrome.storage.local.set({ [UI_KEY]: uiPrefs });
+      try { await send({ type: MSG.UI_PREFS_UPDATE, prefs: uiPrefs }); } catch (_) {}
+      const speedLabels = { stealth: '🛡️ Stealth (Safe Mode)', balanced: '⚡ Balanced (Default)', turbo: '🚀 Turbo (Fast)' };
+      feedback(`Speed profile set to ${speedLabels[event.target.value] || event.target.value}.`, 'success');
+    });
+  });
+
   // Live state updates from background
   chrome.runtime.onMessage.addListener(message => {
     if (message?.type === MSG.STATE_UPDATE) {
@@ -448,6 +600,24 @@
 
   chrome.storage?.onChanged?.addListener(changes => {
     if (changes[HISTORY_KEY] || changes[UI_KEY] || changes[SCHEDULE_KEY]) load();
+  });
+
+  // ── Tab Navigation ──────────────────────────────────────────
+  $$('.tp-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tabId = btn.dataset.tab;
+      $$('.tp-tab-btn').forEach(b => {
+        const active = b === btn;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', String(active));
+      });
+      $$('.tp-tab-pane').forEach(pane => {
+        pane.classList.toggle('active', pane.id === tabId);
+      });
+      if (tabId === 'tab-search') {
+        setTimeout(() => { $('#global-order-search')?.focus(); }, 120);
+      }
+    });
   });
 
   // Init
