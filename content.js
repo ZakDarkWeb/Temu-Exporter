@@ -149,11 +149,7 @@
     // Remove CJK (Chinese, Japanese, Korean) and other non-Latin script characters
     // Unicode ranges: CJK Unified Ideographs, Hangul syllables, Hiragana, Katakana, fullwidth
     title = title.replace(/[\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF\u2E80-\u2FFF]+/g, '').trim();
-    let previous = '';
-    while (title && title !== previous) {
-      previous = title;
-      title = title.replace(/\s*(?:\([^()]*\)|\{[^{}]*\}|\[[^\[\]]*\])\s*$/, '').trim();
-    }
+    // Normalize multiple spaces only — do NOT strip trailing brackets like (6 Balls) or [White Sleeve]
     return title.replace(/\s{2,}/g, ' ').trim();
   }
 
