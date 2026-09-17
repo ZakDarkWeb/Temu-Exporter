@@ -1,0 +1,1664 @@
+(() => {
+  'use strict';
+
+  const C = window.TEMU_CONSTANTS;
+  const { STORAGE_KEYS, MSG, BULK_PATH, DETAIL_PATH, HISTORY_LIMIT } = C;
+  const { normalize, dateOnly, moneyNumber } = C;
+  const STATE_KEY   = STORAGE_KEYS.STATE;
+  const UI_KEY      = STORAGE_KEYS.UI;
+  const HISTORY_KEY = STORAGE_KEYS.HISTORY;
+  const COLS_KEY    = STORAGE_KEYS.COLUMNS;
+  const PANEL_ID = 'temu-order-exporter-panel';
+  const TRACKING_RE = /\b(?:1Z[0-9A-Z]{8,}|GFUS[0-9A-Z]{8,}|9[24][0-9]{18,}|[A-Z]{2}[0-9]{8,}[A-Z]{2}|[A-Z]{2,}\d{8,})\b/i;
+  const AMOUNT_RE = /[$€£]\s?[\d,]+(?:\.\d{1,2})?/;
+  const DETAIL_WAIT_TIMEOUT = 30000;
+  const DETAIL_POLL_INTERVAL = 250;
+
+  /*
+   * Temu's class names are CSS-module hashes and change on deploys. Every
+   * selector below has a label-based fallback; if the primary selector stops
+   * matching, extraction still works but a parser warning is logged so the
+   * map can be updated.
+   */
+  const SELECTORS = Object.freeze({
+    packageCard:      'div._35FMloub, div._1uiAgRn2 > div',
+    labelHeading:     'div._13soV-Aw, div._2t_pUr4h',
+    trackingValue:    'span._1KnTNdCB > span',
+    carrier:          'div._2OTvT66D',
+    tableRow:         'tr[data-testid="beast-core-table-body-tr"]',
+    tableHeaderRow:   'tr[data-testid="beast-core-table-header-tr"]'
+  });
+
+  let state = defaultState();
+  let panel = null;
+  let logBox = null;
+  let progressBox = null;
+  let buttons = {};
+  let statusChip = null;
+  let statusTitle = null;
+  let statusDetail = null;
+  let progressFill = null;
+  let progressPercent = null;
+  let metrics = {};
+  let pipelineStages = {};
+  let uiPrefs = { ...C.DEFAULT_UI_PREFS };
+  let historyEntries = [];
+  let detailReported = false;
+  let bootstrapStoreCache;
+  const shownWarningKeys = new Set();
+  let controlActionBusy = false;
+  const selectorMisses = new Set();
+
+  function defaultState() {
+    return {
+      version: 8,
+      status: 'idle',
+      sourceUrl: '',
+      sourceTabId: null,
+      rows: [],
+      nextIndex: 0,
+      retryQueue: [],
+      inFlight: [],
+      attempts: {},
+      records: [],
+      errors: [],
+      warnings: [],
+      updatedAt: null,
+      completedAt: null
+    };
+  }
+
+  async function getLocalStore(keys) {
+    try {
+      if (typeof chrome === 'undefined' || !chrome?.storage?.local?.get) return {};
+      return (await chrome.storage.local.get(keys)) || {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  async function setLocalStore(items) {
+    try {
+      if (typeof chrome === 'undefined' || !chrome?.storage?.local?.set) return;
+      await chrome.storage.local.set(items);
+    } catch (_) {}
+  }
+
+  async function loadUiData() {
+    try {
+      const stored = await getLocalStore([UI_KEY, HISTORY_KEY]);
+      uiPrefs = { ...uiPrefs, ...(stored[UI_KEY] || {}) };
+      historyEntries = Array.isArray(stored[HISTORY_KEY]) ? stored[HISTORY_KEY].slice(0, HISTORY_LIMIT) : [];
+    } catch (_) {
+      uiPrefs = { ...uiPrefs };
+      historyEntries = [];
+    }
+  }
+
+  async function saveUiPrefs() {
+    await setLocalStore({ [UI_KEY]: uiPrefs });
+  }
+
+  async function saveHistoryEntry() {
+    if (!uiPrefs.saveHistory || !state.records.length || !state.runId) return;
+    const cleanRecords = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
+    const existing = historyEntries.find(item => item.id === `run-${state.runId}`);
+    if (existing?.completed && state.status === 'complete') return;
+    const entry = {
+      schemaVersion: 2,
+      id: `run-${state.runId}`,
+      runId: state.runId,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      completed: state.status === 'complete',
+      orders: state.rows.length,
+      rows: cleanRecords.length,
+      errors: state.errors.length,
+      warnings: state.warnings?.length || 0,
+      records: cleanRecords,
+      errorsData: [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))]
+    };
+    historyEntries = [entry, ...historyEntries.filter(item => item.id !== entry.id)].slice(0, HISTORY_LIMIT);
+    await setLocalStore({ [HISTORY_KEY]: historyEntries });
+  }
+
+  async function setMinimized(value) {
+    if (!panel) return;
+    uiPrefs.minimized = Boolean(value);
+    panel?.classList.toggle('is-minimized', uiPrefs.minimized);
+    // Anime icon is always visible in header — no toggle needed
+    if (uiPrefs.minimized) {
+      panel.style.right  = (uiPrefs.fabRight  ?? 18) + 'px';
+      panel.style.bottom = (uiPrefs.fabBottom ?? 18) + 'px';
+      panel.style.left   = 'auto'; panel.style.top = 'auto';
+    } else {
+      panel.style.right  = (uiPrefs.cardRight  ?? 18) + 'px';
+      panel.style.bottom = (uiPrefs.cardBottom ?? 18) + 'px';
+      if (uiPrefs.cardWidth) panel.style.width = uiPrefs.cardWidth + 'px';
+      panel.style.left   = 'auto'; panel.style.top    = 'auto';
+    }
+    updatePanel();
+    await saveUiPrefs();
+  }
+
+  function textOf(element) {
+    return normalize(element?.innerText || element?.textContent || '');
+  }
+
+  function cleanProductTitle(value) {
+    let title = normalize(value);
+    // Remove CJK (Chinese, Japanese, Korean) and other non-Latin script characters
+    // Unicode ranges: CJK Unified Ideographs, Hangul syllables, Hiragana, Katakana, fullwidth
+    title = title.replace(/[\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF\u2E80-\u2FFF]+/g, '').trim();
+    let previous = '';
+    while (title && title !== previous) {
+      previous = title;
+      title = title.replace(/\s*(?:\([^()]*\)|\{[^{}]*\}|\[[^\[\]]*\])\s*$/, '').trim();
+    }
+    return title.replace(/\s{2,}/g, ' ').trim();
+  }
+
+  function moneyText(value) {
+    return value === null || value === undefined || !Number.isFinite(value) ? '' : `$${value.toFixed(2)}`;
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // SVG icon helpers
+  const SVG_ICONS = {
+    orders: `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 2L14 5.5V10.5L8 14L2 10.5V5.5L8 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 2V14M2 5.5L8 9L14 5.5" stroke="currentColor" stroke-width="1.3"/></svg>`,
+    rows:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="3" width="12" height="2.5" rx="1" fill="currentColor" opacity=".5"/><rect x="2" y="6.75" width="12" height="2.5" rx="1" fill="currentColor"/><rect x="2" y="10.5" width="8" height="2.5" rx="1" fill="currentColor" opacity=".7"/></svg>`,
+    active: `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2" fill="currentColor"/><path d="M8 2.5V4M8 12V13.5M2.5 8H4M12 8H13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    errors: `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 2L14.5 13H1.5L8 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.5V9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11" r=".8" fill="currentColor"/></svg>`,
+    start:  `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 3.5L13 8L5 12.5V3.5Z" fill="currentColor"/></svg>`,
+    pause:  `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor"/></svg>`,
+    stop:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`,
+    download:`<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 2V10M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 12H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    retry:  `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 8a4 4 0 1 1 4 4H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 12L3 10M5 12L7 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    history:`<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.5l2.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    bolt:   `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 2L5 9h4.5L6.5 14L12 7H7.5L9.5 2Z" fill="currentColor"/></svg>`
+  };
+  function svgIcon(name) {
+    return SVG_ICONS[name] || '';
+  }
+
+  // Ripple effect: injects an animated span on button click
+  function addRipple(button) {
+    button.addEventListener('click', function(event) {
+      const rect = button.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height);
+      const ripple = document.createElement('span');
+      ripple.className = 'temu-ripple';
+      ripple.style.cssText = `width:${size}px;height:${size}px;left:${event.clientX - rect.left - size / 2}px;top:${event.clientY - rect.top - size / 2}px`;
+      button.appendChild(ripple);
+      ripple.addEventListener('animationend', () => ripple.remove(), { once: true });
+    });
+  }
+
+  // Metric bump: scale-flash animation when value changes
+  const _prevMetricValues = {};
+  function bumpMetric(element, key, value) {
+    if (!element) return;
+    const str = String(value);
+    if (_prevMetricValues[key] === str) return;
+    _prevMetricValues[key] = str;
+    element.classList.remove('temu-metric-bump');
+    void element.offsetWidth; // reflow to restart animation
+    element.classList.add('temu-metric-bump');
+    element.addEventListener('animationend', () => element.classList.remove('temu-metric-bump'), { once: true });
+  }
+
+  function sendMessage(message) {
+    return new Promise(resolve => {
+      if (typeof chrome === 'undefined' || !chrome?.runtime?.id) {
+        resolve({ ok: false, error: 'Extension context reloaded. Please refresh the page.' });
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage(message, response => {
+          const error = chrome.runtime.lastError;
+          if (error) resolve({ ok: false, error: error.message });
+          else resolve(response || {});
+        });
+      } catch (err) {
+        resolve({ ok: false, error: err?.message || 'Context invalidated' });
+      }
+    });
+  }
+
+  async function sendMessageWithAck(message, attempts = 3) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await sendMessage(message);
+        if (response?.accepted || response?.ok) return response;
+        lastError = new Error(response?.error || 'Background worker did not accept the detail message.');
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < attempts) await sleep(250 * attempt);
+    }
+    throw lastError || new Error('Background worker did not acknowledge the detail message.');
+  }
+
+  async function getCurrentState() {
+    try {
+      const response = await sendMessage({ type: MSG.GET_STATE });
+      if (response?.ok && response.state) {
+        state = { ...defaultState(), ...response.state };
+      } else {
+        const result = await getLocalStore(STATE_KEY);
+        state = { ...defaultState(), ...(result[STATE_KEY] || {}) };
+      }
+    } catch (_) {
+      const result = await getLocalStore(STATE_KEY);
+      state = { ...defaultState(), ...(result[STATE_KEY] || {}) };
+    }
+    updatePanel();
+    return state;
+  }
+
+  function exactTextElements(label, root = document) {
+    return [...root.querySelectorAll('div,span,th,td')].filter(element => normalize(element.textContent) === label);
+  }
+
+  function findSiblingValue(label, root = document, pattern = null) {
+    for (const labelElement of exactTextElements(label, root)) {
+      let ancestor = labelElement.parentElement;
+      for (let level = 0; ancestor && level < 5; level += 1, ancestor = ancestor.parentElement) {
+        const candidates = [...ancestor.children]
+          .filter(child => child !== labelElement && !child.contains(labelElement))
+          .map(textOf)
+          .filter(value => value && value !== label);
+        const matching = pattern ? candidates.find(value => pattern.test(value)) : candidates[0];
+        if (matching) return matching;
+      }
+    }
+    return '';
+  }
+
+  function valueFromHeading(headingLabel, valueLabel, root = document, pattern = null) {
+    for (const heading of exactTextElements(headingLabel, root)) {
+      let ancestor = heading.parentElement;
+      for (let level = 0; ancestor && level < 10; level += 1, ancestor = ancestor.parentElement) {
+        if (!normalize(textOf(ancestor)).includes(valueLabel)) continue;
+        const value = findSiblingValue(valueLabel, ancestor, pattern);
+        if (value) return value;
+      }
+    }
+    return '';
+  }
+
+  function topRightEstimatedRevenue(root = document) {
+    return valueFromHeading('Sales proceeds', 'Estimated revenue', root, AMOUNT_RE)
+      || findSiblingValue('Estimated revenue', root, AMOUNT_RE)
+      || valueAfterLabel('Estimated revenue', root, /([$€£]\s?[\d,]+(?:\.\d{1,2})?)/);
+  }
+
+  function valueAfterLabel(label, root = document, pattern = null) {
+    const content = textOf(root);
+    const start = content.toLowerCase().indexOf(label.toLowerCase());
+    if (start < 0) return '';
+    const after = content.slice(start + label.length).trim();
+    if (pattern) {
+      const match = after.match(pattern);
+      return match ? (match[1] || match[0]).trim() : '';
+    }
+    return after.split(/\s{2,}|\b(?:Courier|Tracking number|Shipping from|Dimensions|Package weight|Order status history)\b/i)[0].trim();
+  }
+
+  function findPackageContainer(packageId) {
+    if (!packageId) return document;
+    // Priority: use the known CSS class for the package card (div._35FMloub)
+    // This is faster and avoids false positives in multi-package orders
+    for (const card of document.querySelectorAll(SELECTORS.packageCard)) {
+      if (normalize(textOf(card)).includes(packageId)) return card;
+    }
+    // Fallback: walk ancestors of the element that shows the packageId text
+    const matches = [...document.querySelectorAll('div,span')]
+      .filter(element => normalize(element.textContent) === packageId);
+    for (const match of matches) {
+      let ancestor = match;
+      for (let level = 0; ancestor && level < 12; level += 1, ancestor = ancestor.parentElement) {
+        const content = textOf(ancestor);
+        if (content.includes(packageId) && /Tracking number/i.test(content) && /Est\. total shipping cost/i.test(content)) return ancestor;
+      }
+    }
+    return document;
+  }
+
+  function parseProductsFromDom() {
+    const rows = [...document.querySelectorAll(SELECTORS.tableRow)]
+      .filter(candidate => candidate.querySelectorAll('td').length >= 3);
+    const fallbackRows = rows.length ? rows : [...document.querySelectorAll('table')]
+      .flatMap(table => [...table.querySelectorAll('tr')])
+      .filter(candidate => candidate.querySelectorAll('td').length >= 3);
+    return fallbackRows.map(row => {
+      const cells = [...row.querySelectorAll('td')];
+      const rawProduct = normalize(textOf(cells[1]));
+      const beforeIdentifiers = rawProduct.split(/\b(?:Goods ID|SKU ID|Order item ID)\s*:/i)[0].trim() || rawProduct;
+      // Extract SKU ID and Goods ID from product cell text
+      const skuMatch   = rawProduct.match(/\bSKU ID\s*:\s*([A-Z0-9_\-]+)/i);
+      const goodsMatch = rawProduct.match(/\bGoods ID\s*:\s*([A-Z0-9_\-]+)/i);
+      const skuId   = skuMatch   ? skuMatch[1].trim()   : '';
+      const goodsId = goodsMatch ? goodsMatch[1].trim() : '';
+      const quantityText = normalize(textOf(cells[2]));
+      const quantity = quantityText.match(/(\d+)\s+shipped\b/i)?.[1] || quantityText.match(/(\d+)\s+item/i)?.[1] || quantityText.match(/\d+/)?.[0] || '';
+      const proceedsText = normalize(textOf(cells[5]));
+      const revenueMatches = proceedsText.match(/[$€£]\s?[\d,]+(?:\.\d{1,2})?/g) || [];
+      const lineRevenue = revenueMatches.length ? revenueMatches[revenueMatches.length - 1] : '';
+      return { productDetails: cleanProductTitle(beforeIdentifiers), quantity, lineRevenue, skuId, goodsId };
+    }).filter(product => product.productDetails || product.quantity);
+  }
+
+  function parseOrderNumberFromDom() {
+    const match = textOf(document.body).match(/Order ID\s*:?\s*([A-Z0-9-]+)/i);
+    return match?.[1] || new URL(location.href).searchParams.get('parent_order_sn') || '';
+  }
+
+  // Direct DOM selector for tracking number — avoids grabbing timeline text
+  // Confirmed from real DOM: div._13soV-Aw ("Tracking number") → sibling → span._1KnTNdCB > span
+  function extractTrackingFromDom(root = document) {
+    // Strategy 1: Find the label heading, then look for _1KnTNdCB in its sibling container
+    for (const heading of root.querySelectorAll(SELECTORS.labelHeading)) {
+      if (!/Tracking number/i.test(normalize(heading.textContent))) continue;
+      const container = heading.parentElement;
+      if (!container) continue;
+      const tnSpan = container.querySelector(SELECTORS.trackingValue);
+      if (tnSpan) {
+        const val = normalize(tnSpan.textContent);
+        if (val && TRACKING_RE.test(val)) return val;
+      }
+    }
+    // Strategy 2: All _1KnTNdCB > span elements — pick first that matches TRACKING_RE
+    for (const span of root.querySelectorAll(SELECTORS.trackingValue)) {
+      const val = normalize(span.textContent);
+      if (val && TRACKING_RE.test(val)) return val;
+    }
+    selectorMisses.add('trackingValue');
+    return '';
+  }
+
+  // Extract courier/carrier name from DOM — confirmed selector: div._2OTvT66D
+  function extractCarrierFromDom(root = document) {
+    const el = root.querySelector(SELECTORS.carrier);
+    if (el) { const val = normalize(el.textContent); if (val) return val; }
+    selectorMisses.add('carrier');
+    return findSiblingValue('Courier', root) || '';
+  }
+
+  function extractRecipientNameFromDom() {
+    // Walk all label-like divs looking for one whose visible text starts with "Recipient name"
+    // The page structure is: div._3XfPagy1 > div._2t_pUr4h ("Recipient name") + div._2-2LmK96 (value)
+    // textContent is used for the scan (innerText would force a layout reflow per element).
+    for (const el of document.querySelectorAll('div,span')) {
+      if (normalize(el.textContent) !== 'Recipient name') continue;
+      const sibling = el.nextElementSibling;
+      if (sibling) {
+        const val = textOf(sibling);
+        if (val && val !== 'Recipient name') return val;
+      }
+      const parent = el.parentElement;
+      if (parent) {
+        for (const child of parent.children) {
+          if (child === el) continue;
+          const val = textOf(child);
+          if (val && val !== 'Recipient name') return val;
+        }
+      }
+    }
+    return '';
+  }
+
+  function parseDetailRecordsFromDom(active) {
+    const packageRoot = findPackageContainer(active?.packageId || '');
+    const products = parseProductsFromDom();
+    const orderRevenue = topRightEstimatedRevenue(document);
+    // Use direct CSS selector for tracking (avoids timeline text contamination)
+    const trackingNumber = extractTrackingFromDom(packageRoot) || extractTrackingFromDom(document) || valueAfterLabel('Tracking number', packageRoot, TRACKING_RE) || '';
+    const shippingCost = findSiblingValue('Est. total shipping cost', packageRoot, AMOUNT_RE) || valueAfterLabel('Est. total shipping cost', packageRoot, /([$€£]\s?[\d,]+(?:\.\d{1,2})?)/);
+    // Carrier: try direct DOM selector first, then sibling label approach
+    const carrier = extractCarrierFromDom(packageRoot) || extractCarrierFromDom(document);
+    const firstRevenue = orderRevenue || products[0]?.lineRevenue || '';
+    const firstShippingCost = shippingCost || '';
+    const common = {
+      'Shipping Date': dateOnly(findSiblingValue('Shipment confirmed at', packageRoot) || valueAfterLabel('Shipment confirmed at', packageRoot, /^(.*?)(?=\s+Courier\b|$)/i)),
+      'Order Date': dateOnly(findSiblingValue('Purchase date') || valueAfterLabel('Purchase date', document, /^(.*?)(?=\s+Shipping service\b|$)/i)),
+      'Tracking Number': trackingNumber,
+      'Order No': parseOrderNumberFromDom() || active?.orderNo || '',
+      'Customer Name': findSiblingValue('Recipient name') || extractRecipientNameFromDom(),
+      'Carrier': carrier
+    };
+    return products.map((product, index) => ({
+      ...common,
+      'Product Details': cleanProductTitle(product.productDetails),
+      'Qty (No)': product.quantity,
+      'Est. Revenue': index === 0 ? firstRevenue : '',
+      'Shipping Cost': index === 0 ? firstShippingCost : '',
+      'SKU ID':   product.skuId   || '',
+      'Goods ID': product.goodsId || ''
+    }));
+  }
+
+  function getActiveDetailMeta() {
+    const raw = location.hash.startsWith('#temu-exporter=') ? location.hash.slice('#temu-exporter='.length) : '';
+    if (!raw) return null;
+    try { return JSON.parse(decodeURIComponent(raw)); } catch (_) { return null; }
+  }
+
+  function getPageBootstrapStore() {
+    if (bootstrapStoreCache !== undefined) return bootstrapStoreCache;
+    if (window.rawData?.store) {
+      bootstrapStoreCache = window.rawData.store;
+      return bootstrapStoreCache;
+    }
+    for (const script of [...document.scripts]) {
+      const source = script.textContent || '';
+      const marker = 'window.rawData';
+      const markerIndex = source.indexOf(marker);
+      if (markerIndex < 0) continue;
+      const equalsIndex = source.indexOf('=', markerIndex + marker.length);
+      const braceStart = source.indexOf('{', equalsIndex);
+      if (equalsIndex < 0 || braceStart < 0) continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = braceStart; index < source.length; index += 1) {
+        const character = source[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character.charCodeAt(0) === 92) escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }
+        if (character === '"') { inString = true; continue; }
+        if (character === '{') depth += 1;
+        else if (character === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            try {
+              bootstrapStoreCache = JSON.parse(source.slice(braceStart, index + 1)).store || null;
+              return bootstrapStoreCache;
+            } catch (_) { break; }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function getStructuredRecords(active) {
+    const store = getPageBootstrapStore();
+    if (!store) return null;
+    const parent = store.parentOrderMap || {};
+    const shipping = store.shippingInfo || {};
+    const orders = Array.isArray(store.orderList) ? store.orderList : [];
+    if (!orders.length) return null;
+    const packages = Array.isArray(parent.localPackageInfoList) ? parent.localPackageInfoList : [];
+    const entries = orders.map((order, index) => {
+      const orderPackage = Array.isArray(order.orderPackageInfoList) ? order.orderPackageInfoList[0] || {} : {};
+      const packageSn = orderPackage.packageSn || order.packageSn || order.packageId || active?.packageId || '';
+      const packageData = packages.find(item => item.packageSn === packageSn) || packages.find(item => item.packageSn === active?.packageId) || packages[0] || {};
+      const interlines = Array.isArray(packageData.interlineInfoForAggregationInfo) ? packageData.interlineInfoForAggregationInfo : [];
+      const interline = interlines.find(item => item.packageSn === packageSn || item.trackingNumber === packageData.trackingNumber) || interlines[0] || {};
+      const basePrice = moneyNumber(order.estimatedIncome || order.orderRetailPrice || order.goodsRetailPrice || order.goodsBasePrice);
+      return { order, index, orderPackage, packageSn, packageData, interline, basePrice };
+    });
+    const parentRevenue = normalize(parent.estimatedIncomeTotal || '');
+    const packageGroups = new Map();
+    entries.forEach((entry, index) => {
+      const key = entry.packageSn || `__package_${index}`;
+      if (!packageGroups.has(key)) packageGroups.set(key, []);
+      packageGroups.get(key).push(index);
+    });
+    let shippingTotalNumber = 0;
+    let shippingTotalFound = false;
+    for (const indexes of packageGroups.values()) {
+      const packageCost = entries[indexes[0]]?.interline?.estimatedAmount || entries[indexes[0]]?.packageData?.estimatedAmount || '';
+      const numericCost = moneyNumber(packageCost);
+      if (numericCost !== null) {
+        shippingTotalNumber += numericCost;
+        shippingTotalFound = true;
+      }
+    }
+    const shippingTotal = shippingTotalFound ? moneyText(shippingTotalNumber) : normalize(entries[0]?.interline?.estimatedAmount || entries[0]?.packageData?.estimatedAmount || '');
+    const orderNo = parent.parentOrderSn || active?.orderNo || '';
+    const records = entries.map((entry, index) => {
+      const order = entry.order;
+      // Prefer English product name fields; fall back to goodsName but strip non-Latin chars in cleanProductTitle
+      const productName = normalize(
+        order.goodsEnName || order.goodsNameEn || order.goodsName ||
+        order.originalGoodsName || order.spuName || ''
+      );
+      const trackingNumber = normalize(entry.orderPackage?.trackingNumber || entry.packageData.trackingNumber || entry.interline.trackingNumber || '');
+      // Carrier from structured data (field names vary across API versions)
+      const carrier = normalize(
+        entry.packageData?.carrierName || entry.packageData?.courierName ||
+        entry.interline?.carrierName   || entry.interline?.courierName   ||
+        entry.orderPackage?.carrierName || ''
+      );
+      // SKU ID and Goods ID from structured data
+      const skuId   = normalize(order.skuId   || order.skuSn   || order.goodsSkuSn || '');
+      const goodsId = normalize(order.goodsId || order.goodsSn || order.goodsNo    || '');
+      return {
+        'Shipping Date': dateOnly(entry.packageData.sendTimeStr || ''),
+        'Order Date': dateOnly(parent.localParentOrderTimeStr || ''),
+        'Tracking Number': trackingNumber,
+        'Order No': normalize(orderNo),
+        'Customer Name': normalize(
+          shipping.receiptName ||
+          shipping.receiverName ||
+          shipping.consigneeName ||
+          shipping.buyerName ||
+          shipping.receiveName ||
+          store.shippingInfo?.name ||
+          ''
+        ) || extractRecipientNameFromDom(),
+        'Product Details': cleanProductTitle(productName),
+        'Qty (No)': order.quantity ?? order.fulfillmentQuantity ?? order.originQuantity ?? '',
+        'Est. Revenue': index === 0 ? (parentRevenue || normalize(order.estimatedIncome || '')) : '',
+        'Shipping Cost': index === 0 ? shippingTotal : '',
+        'Carrier':   carrier,
+        'SKU ID':    skuId,
+        'Goods ID':  goodsId
+      };
+    });
+    return { records, store };
+  }
+
+  function hasMinimumDetail(record) {
+    return Boolean(record && (record['Order No'] || record['Tracking Number']) && (record['Product Details'] || record['Qty (No)']));
+  }
+
+  function missingFields(record, rowIndex = 0) {
+    return C.missingRequiredFields(record, rowIndex);
+  }
+
+  function allRecordsComplete(records) {
+    return records.length > 0 && records.every((record, index) => hasMinimumDetail(record) && missingFields(record, index).length === 0);
+  }
+
+  // Cheap check: structured store present? Script scanning is cached per
+  // script-count, so repeated calls cost nothing until a new <script> lands.
+  let scannedScriptCount = -1;
+  function storeReady() {
+    if (document.scripts.length !== scannedScriptCount) {
+      scannedScriptCount = document.scripts.length;
+      bootstrapStoreCache = undefined;
+    }
+    return Boolean(getPageBootstrapStore()?.orderList?.length);
+  }
+
+  // Expensive check (reads rendered text): only run on the slow interval.
+  // innerText is used deliberately — textContent would include Temu's
+  // multi-megabyte inline JSON script and make every scan cost MBs.
+  function renderedPageState() {
+    if (/no-auth|login/i.test(location.pathname)) throw new Error('Temu opened a no-auth page.');
+    const bodyText = normalize(document.body?.innerText || '');
+    if (/no internet|network error|no connection/i.test(bodyText)) throw new Error('Temu displayed a network error page.');
+    if (/Purchase date/i.test(bodyText) && /Order details/i.test(document.title)) return 'ready';
+    return 'pending';
+  }
+
+  // Resolves as soon as the detail page has data. The MutationObserver path is
+  // cheap (store check only, throttled); the rendered-text check runs once a
+  // second as a fallback for pages without structured data.
+  function waitForDetailData(timeout = DETAIL_WAIT_TIMEOUT) {
+    return new Promise((resolve, reject) => {
+      let observer = null;
+      let interval = null;
+      let deadline = null;
+      let throttled = false;
+      const cleanup = () => {
+        observer?.disconnect();
+        clearInterval(interval);
+        clearTimeout(deadline);
+      };
+      const finish = (fn) => { cleanup(); fn(); };
+      const quickCheck = () => {
+        try { if (storeReady()) finish(() => resolve(true)); }
+        catch (error) { finish(() => reject(error)); }
+      };
+      const slowCheck = () => {
+        try {
+          if (storeReady() || renderedPageState() === 'ready') finish(() => resolve(true));
+        } catch (error) { finish(() => reject(error)); }
+      };
+      observer = new MutationObserver(() => {
+        if (throttled) return;
+        throttled = true;
+        setTimeout(() => { throttled = false; quickCheck(); }, DETAIL_POLL_INTERVAL);
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      interval = setInterval(slowCheck, 1000);
+      deadline = setTimeout(() => finish(() => reject(new Error('Timed out waiting for structured order-detail data.'))), timeout);
+      slowCheck();
+    });
+  }
+
+  async function processDetailPage() {
+    if (detailReported) return;
+    const active = getActiveDetailMeta();
+    if (!active) return;
+    detailReported = true;
+    try {
+      await waitForDetailData();
+      const structured = getStructuredRecords(active);
+      let records = structured?.records || [];
+      if (!allRecordsComplete(records)) {
+        const fallbackRecords = parseDetailRecordsFromDom(active);
+        if (allRecordsComplete(fallbackRecords)) records = fallbackRecords;
+      }
+      const missing = [...new Set(records.flatMap((record, index) => missingFields(record, index)))];
+      if (!allRecordsComplete(records)) throw new Error(`Order-detail data was incomplete after rendering. Missing: ${missing.join(', ') || 'unknown fields'}`);
+      const notes = selectorMisses.size ? [`primary selector missed: ${[...selectorMisses].join(', ')} (fallback used)`] : [];
+      await sendMessageWithAck({ type: MSG.DETAIL_RESULT, records, missing: notes });
+    } catch (error) {
+      try { await sendMessageWithAck({ type: MSG.DETAIL_ERROR, message: error?.message || String(error) }); } catch (_) { /* worker timeout/recovery remains the final safeguard */ }
+    }
+  }
+
+  function captureBulkRows() {
+    const rows = [...document.querySelectorAll(SELECTORS.tableRow)];
+    const header = document.querySelector(SELECTORS.tableHeaderRow);
+    const headerCells = header ? [...header.querySelectorAll('th[data-testid="beast-core-table-th"], th')] : [];
+    const headers = headerCells.map(textOf).map(value => value.toLowerCase());
+    const indexOf = (patterns, fallback) => {
+      const index = headers.findIndex(headerText => patterns.some(pattern => headerText.includes(pattern)));
+      return index >= 0 ? index : fallback;
+    };
+    const indexes = {
+      orderNo: indexOf(['order details', 'order id'], 0),
+      packageId: indexOf(['package id', 'package'], 1),
+      trackingNumber: indexOf(['tracking number', 'tracking'], 8),
+      shippingCost: indexOf(['total shipping cost', 'shipping cost'], 7)
+    };
+    const seen = new Set();
+    return rows.map((row, position) => {
+      const cells = [...row.querySelectorAll('td[data-testid="beast-core-table-td"], td')];
+      const orderNo = normalize(textOf(cells[indexes.orderNo]));
+      const packageId = normalize(textOf(cells[indexes.packageId]));
+      return { position, orderNo, packageId, trackingNumber: normalize(textOf(cells[indexes.trackingNumber])), shippingCost: normalize(textOf(cells[indexes.shippingCost])) };
+    }).filter(row => {
+      if (!row.orderNo || !row.packageId) return false;
+      const key = `${row.orderNo}::${row.packageId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function findNextPageButton() {
+    const candidates = [
+      ...document.querySelectorAll('button[aria-label*="next" i], [aria-label="Next page" i], [aria-label="next" i]'),
+      ...document.querySelectorAll('[data-testid*="pagination-next"], [data-testid*="next-page"]'),
+      ...document.querySelectorAll('.beast-core-pagination-next, button.beast-core-pagination-next-btn, li.beast-core-pagination-next button'),
+      ...document.querySelectorAll('.ant-pagination-next button, li.ant-pagination-next:not(.ant-pagination-disabled) button'),
+      ...document.querySelectorAll('li.is-active + li:not(.is-disabled) button, li.beast-core-pagination-item-active + li button'),
+      ...[...document.querySelectorAll('button')].filter(b => {
+        const t = normalize(b.textContent).toLowerCase();
+        const title = (b.getAttribute('title') || '').toLowerCase();
+        return (t === 'next' || t === '>' || title === 'next' || title === 'next page') && !b.disabled && !b.classList.contains('is-disabled');
+      })
+    ];
+
+    for (const btn of candidates) {
+      if (!btn) continue;
+      const isDisabled = btn.disabled ||
+        btn.getAttribute('aria-disabled') === 'true' ||
+        btn.classList.contains('is-disabled') ||
+        btn.classList.contains('disabled') ||
+        btn.closest('.is-disabled') ||
+        btn.closest('[aria-disabled="true"]');
+      if (!isDisabled && btn.offsetParent !== null) {
+        return btn;
+      }
+    }
+    return null;
+  }
+
+  async function scrapeAllBulkPages(onProgress = null) {
+    const allRows = [];
+    const seenKeys = new Set();
+    let pageNum = 1;
+    const maxPages = 50;
+
+    while (pageNum <= maxPages) {
+      const pageRows = captureBulkRows();
+      for (const row of pageRows) {
+        const key = `${row.orderNo}::${row.packageId}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          allRows.push(row);
+        }
+      }
+
+      if (onProgress) onProgress(pageNum, allRows.length);
+
+      if (!uiPrefs.autoPaginate) break;
+
+      const nextBtn = findNextPageButton();
+      if (!nextBtn) break;
+
+      const firstRowText = document.querySelector(SELECTORS.tableRow)?.textContent || '';
+      nextBtn.click();
+      log(`Auto-pagination: Navigating to page ${pageNum + 1}...`, 'info');
+
+      let pageChanged = false;
+      for (let i = 0; i < 25; i++) {
+        await sleep(200);
+        const currentFirstRow = document.querySelector(SELECTORS.tableRow)?.textContent || '';
+        if (currentFirstRow && currentFirstRow !== firstRowText) {
+          pageChanged = true;
+          break;
+        }
+      }
+
+      if (!pageChanged) {
+        await sleep(600);
+        const checkRow = document.querySelector(SELECTORS.tableRow)?.textContent || '';
+        if (checkRow === firstRowText) {
+          break;
+        }
+      }
+
+      pageNum++;
+    }
+
+    return allRows;
+  }
+
+  // Typed log with timestamp & category badges — supports: info | success | warn | error
+  function log(message, type = 'info') {
+    if (!logBox) return;
+    if (type === 'warning') type = 'warn';
+    const now = new Date();
+    const ts  = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    // Smart tag detection
+    let tag = 'INFO';
+    const mLower = String(message || '').toLowerCase();
+    if (mLower.includes('scrap') || mLower.includes('page') || mLower.includes('captur') || mLower.includes('scan') || mLower.includes('bulk')) {
+      tag = 'SCRAPE';
+    } else if (mLower.includes('worker') || mLower.includes('tab') || mLower.includes('pool') || mLower.includes('recycled') || mLower.includes('dispatched')) {
+      tag = 'WORKER';
+    } else if (mLower.includes('excel') || mLower.includes('xlsx') || mLower.includes('workbook')) {
+      tag = 'EXCEL';
+    } else if (mLower.includes('speed') || mLower.includes('profile') || mLower.includes('setting') || mLower.includes('enabled') || mLower.includes('disabled') || mLower.includes('cleared')) {
+      tag = 'CONFIG';
+    } else if (type === 'success' || mLower.includes('finish') || mLower.includes('complete') || mLower.includes('done')) {
+      tag = 'SUCCESS';
+    } else if (type === 'warn' || mLower.includes('warning') || mLower.includes('retry')) {
+      tag = 'WARN';
+    } else if (type === 'error' || mLower.includes('error') || mLower.includes('fail')) {
+      tag = 'ERROR';
+    }
+
+    const icons = { info: '›', success: '✓', warn: '⚠', error: '✗' };
+    const line = document.createElement('div');
+    line.className = `temu-exporter-log-entry temu-log-${type}`;
+    
+    const timeEl = document.createElement('span');
+    timeEl.className = 'temu-log-ts';
+    timeEl.textContent = ts;
+
+    const badgeEl = document.createElement('span');
+    badgeEl.className = `temu-log-badge ${tag.toLowerCase()}`;
+    badgeEl.textContent = tag;
+
+    const iconEl = document.createElement('span');
+    iconEl.className = 'temu-log-icon';
+    iconEl.textContent = icons[type] || '›';
+
+    const msgEl = document.createElement('span');
+    msgEl.className = 'temu-log-msg';
+    msgEl.textContent = message;
+
+    line.append(timeEl, badgeEl, iconEl, msgEl);
+    logBox.appendChild(line);
+    while (logBox.children.length > 80) logBox.removeChild(logBox.firstChild);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function pipelineState(stage, stats) {
+    if (!stats.total) return 'idle';
+    if (stage === 'capture') return state.status === 'idle' ? 'idle' : 'complete';
+    if (stage === 'details') {
+      if (state.status === 'complete') return 'complete';
+      if (state.status === 'running') return 'active';
+      if (state.status === 'paused' && stats.done > 0) return 'paused';
+      return stats.done > 0 ? 'complete' : 'idle';
+    }
+    if (state.status === 'complete') return 'complete';
+    return state.records.length ? 'ready' : 'idle';
+  }
+
+  function panelStats() {
+    const total = state.rows.length;
+    const done = new Set(state.records.map(record => record.__key || `${record['Order No'] || ''}::${record['Tracking Number'] || ''}`)).size;
+    const rows = state.records.length;
+    const failed = state.errors.length;
+    const active = state.inFlight.length;
+    const retried = Object.values(state.attempts || {}).filter(value => value > 1).length;
+    const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const status = state.status === 'running' ? 'Running' : state.status === 'paused' ? 'Paused' : state.status === 'complete' ? 'Complete' : 'Ready';
+    return { total, done, rows, failed, active, retried, percent, status };
+  }
+
+  function updatePanel() {
+    if (!panel) return;
+    const stats = panelStats();
+    const detail = stats.total ? `${stats.done} of ${stats.total} orders processed` : 'Open a Temu bulk-shipping page to begin';
+    const stateMessage = stats.status === 'running' ? 'Live extraction in progress' : stats.status === 'paused' ? 'Checkpoint saved — ready to resume' : stats.status === 'complete' ? 'Extraction complete — workbook ready' : 'Ready for a new extraction';
+    const recoveryVisible = state.errors.length > 0 && stats.status !== 'running' && !stats.active;
+    if (progressBox) {
+      if (stats.status === 'Running') {
+        progressBox.textContent = `Extracting ${stats.done}/${stats.total || 0} · ${stats.active} tab${stats.active === 1 ? '' : 's'}`;
+      } else if (stats.status === 'Paused') {
+        progressBox.textContent = `Paused · ${stats.done}/${stats.total || 0} done`;
+      } else if (stats.status === 'Complete') {
+        progressBox.textContent = `Done · ${stats.done} orders (${stats.rows} rows)`;
+      } else {
+        progressBox.textContent = stats.total ? `${stats.total} orders detected` : 'Ready to start';
+      }
+    }
+    if (statusChip) {
+      statusChip.textContent = stats.status;
+      statusChip.dataset.status = stats.status.toLowerCase();
+    }
+    if (statusTitle) statusTitle.textContent = stateMessage;
+    if (statusDetail) statusDetail.textContent = detail;
+    if (progressFill) progressFill.style.width = `${stats.percent}%`;
+    if (progressPercent) progressPercent.textContent = `${stats.percent}%`;
+    // ETA calculation
+    const etaEl = panel.querySelector('[data-role="eta"]');
+    if (etaEl) {
+      // runId is Date.now() at job start, so it doubles as the run's start time
+      // and survives every state broadcast (a local field would be overwritten).
+      const startedAt = Number(state.runId) || 0;
+      const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+      if (state.status === 'running' && stats.done > 3 && stats.total > stats.done && elapsed > 1) {
+        const rate = stats.done / elapsed; // orders/sec
+        const remaining = (stats.total - stats.done) / rate;
+        const mins = Math.floor(remaining / 60);
+        const secs = Math.round(remaining % 60);
+        etaEl.textContent = mins > 0 ? `~${mins}m ${secs}s left` : `~${secs}s left`;
+        etaEl.classList.add('visible');
+      } else {
+        etaEl.classList.remove('visible');
+      }
+    }
+    if (metrics.orders) { const v = `${stats.done}/${stats.total || 0}`; if (metrics.orders.textContent !== v) { metrics.orders.textContent = v; bumpMetric(metrics.orders, 'orders', v); } }
+    if (metrics.rows) { const v = String(stats.rows); if (metrics.rows.textContent !== v) { metrics.rows.textContent = v; bumpMetric(metrics.rows, 'rows', v); } }
+    if (metrics.errors) { const v = String(stats.failed); if (metrics.errors.textContent !== v) { metrics.errors.textContent = v; bumpMetric(metrics.errors, 'errors', v); } }
+    if (metrics.active) { const v = String(stats.active); if (metrics.active.textContent !== v) { metrics.active.textContent = v; bumpMetric(metrics.active, 'active', v); } }
+    Object.entries(pipelineStages).forEach(([stage, element]) => {
+      element.dataset.stage = pipelineState(stage, stats);
+    });
+    const recovery = panel.querySelector('[data-role="recovery"]');
+    const retryButton = buttons.retry;
+    if (recovery) recovery.classList.toggle('is-visible', recoveryVisible);
+    if (retryButton) {
+      retryButton.disabled = !recoveryVisible;
+      retryButton.innerHTML = `<span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('retry')}</span><span>Retry ${state.errors.length || ''} failed${state.errors.length === 1 ? '' : 's'}</span>`;
+    }
+    // Update Minimized FAB circular progress ring & badge
+    const fabRingFg = panel.querySelector('.te-fab-ring-fg');
+    if (fabRingFg) {
+      const C = 157.08;
+      const pct = stats.percent || 0;
+      const offset = C - (Math.min(100, Math.max(0, pct)) / 100) * C;
+      fabRingFg.style.strokeDashoffset = String(offset);
+      const st = stats.status.toLowerCase();
+      if (st === 'complete') {
+        fabRingFg.style.stroke = '#34d399';
+        fabRingFg.style.filter = 'drop-shadow(0 0 4px rgba(52, 211, 153, 0.8))';
+      } else if (st === 'error') {
+        fabRingFg.style.stroke = '#f87171';
+        fabRingFg.style.filter = 'drop-shadow(0 0 4px rgba(248, 113, 113, 0.8))';
+      } else if (st === 'paused') {
+        fabRingFg.style.stroke = '#fbbf24';
+        fabRingFg.style.filter = 'drop-shadow(0 0 4px rgba(251, 191, 36, 0.8))';
+      } else {
+        fabRingFg.style.stroke = '#00e5ff';
+        fabRingFg.style.filter = 'drop-shadow(0 0 4px rgba(0, 229, 255, 0.8))';
+      }
+    }
+    const fabBadge = panel.querySelector('[data-role="fab-badge"]');
+    if (fabBadge) {
+      const st = stats.status.toLowerCase();
+      if (st === 'running') {
+        fabBadge.textContent = `${stats.percent}%`;
+        fabBadge.className = 'te-fab-badge is-visible';
+      } else if (st === 'complete') {
+        fabBadge.textContent = '✓';
+        fabBadge.className = 'te-fab-badge is-visible is-complete';
+      } else if (state.errors.length) {
+        fabBadge.textContent = `!${state.errors.length}`;
+        fabBadge.className = 'te-fab-badge is-visible is-error';
+      } else {
+        fabBadge.className = 'te-fab-badge';
+      }
+    }
+    panel.dataset.status = stats.status.toLowerCase();
+    const minimizeButton = panel.querySelector('[data-action="minimize"]');
+    if (minimizeButton) {
+      minimizeButton.textContent = uiPrefs.minimized ? '↗' : '−';
+      minimizeButton.title = uiPrefs.minimized ? 'Expand panel' : 'Minimize panel';
+      minimizeButton.setAttribute('aria-label', uiPrefs.minimized ? 'Expand panel' : 'Minimize panel');
+    }
+    if (buttons.start) buttons.start.innerHTML = `<span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('start')}</span><span>${state.status === 'paused' ? 'Resume extraction' : 'Start extraction'}</span>`;
+    if (buttons.pause) buttons.pause.disabled = state.status !== 'running';
+    if (buttons.stop) buttons.stop.disabled = state.status === 'idle' && !state.records.length;
+    if (buttons.download) buttons.download.disabled = !state.records.length;
+  }
+
+  function createPanel() {
+    if (document.getElementById(PANEL_ID)) return;
+    panel = document.createElement('section');
+    panel.id = PANEL_ID;
+    panel.setAttribute('aria-label', 'Temu Order Exporter');
+    panel.innerHTML = `
+      <!-- Minimized FAB Circular Progress Ring & Badge -->
+      <svg class="te-fab-ring" viewBox="0 0 56 56" aria-hidden="true">
+        <circle class="te-fab-ring-bg" cx="28" cy="28" r="25" />
+        <circle class="te-fab-ring-fg" cx="28" cy="28" r="25" />
+      </svg>
+      <span class="te-fab-badge" data-role="fab-badge"></span>
+
+      <div class="temu-exporter-header" title="Drag to reposition · Double-click to reset">
+        <div class="temu-exporter-brand">
+          <div class="temu-exporter-logo" aria-hidden="true">
+            <img class="te-header-icon te-fab-icon" src="" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">
+          </div>
+          <div class="temu-exporter-brand-copy"><strong>Temu Order Exporter</strong><small>Seller workflow assistant</small></div>
+        </div>
+        <div class="temu-exporter-toolbar">
+          <button type="button" class="temu-exporter-tools-button" data-action="tools" title="History &amp; Tools" aria-label="Open History and Tools">${svgIcon('history')}<small>Tools</small></button>
+          <button type="button" data-action="automations" title="Automations" aria-label="Automations" aria-expanded="false">${svgIcon('bolt')}</button>
+          <button type="button" data-action="minimize" title="Minimize panel" aria-label="Minimize panel">−</button>
+        </div>
+      </div>
+      <div class="temu-exporter-body" data-role="panel-body">
+        <div class="temu-exporter-status-card">
+          <div class="temu-exporter-status-top">
+            <div class="temu-exporter-status-orbit" aria-hidden="true"><span></span></div>
+            <div class="temu-exporter-status-copy"><strong data-role="status-title">Ready for a new extraction</strong><span data-role="status-detail">Open a Temu bulk-shipping page to begin</span></div>
+            <span class="temu-exporter-status-chip" data-role="status-chip">Ready</span>
+          </div>
+          <div class="temu-exporter-progress-track" aria-label="Extraction progress"><span data-role="progress-fill"></span></div>
+          <div class="temu-exporter-progress-meta"><span data-role="progress"></span><span class="temu-exporter-eta" data-role="eta"></span><strong data-role="progress-percent">0%</strong></div>
+          <div class="temu-exporter-quick-pills" aria-label="Quick mode controls">
+            <button type="button" class="temu-quick-pill" data-action="quick-speed" title="Click to cycle speed mode: Balanced ➔ Turbo ➔ Safe">
+              <span data-role="quick-speed-label">⚡ Balanced</span>
+            </button>
+            <button type="button" class="temu-quick-pill" data-action="quick-paginate" title="Click to toggle multi-page auto-scraping">
+              <span data-role="quick-paginate-label">📄 All Pages: ON</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Automations Drawer -->
+        <div class="temu-exporter-automations" data-role="automations-drawer" inert>
+          <div class="temu-exporter-auto-panel">
+            <div class="temu-exporter-auto-title">${svgIcon('bolt')} Automations</div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Auto-Export XLSX</strong>
+                <small>Automatically download workbook when extraction completes.</small>
+              </div>
+              <label class="temu-exporter-switch" title="Auto-export on complete">
+                <input type="checkbox" data-setting="autoExport" aria-label="Auto-export XLSX when complete">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Auto-Retry Failures</strong>
+                <small>Automatically retry failed orders once after completion.</small>
+              </div>
+              <label class="temu-exporter-switch" title="Auto-retry failed orders">
+                <input type="checkbox" data-setting="autoRetry" aria-label="Auto-retry failed orders">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Motion Effects</strong>
+                <small>Use smooth transitions in the card.</small>
+              </div>
+              <label class="temu-exporter-switch">
+                <input type="checkbox" data-setting="motion" aria-label="Motion effects">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Save Sheet History</strong>
+                <small>Keep latest 20 sessions in this browser.</small>
+              </div>
+              <label class="temu-exporter-switch">
+                <input type="checkbox" data-setting="saveHistory" aria-label="Save sheet history">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Auto-Scrape All Pages</strong>
+                <small>Scan and accumulate orders across multiple table pages.</small>
+              </div>
+              <label class="temu-exporter-switch" title="Auto-scrape all pages">
+                <input type="checkbox" data-setting="autoPaginate" aria-label="Auto-scrape all pages">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Merge Same-Order Cells</strong>
+                <small>Merge Order No, Date, Customer &amp; Revenue cells for multi-product orders in Excel.</small>
+              </div>
+              <label class="temu-exporter-switch" title="Merge cells for same order">
+                <input type="checkbox" data-setting="mergeCells" aria-label="Merge cells for same-order rows">
+                <span></span>
+              </label>
+            </div>
+            <div class="temu-exporter-auto-row">
+              <div class="temu-exporter-auto-copy">
+                <strong>Speed &amp; Safety Profile</strong>
+                <small>Stealth (Safe 1 tab), Balanced (2 tabs), Turbo (4 tabs).</small>
+              </div>
+              <div class="temu-speed-pill-group" data-role="speed-selector">
+                <button type="button" class="temu-speed-btn" data-speed="stealth" title="Stealth / Safe Mode (1 tab, humanized delays)">🛡️ Safe</button>
+                <button type="button" class="temu-speed-btn" data-speed="balanced" title="Balanced Mode (2 tabs, adaptive)">⚡ Balanced</button>
+                <button type="button" class="temu-speed-btn" data-speed="turbo" title="Turbo Mode (4 tabs, max speed)">🚀 Turbo</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="temu-exporter-divider">Pipeline</div>
+        <div class="temu-exporter-pipeline" data-role="pipeline" aria-label="Extraction pipeline">
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="capture"><span class="temu-exporter-pipeline-number">1</span><div><strong>Capture rows</strong><small>Bulk page</small></div></div>
+          <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="details"><span class="temu-exporter-pipeline-number">2</span><div><strong>Read details</strong><small>Adaptive tabs</small></div></div>
+          <span class="temu-exporter-pipeline-line" aria-hidden="true"></span>
+          <div class="temu-exporter-pipeline-stage" data-pipeline-stage="workbook"><span class="temu-exporter-pipeline-number">3</span><div><strong>Build XLSX</strong><small>Local file</small></div></div>
+        </div>
+
+        <div class="temu-exporter-divider">Statistics</div>
+        <div class="temu-exporter-metrics" aria-label="Extraction statistics">
+          <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon orders" aria-hidden="true">${svgIcon('orders')}</span><div><strong data-metric="orders">0/0</strong><small>Orders</small></div></div>
+          <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon rows" aria-hidden="true">${svgIcon('rows')}</span><div><strong data-metric="rows">0</strong><small>Product rows</small></div></div>
+          <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon active" aria-hidden="true">${svgIcon('active')}</span><div><strong data-metric="active">0</strong><small>Active tabs</small></div></div>
+          <div class="temu-exporter-metric"><span class="temu-exporter-metric-icon errors" aria-hidden="true">${svgIcon('errors')}</span><div><strong data-metric="errors">0</strong><small>Errors</small></div></div>
+        </div>
+
+        <div class="temu-exporter-divider">Actions</div>
+        <div class="temu-exporter-actions">
+          <button type="button" data-action="start" class="primary"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('start')}</span><span>Start extraction</span></button>
+          <button type="button" data-action="download" class="download"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('download')}</span><span>Download Excel</span></button>
+          <button type="button" data-action="pause" class="secondary"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('pause')}</span><span>Pause</span></button>
+          <button type="button" data-action="stop" class="secondary danger"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('stop')}</span><span>Stop / clear</span></button>
+        </div>
+        <div class="temu-exporter-recovery" data-role="recovery">
+          <div><strong data-role="recovery-title">Some orders need attention</strong><small>Retry only failed orders; successful records stay untouched.</small></div>
+          <button type="button" data-action="retry" class="retry"><span class="temu-exporter-button-icon" aria-hidden="true">${svgIcon('retry')}</span><span>Retry failed</span></button>
+        </div>
+        <div class="temu-exporter-log-wrap">
+          <div class="temu-exporter-log-label">
+            <div class="temu-exporter-log-label-left">
+              <span>Activity</span>
+              <span class="temu-exporter-live-dot">Live</span>
+            </div>
+            <div class="temu-exporter-log-tools">
+              <button type="button" class="temu-log-tool-btn" data-action="copy-logs" title="Copy activity logs">Copy</button>
+              <button type="button" class="temu-log-tool-btn" data-action="clear-logs" title="Clear activity logs">Clear</button>
+            </div>
+          </div>
+          <div class="temu-exporter-log" data-role="log" aria-live="polite"></div>
+        </div>
+        <div class="temu-exporter-footer"><span>Local-only processing</span><span data-role="version"></span></div>
+      </div>
+      <!-- Resize handle -->
+      <div class="temu-exporter-resize-handle" aria-hidden="true" title="Drag to resize"></div>
+    `;
+    document.documentElement.appendChild(panel);
+    // Set the icon src correctly via runtime URL (works for both header and FAB)
+    const headerImg = panel.querySelector('img.te-header-icon');
+    if (headerImg) headerImg.src = chrome.runtime.getURL('icons/icon128.png');
+    const versionEl = panel.querySelector('[data-role="version"]');
+    if (versionEl) versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
+    progressBox = panel.querySelector('[data-role="progress"]');
+    logBox = panel.querySelector('[data-role="log"]');
+    statusChip = panel.querySelector('[data-role="status-chip"]');
+    statusTitle = panel.querySelector('[data-role="status-title"]');
+    statusDetail = panel.querySelector('[data-role="status-detail"]');
+    progressFill = panel.querySelector('[data-role="progress-fill"]');
+    progressPercent = panel.querySelector('[data-role="progress-percent"]');
+    metrics = {
+      orders: panel.querySelector('[data-metric="orders"]'),
+      rows: panel.querySelector('[data-metric="rows"]'),
+      active: panel.querySelector('[data-metric="active"]'),
+      errors: panel.querySelector('[data-metric="errors"]')
+    };
+    buttons = {
+      start: panel.querySelector('[data-action="start"]'),
+      pause: panel.querySelector('[data-action="pause"]'),
+      stop: panel.querySelector('[data-action="stop"]'),
+      download: panel.querySelector('[data-action="download"]'),
+      retry: panel.querySelector('[data-action="retry"]')
+    };
+    pipelineStages = {
+      capture: panel.querySelector('[data-pipeline-stage="capture"]'),
+      details: panel.querySelector('[data-pipeline-stage="details"]'),
+      workbook: panel.querySelector('[data-pipeline-stage="workbook"]')
+    };
+    // Wire ripple to all action buttons
+    Object.values(buttons).forEach(btn => { if (btn) addRipple(btn); });
+    buttons.start.addEventListener('click', () => runControl('start', buttons.start, startJob));
+    buttons.pause.addEventListener('click', pauseJob);
+    buttons.stop.addEventListener('click', stopJob);
+    buttons.retry.addEventListener('click', () => runControl('retry', buttons.retry, retryFailedJob));
+    buttons.download.addEventListener('click', async () => {
+      await saveHistoryEntry();
+      const records = state.records.map(({ __key, __index, __attempts, __lineIndex, ...record }) => record);
+      const statusRows = [...state.errors, ...(state.warnings || []).map(warning => ({ ...warning, message: warning.message || 'Parser warning' }))];
+      // Read saved column preference from storage (matches tools.js COLS_KEY)
+      let cols;
+      try {
+        const stored = await getLocalStore(COLS_KEY);
+        const saved = stored[COLS_KEY];
+        cols = Array.isArray(saved) && saved.length ? saved : undefined;
+      } catch (_) { cols = undefined; }
+      if (window.TemuXlsx?.downloadWorkbook) {
+        window.TemuXlsx.downloadWorkbook(records, statusRows, cols, uiPrefs.mergeCells !== false);
+        log(`Downloaded ${records.length} records as an Excel workbook.`, 'success');
+      }
+    });
+    panel.querySelector('[data-action="tools"]').addEventListener('click', openToolsPage);
+    panel.querySelector('[data-action="minimize"]').addEventListener('click', () => setMinimized(!uiPrefs.minimized));
+    // Automations drawer toggle
+    panel.querySelector('[data-action="automations"]').addEventListener('click', () => {
+      const drawer = panel.querySelector('[data-role="automations-drawer"]');
+      const btn = panel.querySelector('[data-action="automations"]');
+      const isOpen = drawer.classList.toggle('is-open');
+      drawer.inert = !isOpen; // inert removes hidden controls from tab order without aria-hidden conflicts
+      btn.setAttribute('aria-expanded', String(isOpen));
+    });
+    // Activity Log Copy & Clear tools
+    const copyLogsBtn = panel.querySelector('[data-action="copy-logs"]');
+    if (copyLogsBtn) {
+      copyLogsBtn.addEventListener('click', async () => {
+        if (!logBox) return;
+        const entries = [...logBox.querySelectorAll('.temu-exporter-log-entry')];
+        const text = entries.map(e => e.textContent.trim()).join('\n');
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          copyLogsBtn.textContent = 'Copied!';
+          setTimeout(() => { copyLogsBtn.textContent = 'Copy'; }, 1500);
+        } catch (_) {}
+      });
+    }
+    const clearLogsBtn = panel.querySelector('[data-action="clear-logs"]');
+    if (clearLogsBtn) {
+      clearLogsBtn.addEventListener('click', () => {
+        if (logBox) {
+          logBox.innerHTML = '';
+          log('Activity log cleared.', 'info');
+        }
+      });
+    }
+
+    // ── Draggable Panel & FAB Engine ──────────────────────────────
+    (function initDraggablePanel() {
+      let isDragging = false;
+      let hasMoved   = false;
+      let dragMode   = 'fab'; // 'fab' or 'card'
+      let startX, startY, startRight, startBottom;
+      const FAB_SIZE = 56;
+
+      function beginDrag(clientX, clientY, mode) {
+        isDragging = true;
+        hasMoved   = false;
+        dragMode   = mode;
+        startX     = clientX;
+        startY     = clientY;
+        const rect = panel.getBoundingClientRect();
+        startRight  = window.innerWidth  - rect.right;
+        startBottom = window.innerHeight - rect.bottom;
+        panel.style.transition = 'none';
+        document.body.style.userSelect = 'none';
+      }
+
+      function moveDrag(clientX, clientY) {
+        if (!isDragging) return;
+        const dx = clientX - startX;
+        const dy = clientY - startY;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) hasMoved = true;
+        
+        if (dragMode === 'fab') {
+          const newRight  = Math.max(4, Math.min(window.innerWidth  - FAB_SIZE - 4, startRight  - dx));
+          const newBottom = Math.max(4, Math.min(window.innerHeight - FAB_SIZE - 4, startBottom - dy));
+          panel.style.right  = newRight  + 'px';
+          panel.style.bottom = newBottom + 'px';
+        } else {
+          // Card mode
+          const w = panel.offsetWidth;
+          const h = panel.offsetHeight;
+          const newRight  = Math.max(4, Math.min(window.innerWidth  - w - 4, startRight  - dx));
+          const newBottom = Math.max(4, Math.min(window.innerHeight - h - 4, startBottom - dy));
+          panel.style.right  = newRight  + 'px';
+          panel.style.bottom = newBottom + 'px';
+        }
+        panel.style.left = 'auto';
+        panel.style.top  = 'auto';
+      }
+
+      async function endDrag() {
+        if (!isDragging) return;
+        isDragging = false;
+        panel.style.transition = '';
+        document.body.style.userSelect = '';
+        if (dragMode === 'fab') {
+          if (hasMoved) {
+            const rect = panel.getBoundingClientRect();
+            uiPrefs.fabRight  = Math.round(window.innerWidth  - rect.right);
+            uiPrefs.fabBottom = Math.round(window.innerHeight - rect.bottom);
+            await saveUiPrefs();
+          } else {
+            await setMinimized(false);
+          }
+        } else {
+          // Card mode
+          if (hasMoved) {
+            const rect = panel.getBoundingClientRect();
+            uiPrefs.cardRight  = Math.round(window.innerWidth  - rect.right);
+            uiPrefs.cardBottom = Math.round(window.innerHeight - rect.bottom);
+            await saveUiPrefs();
+          }
+        }
+      }
+
+      // Minimized FAB Dragging (entire panel)
+      panel.addEventListener('mousedown', e => {
+        if (!uiPrefs.minimized) return;
+        e.preventDefault();
+        beginDrag(e.clientX, e.clientY, 'fab');
+      });
+
+      // Expanded Card Header Dragging (only header, excluding toolbar buttons)
+      const header = panel.querySelector('.temu-exporter-header');
+      if (header) {
+        header.addEventListener('mousedown', e => {
+          if (uiPrefs.minimized) return;
+          if (e.target.closest('button') || e.target.closest('input')) return;
+          e.preventDefault();
+          beginDrag(e.clientX, e.clientY, 'card');
+        });
+
+        // Double click header to reset card to default bottom-right
+        header.addEventListener('dblclick', async e => {
+          if (uiPrefs.minimized || e.target.closest('button')) return;
+          uiPrefs.cardRight  = 18;
+          uiPrefs.cardBottom = 18;
+          panel.style.right  = '18px';
+          panel.style.bottom = '18px';
+          await saveUiPrefs();
+          log('Card position reset to default.', 'info');
+        });
+      }
+
+      // Document move and up listeners
+      document.addEventListener('mousemove', e => {
+        if (isDragging) moveDrag(e.clientX, e.clientY);
+      });
+      document.addEventListener('mouseup', endDrag);
+
+      // Touch events for FAB & Header
+      panel.addEventListener('touchstart', e => {
+        const t = e.touches[0];
+        if (uiPrefs.minimized) {
+          beginDrag(t.clientX, t.clientY, 'fab');
+        } else if (e.target.closest('.temu-exporter-header') && !e.target.closest('button')) {
+          beginDrag(t.clientX, t.clientY, 'card');
+        }
+      }, { passive: true });
+
+      panel.addEventListener('touchmove', e => {
+        if (!isDragging) return;
+        e.preventDefault();
+        const t = e.touches[0];
+        moveDrag(t.clientX, t.clientY);
+      }, { passive: false });
+
+      panel.addEventListener('touchend', endDrag);
+    })();
+    // ── Resize handle (drag left edge to resize 320–420px) ─────────
+    (function initResizeHandle() {
+      const handle = panel.querySelector('.temu-exporter-resize-handle');
+      if (!handle) return;
+      let isResizing = false;
+      let startX, startWidth;
+      const MIN_W = 320, MAX_W = 420;
+
+      handle.addEventListener('mousedown', e => {
+        if (uiPrefs.minimized) return;
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = panel.offsetWidth;
+        panel.style.transition = 'none';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+        const onMove = ev => {
+          if (!isResizing) return;
+          const dx = startX - ev.clientX; // dragging left = wider
+          const newW = Math.min(MAX_W, Math.max(MIN_W, startWidth + dx));
+          panel.style.width = newW + 'px';
+          uiPrefs.cardWidth = newW;
+        };
+        const onUp = () => {
+          isResizing = false;
+          panel.style.transition = '';
+          document.body.style.userSelect = '';
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          saveUiPrefs();
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    })();
+
+    // ── Settings toggle listeners ───────────────────────────────
+    panel.querySelectorAll('[data-setting]').forEach(input => input.addEventListener('change', async event => {
+      const key = event.target.dataset.setting;
+      uiPrefs[key] = event.target.checked;
+      if (key === 'motion') panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
+      if (key === 'autoPaginate') syncQuickPills();
+      await saveUiPrefs();
+      const labels = { motion: 'Motion effects', saveHistory: 'Sheet history', autoExport: 'Auto-export', autoRetry: 'Auto-retry', autoPaginate: 'Auto-scrape all pages', mergeCells: 'Merge same-order cells' };
+      log(`${labels[key] || key} ${event.target.checked ? 'enabled' : 'disabled'}.`, 'info');
+    }));
+
+    // Speed profile buttons in drawer
+    const currentSpeed = uiPrefs.speedProfile || 'balanced';
+    panel.querySelectorAll('.temu-speed-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.speed === currentSpeed);
+      btn.addEventListener('click', async () => {
+        panel.querySelectorAll('.temu-speed-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        uiPrefs.speedProfile = btn.dataset.speed;
+        syncQuickPills();
+        await saveUiPrefs();
+        try { await sendMessage({ type: MSG.UI_PREFS_UPDATE, prefs: uiPrefs }); } catch (_) {}
+        const speedLabels = { stealth: '🛡️ Stealth (Safe)', balanced: '⚡ Balanced', turbo: '🚀 Turbo' };
+        log(`Speed profile set to ${speedLabels[btn.dataset.speed] || btn.dataset.speed}.`, 'info');
+      });
+    });
+
+    // ── Quick Pills Sync & Click Listeners ───────────────────────
+    function syncQuickPills() {
+      const speedLabel = panel.querySelector('[data-role="quick-speed-label"]');
+      const paginateLabel = panel.querySelector('[data-role="quick-paginate-label"]');
+      const paginateBtn = panel.querySelector('[data-action="quick-paginate"]');
+      const speedPill = panel.querySelector('[data-action="quick-speed"]');
+
+      const speedMap = {
+        stealth:  '🛡️ Safe Mode',
+        balanced: '⚡ Balanced',
+        turbo:    '🚀 Turbo Mode'
+      };
+      if (speedLabel) speedLabel.textContent = speedMap[uiPrefs.speedProfile] || '⚡ Balanced';
+      if (speedPill) speedPill.dataset.speed = uiPrefs.speedProfile || 'balanced';
+
+      if (paginateLabel) paginateLabel.textContent = uiPrefs.autoPaginate ? '📄 All Pages: ON' : '📄 1 Page: OFF';
+      if (paginateBtn) paginateBtn.classList.toggle('is-off', !uiPrefs.autoPaginate);
+    }
+
+    const quickSpeedBtn = panel.querySelector('[data-action="quick-speed"]');
+    if (quickSpeedBtn) {
+      quickSpeedBtn.addEventListener('click', async () => {
+        const order = ['stealth', 'balanced', 'turbo'];
+        const curIdx = order.indexOf(uiPrefs.speedProfile || 'balanced');
+        const nextSpeed = order[(curIdx + 1) % order.length];
+        uiPrefs.speedProfile = nextSpeed;
+        panel.querySelectorAll('.temu-speed-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.speed === nextSpeed);
+        });
+        syncQuickPills();
+        await saveUiPrefs();
+        try { await sendMessage({ type: MSG.UI_PREFS_UPDATE, prefs: uiPrefs }); } catch (_) {}
+        const speedLabels = {
+          stealth: '🛡️ Stealth (Safe — 1 tab, humanized delays)',
+          balanced: '⚡ Balanced (2 tabs, adaptive speed)',
+          turbo: '🚀 Turbo (4 tabs, max speed)'
+        };
+        log(`Speed mode: ${speedLabels[nextSpeed]}.`, 'info');
+      });
+    }
+
+    const quickPaginateBtn = panel.querySelector('[data-action="quick-paginate"]');
+    if (quickPaginateBtn) {
+      quickPaginateBtn.addEventListener('click', async () => {
+        uiPrefs.autoPaginate = !uiPrefs.autoPaginate;
+        const chk = panel.querySelector('[data-setting="autoPaginate"]');
+        if (chk) chk.checked = uiPrefs.autoPaginate;
+        syncQuickPills();
+        await saveUiPrefs();
+        log(uiPrefs.autoPaginate ? 'Auto-pagination enabled (will scan and scrape all pages).' : 'Auto-pagination disabled (will scrape current page only).', 'info');
+      });
+    }
+
+    syncQuickPills();
+
+    // ── Live Page Order Detection ───────────────────────────────
+    function detectPageRows() {
+      if (state.status === 'idle' || !state.status) {
+        try {
+          const rows = captureBulkRows();
+          if (rows.length > 0 && (!state.rows || !state.rows.length)) {
+            if (statusDetail && (statusDetail.textContent.includes('Open a Temu') || statusDetail.textContent.includes('detected'))) {
+              statusDetail.textContent = `${rows.length} order package(s) detected on page`;
+            }
+            if (progressBox && (progressBox.textContent === 'Ready to start' || progressBox.textContent.includes('orders'))) {
+              progressBox.textContent = `${rows.length} orders ready to extract`;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    setTimeout(detectPageRows, 1200);
+    setTimeout(detectPageRows, 3000);
+    // Sync initial toggle states
+    panel.querySelectorAll('[data-setting]').forEach(input => {
+      input.checked = Boolean(uiPrefs[input.dataset.setting]);
+    });
+    panel.classList.toggle('is-minimized', uiPrefs.minimized);
+    // Apply saved card width
+    if (uiPrefs.cardWidth) panel.style.width = uiPrefs.cardWidth + 'px';
+    // Apply saved FAB or expanded card position on init
+    if (uiPrefs.minimized) {
+      panel.style.right  = (uiPrefs.fabRight  ?? 18) + 'px';
+      panel.style.bottom = (uiPrefs.fabBottom ?? 18) + 'px';
+    } else {
+      if (uiPrefs.cardRight !== undefined) panel.style.right = uiPrefs.cardRight + 'px';
+      if (uiPrefs.cardBottom !== undefined) panel.style.bottom = uiPrefs.cardBottom + 'px';
+    }
+    panel.dataset.motion = uiPrefs.motion ? 'on' : 'off';
+    chrome.runtime.onMessage.addListener(message => {
+      if (message?.type === MSG.LOG) {
+        log(message.message || '', message.level === 'warn' ? 'warn' : message.level === 'error' ? 'error' : 'info');
+      } else if (message?.type === MSG.STATE_UPDATE) {
+        const prevStatus = state.status;
+        state = { ...defaultState(), ...(message.state || {}) };
+        updatePanel();
+        (state.warnings || []).forEach((warning, index) => {
+          const key = warning.key || `${warning.type || 'warning'}:${index}:${warning.message}`;
+          if (!shownWarningKeys.has(key)) { shownWarningKeys.add(key); log(warning.message || 'Extraction warning.', 'warning'); }
+        });
+        if (state.status === 'complete' && prevStatus !== 'complete') {
+          log(`Finished: ${state.records.length} records, ${state.errors.length} errors.`, 'success');
+          saveHistoryEntry();
+          // Auto-Export: download workbook automatically
+          if (uiPrefs.autoExport && state.records.length) {
+            const cleanRecords = state.records.map(({ __key, __index, __attempts, __lineIndex, ...r }) => r);
+            const statusRows = [...state.errors, ...(state.warnings || []).map(w => ({ ...w, message: w.message || 'Parser warning' }))];
+            setTimeout(async () => {
+              let cols;
+              try {
+                const stored = await getLocalStore(COLS_KEY);
+                const saved = stored[COLS_KEY];
+                cols = Array.isArray(saved) && saved.length ? saved : undefined;
+              } catch (_) { cols = undefined; }
+              if (window.TemuXlsx?.downloadWorkbook) {
+                window.TemuXlsx.downloadWorkbook(cleanRecords, statusRows, cols, uiPrefs.mergeCells !== false);
+                log(`Auto-exported ${cleanRecords.length} records as Excel workbook.`, 'success');
+              }
+            }, 600);
+          }
+          // Auto-Retry: retry failed orders automatically once
+          if (uiPrefs.autoRetry && state.errors.length) {
+            log(`Auto-retry: retrying ${state.errors.length} failed order(s)...`, 'warning');
+            setTimeout(() => runControl('retry', buttons.retry, retryFailedJob), 1200);
+          }
+        }
+      } else if (message?.type === MSG.OPEN_PANEL) {
+        setMinimized(false);
+      }
+    });
+    updatePanel();
+  }
+
+  // Serialises Start/Retry clicks and surfaces any error in the activity log
+  // instead of an unhandled promise rejection in the console.
+  async function runControl(name, button, action) {
+    if (controlActionBusy) return;
+    controlActionBusy = true;
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    try { await action(); }
+    catch (error) { log(error?.message || `Could not ${name}.`, 'error'); await getCurrentState().catch(() => {}); }
+    finally {
+      controlActionBusy = false;
+      if (button) button.removeAttribute('aria-busy');
+      updatePanel();
+    }
+  }
+
+  async function openToolsPage() {
+    try {
+      const response = await sendMessage({ type: MSG.OPEN_TOOLS });
+      if (!response?.ok) log(response?.error || 'Could not open History & Tools.', 'error');
+    } catch (error) { log(error?.message || 'Could not open History & Tools.', 'error'); }
+  }
+
+  async function startJob() {
+    shownWarningKeys.clear();
+    bootstrapStoreCache = undefined;
+    if (logBox) logBox.textContent = '';
+    let rows = [];
+    if (uiPrefs.autoPaginate) {
+      log('Scanning orders across pages (Auto-Pagination active)...');
+      rows = await scrapeAllBulkPages((page, total) => {
+        log(`Page ${page}: ${total} total orders accumulated so far.`, 'info');
+        if (statusTitle) statusTitle.textContent = `Scanning Page ${page}... (${total} orders)`;
+      });
+    } else {
+      rows = captureBulkRows();
+    }
+    if (!rows.length) {
+      const noData = /\bno data\b/i.test(textOf(document.body));
+      log(noData ? 'Bulk page has no loaded packages. Open Manage Orders, select orders, then choose Buy shipping in bulk.' : 'No valid rendered order rows found. Wait for the table and reload the page.', 'error');
+      return;
+    }
+    const response = await sendMessage({ type: MSG.START_JOB, sourceUrl: location.href, rows });
+    if (response?.ok === false) throw new Error(response.error || 'Could not start extraction.');
+    state = { ...defaultState(), ...(response.state || {}) };
+    updatePanel();
+    log(`Started ${rows.length} unique orders in background detail tabs [${(uiPrefs.speedProfile || 'balanced').toUpperCase()} speed].`);
+  }
+
+  async function pauseJob() {
+    if (controlActionBusy || state.status !== 'running') return;
+    controlActionBusy = true;
+    const button = buttons.pause;
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    // Reflect the user action immediately; the worker then persists the
+    // paused checkpoint and requeues any detail tabs still in flight.
+    state = { ...state, status: 'paused' };
+    updatePanel();
+    log('Pausing. Current checkpoint is being preserved.');
+    try {
+      const response = await sendMessage({ type: MSG.PAUSE_JOB });
+      if (response?.ok === false) throw new Error(response.error || 'Could not pause extraction.');
+      state = { ...defaultState(), ...(response.state || {}) };
+      updatePanel();
+      log('Paused. Current checkpoint is preserved.');
+    } catch (error) {
+      await getCurrentState();
+      log(error?.message || 'Could not pause extraction.', 'error');
+    } finally {
+      controlActionBusy = false;
+      if (button) button.removeAttribute('aria-busy');
+      updatePanel();
+    }
+  }
+
+  async function retryFailedJob() {
+    if (!state.errors.length || state.status === 'running' || state.inFlight.length) return;
+    shownWarningKeys.clear();
+    const failedCount = state.errors.length; // capture before state is reset by response
+    const response = await sendMessage({ type: MSG.RETRY_FAILED });
+    if (response?.ok === false) throw new Error(response.error || 'Could not retry failed orders.');
+    state = { ...defaultState(), ...(response.state || {}) };
+    updatePanel();
+    log(`Retrying ${failedCount} failed order${failedCount === 1 ? '' : 's'} with a fresh attempt budget.`);
+  }
+
+  async function stopJob() {
+    if (controlActionBusy) return;
+    controlActionBusy = true;
+    const button = buttons.stop;
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    shownWarningKeys.clear();
+    // Clear the visible state immediately so the card never looks stuck while
+    // Chrome closes background tabs asynchronously.
+    state = defaultState();
+    if (logBox) logBox.textContent = '';
+    updatePanel();
+    log('Stopping and clearing the saved batch.');
+    try {
+      const response = await sendMessage({ type: MSG.STOP_JOB });
+      if (response?.ok === false) throw new Error(response.error || 'Could not stop extraction.');
+      state = { ...defaultState(), ...(response.state || {}) };
+      if (logBox) logBox.textContent = '';
+      updatePanel();
+      log('Stopped and cleared the saved batch.');
+    } catch (error) {
+      await getCurrentState();
+      log(error?.message || 'Could not stop extraction.', 'error');
+    } finally {
+      controlActionBusy = false;
+      if (button) button.removeAttribute('aria-busy');
+      updatePanel();
+    }
+  }
+
+  async function init() {
+    if (location.pathname === BULK_PATH) {
+      await loadUiData();
+      createPanel();
+      await getCurrentState();
+      if (state.status === 'running') log(`Batch active: ${state.records.length}/${state.rows.length} completed.`);
+      else if (state.status === 'complete') {
+        log(`Previous batch complete: ${state.records.length} records ready.`);
+        saveHistoryEntry();
+      }
+      return;
+    }
+    if (location.pathname === DETAIL_PATH) await processDetailPage();
+  }
+
+  init().catch(error => console.error('[Temu Order Exporter]', error));
+})();
