@@ -1,5 +1,5 @@
 /*
- * constants.js — single source of truth shared by worker.js (via importScripts),
+ * constants.js (v5.4.2) — single source of truth shared by worker.js (via importScripts),
  * content.js (via manifest content_scripts) and tools.js (via <script>).
  *
  * Nothing in here touches the DOM or chrome.* APIs, so it is safe in every context.

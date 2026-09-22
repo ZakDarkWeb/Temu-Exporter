@@ -1,3 +1,6 @@
+/**
+ * Temu Order Exporter — Workspace & Tools (v5.4.2)
+ */
 (() => {
   'use strict';
   const C = window.TEMU_CONSTANTS;

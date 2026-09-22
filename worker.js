@@ -1,3 +1,6 @@
+/**
+ * Temu Order Exporter — Service Worker (v5.4.2)
+ */
 'use strict';
 
 importScripts('constants.js');
