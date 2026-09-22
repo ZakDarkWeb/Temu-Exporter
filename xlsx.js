@@ -1,5 +1,5 @@
 /**
- * Temu Order Exporter - XLSX & ZIP Writer (v5.4.1)
+ * Temu Order Exporter - XLSX & ZIP Writer (v5.4.2)
  * Dependency-free generator producing Excel workbooks (.xlsx) with styled tables.
  */
 (() => {
@@ -11,6 +11,7 @@
 
   function xmlEscape(value) {
     return String(value ?? '')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -78,39 +79,83 @@
     'Carrier': 22, 'SKU ID': 20, 'Goods ID': 22
   };
 
-  // Columns to merge vertically when consecutive rows share the same Order No
-  const MERGE_COLUMNS = new Set(['Order No', 'Order Date', 'Customer Name', 'Est. Revenue', 'Shipping Cost']);
+  // Columns to merge vertically when consecutive rows belong to the same order / tracking
+  const MERGE_COLUMNS = new Set([
+    'Shipping Date', 'Order Date', 'Tracking Number', 'Order No',
+    'Customer Name', 'Carrier', 'Shipping Cost', 'Est. Revenue'
+  ]);
+
+  function recordsMatch(a, b) {
+    if (!a || !b) return false;
+    const tA = String(a['Tracking Number'] || '').trim();
+    const tB = String(b['Tracking Number'] || '').trim();
+    const oA = String(a['Order No'] || '').trim();
+    const oB = String(b['Order No'] || '').trim();
+    if (oA && oB && oA !== oB) return false;
+    if (tA && tB && tA !== tB) return false;
+    if (tA && tB && tA === tB) return true;
+    if (oA && oB && oA === oB) return true;
+    return false;
+  }
 
   function makeSheetXml(records, columns = MAIN_COLUMNS, enableMerge = true) {
     const rows = [];
-    rows.push(`<row r="1">${columns.map((col, index) => cellXml(1, index, col, 'text', STYLE.HEADER)).join('')}</row>`);
 
-    // Build merge groups: consecutive records with same Order No are one group
+    // ── Step 1: Group consecutive records belonging to the same order / tracking number ──
     const groups = [];
-    let groupStart = 0;
-    for (let i = 1; i <= records.length; i++) {
-      const sameOrder = i < records.length &&
-        records[i]['Order No'] &&
-        records[i]['Order No'] === records[groupStart]['Order No'];
-      if (!sameOrder) {
-        groups.push({ start: groupStart, end: i - 1 });
-        groupStart = i;
+    records.forEach((record, i) => {
+      const lastGroup = groups.length ? groups[groups.length - 1] : null;
+      const groupLeader = lastGroup ? records[lastGroup.startIdx] : null;
+      if (lastGroup && (recordsMatch(records[i - 1], record) || recordsMatch(groupLeader, record))) {
+        lastGroup.count += 1;
+      } else {
+        groups.push({ startIdx: i, count: 1 });
       }
+    });
+
+    // ── Step 2: Ensure top record in each group has non-empty values for merged columns ──
+    groups.forEach(group => {
+      if (group.count < 2) return;
+      const topRecord = records[group.startIdx];
+      for (let offset = 1; offset < group.count; offset++) {
+        const r = records[group.startIdx + offset];
+        MERGE_COLUMNS.forEach(col => {
+          const topVal = String(topRecord[col] ?? '').trim();
+          const rowVal = String(r[col] ?? '').trim();
+          if (!topVal && rowVal) {
+            topRecord[col] = r[col];
+          }
+        });
+      }
+    });
+
+    // ── Step 3: Build set of continuation cells to keep blank in sheetData (if enableMerge) ──
+    const emptyMergedCell = new Set(); // key = `${rowNumber},${colIndex}`
+    if (enableMerge) {
+      groups.forEach(group => {
+        if (group.count < 2) return;
+        columns.forEach((col, colIdx) => {
+          if (!MERGE_COLUMNS.has(col)) return;
+          for (let offset = 1; offset < group.count; offset++) {
+            const rowNum = group.startIdx + offset + 2; // +2: header row + 1-indexed
+            emptyMergedCell.add(`${rowNum},${colIdx}`);
+          }
+        });
+      });
     }
 
-    // Build rows — for merged columns only write value in the first row of each group
+    // ── Step 4: Emit header row ────────────────────────────────────
+    rows.push(`<row r="1">${columns.map((col, index) => cellXml(1, index, col, 'text', STYLE.HEADER)).join('')}</row>`);
+
+    // ── Step 5: Emit data rows ─────────────────────────────────────
     records.forEach((record, recordIndex) => {
       const rowNumber = recordIndex + 2;
-      // Find the group this record belongs to
-      const group = groups.find(g => recordIndex >= g.start && recordIndex <= g.end);
-      const isFirstInGroup = group ? recordIndex === group.start : true;
-
       const cells = columns.map((col, index) => {
-        const rawValue = record[col];
-        // For merge columns, only write value in first row of group; others get empty cell
-        if (MERGE_COLUMNS.has(col) && group && !isFirstInGroup) {
+        // Continuation cell in a merged block → write blank so Excel/Sheets merges cleanly
+        if (emptyMergedCell.has(`${rowNumber},${index}`)) {
           return cellXml(rowNumber, index, '', 'text', STYLE.TEXT);
         }
+        const rawValue = record[col];
         if (DATE_COLUMNS.has(col)) return cellXml(rowNumber, index, rawValue, 'date', STYLE.DATE);
         if (col === 'Qty (No)') return cellXml(rowNumber, index, rawValue, 'number', STYLE.INTEGER);
         if (NUMERIC_COLUMNS.has(col)) return cellXml(rowNumber, index, rawValue, 'number', STYLE.MONEY);
@@ -119,28 +164,28 @@
       rows.push(`<row r="${rowNumber}">${cells.join('')}</row>`);
     });
 
-    // Build mergeCells XML for groups spanning more than 1 row
-    const mergeCells = [];
-    for (const group of groups) {
-      if (group.end > group.start) {
-        const startRow = group.start + 2;
-        const endRow   = group.end   + 2;
-        columns.forEach((col, colIndex) => {
-          if (MERGE_COLUMNS.has(col)) {
-            const letter = colLetter(colIndex);
-            mergeCells.push(`<mergeCell ref="${letter}${startRow}:${letter}${endRow}"/>`);
-          }
+    // ── Step 6: Build mergeCells XML (placed AFTER autoFilter per OpenXML spec) ──
+    const merges = [];
+    if (enableMerge) {
+      groups.forEach(group => {
+        if (group.count < 2) return;
+        columns.forEach((col, colIdx) => {
+          if (!MERGE_COLUMNS.has(col)) return;
+          const topRow    = group.startIdx + 2;
+          const bottomRow = group.startIdx + group.count + 1;
+          const letter    = colLetter(colIdx);
+          merges.push(`<mergeCell ref="${letter}${topRow}:${letter}${bottomRow}"/>`);
         });
-      }
+      });
     }
+    const mergeCellsXml = merges.length
+      ? `<mergeCells count="${merges.length}">${merges.join('')}</mergeCells>`
+      : '';
 
     const lastRow = Math.max(records.length + 1, 1);
     const colCount = columns.length;
     const lastColLetter = colLetter(colCount - 1);
     const colDefs = columns.map((col, i) => `<col min="${i+1}" max="${i+1}" width="${COLUMN_WIDTHS[col] || 18}" customWidth="1"/>`);
-    const mergeCellsXml = (enableMerge && mergeCells.length)
-      ? `<mergeCells count="${mergeCells.length}">${mergeCells.join('')}</mergeCells>`
-      : '';
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <dimension ref="A1:${lastColLetter}${lastRow}"/>
@@ -148,9 +193,8 @@
   <sheetFormatPr defaultRowHeight="18"/>
   <cols>${colDefs.join('')}</cols>
   <sheetData>${rows.join('')}</sheetData>
-  ${mergeCellsXml}
   <autoFilter ref="A1:${lastColLetter}${lastRow}"/>
-  <tableParts count="1"><tablePart r:id="rId1"/></tableParts>
+  ${mergeCellsXml}
 </worksheet>`;
   }
 
@@ -179,13 +223,6 @@
 </worksheet>`;
   }
 
-  function makeTableXml(records, columns = MAIN_COLUMNS) {
-    const lastRow = Math.max(records.length + 1, 1);
-    const lastColLetter = colLetter(columns.length - 1);
-    const cols = columns.map((col, index) => `<tableColumn id="${index + 1}" name="${xmlEscape(col)}"/>`);
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="TemuOrders" displayName="TemuOrders" ref="A1:${lastColLetter}${lastRow}" headerRowCount="1" totalsRowCount="0"><autoFilter ref="A1:${lastColLetter}${lastRow}"/><tableColumns count="${columns.length}">${cols.join('')}</tableColumns><tableStyleInfo name="TableStyleMedium4" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>`;
-  }
 
   function makeStylesXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -258,7 +295,7 @@
 
   function buildWorkbook(records, errors, columns = MAIN_COLUMNS, enableMerge = true) {
     const files = [
-      { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>` },
+      { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>` },
       { name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>` },
       { name: 'docProps/core.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Temu Order Exporter</dc:creator><cp:lastModifiedBy>Temu Order Exporter</cp:lastModifiedBy><dc:title>Temu Order Export</dc:title></cp:coreProperties>` },
       { name: 'docProps/app.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Temu Order Exporter</Application></Properties>` },
@@ -266,8 +303,6 @@
       { name: 'xl/_rels/workbook.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
       { name: 'xl/worksheets/sheet1.xml', content: makeSheetXml(records, columns, enableMerge) },
       { name: 'xl/worksheets/sheet2.xml', content: makeErrorsSheetXml(errors) },
-      { name: 'xl/worksheets/_rels/sheet1.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>` },
-      { name: 'xl/tables/table1.xml', content: makeTableXml(records, columns) },
       { name: 'xl/styles.xml', content: makeStylesXml() }
     ];
     return zipStore(files);

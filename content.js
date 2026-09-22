@@ -1052,7 +1052,7 @@
             <div class="temu-exporter-auto-row">
               <div class="temu-exporter-auto-copy">
                 <strong>Merge Same-Order Cells</strong>
-                <small>Merge Order No, Date, Customer &amp; Revenue cells for multi-product orders in Excel.</small>
+                <small>Merge Tracking No, Order No, Date, Customer &amp; Revenue cells for multi-product orders in Excel.</small>
               </div>
               <label class="temu-exporter-switch" title="Merge cells for same order">
                 <input type="checkbox" data-setting="mergeCells" aria-label="Merge cells for same-order rows">

@@ -1,5 +1,13 @@
 # Changelog
 
+## 5.4.2 — 2026-09-22
+
+### Added & Fixed
+- **Tracking Number Cell Merging**: Enhanced Excel generator to merge `Tracking Number` vertically alongside `Order No`, `Order Date`, `Shipping Date`, `Customer Name`, `Carrier`, `Est. Revenue`, and `Shipping Cost` for multi-product orders.
+- **Robust Multi-Product Matching & Backfill**: Consecutive records sharing the same Tracking Number or Order ID are grouped, and missing order identities on secondary product lines are automatically backfilled into the top cell.
+- **OpenXML Table Conflict Resolution**: Removed overlapping table definitions with merged cells to ensure generated workbooks open cleanly in Excel without repair or recovery warnings.
+- **Preserved Full Product Titles**: Preserved trailing bracket specifications in product details.
+
 ## 5.4.1 — 2026-09-09
 
 ### Added & Fixed
