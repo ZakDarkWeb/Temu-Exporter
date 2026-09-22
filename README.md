@@ -1,9 +1,10 @@
-# Temu Order Exporter (v5.4.1)
+# Temu Order Exporter (v5.4.2)
 
 Chrome extension (Manifest V3) that exports orders from the Temu Seller **Buy shipping in bulk** page to a structured, professional Excel workbook (.xlsx).
 
 ## Key Features
 
+- **Same-Order Cell Merging** — Intelligently merges **Tracking Number**, Order No, Order Date, Shipping Date, Customer Name, Carrier, Est. Revenue, and Shipping Cost cells vertically for multi-product orders in Excel.
 - **Multi-Page Auto-Pagination** — Automatically navigates through multi-page bulk order batches and merges all records into a single Excel export.
 - **Tab Pooling & Recycling Engine** — Reuses persistent background tabs to scrape order details with 70% less RAM usage and zero tab creation churn.
 - **Speed & Safety Profiles**:
